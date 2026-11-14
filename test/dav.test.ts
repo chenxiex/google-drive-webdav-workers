@@ -251,14 +251,16 @@ it('MOVE with Overwrite: T replaces the target and returns 204', async () => {
 });
 
 describe('PUT and MKCOL', () => {
-	it('PUT to a new small file returns 201', async () => {
+	it.each([11, 5 * MEGA])('PUT creates a %i-byte multipart file', async (size) => {
 		const res = await request('/dav/put-new.txt', {
 			method: 'PUT',
 			headers: { 'Content-Type': 'text/plain' },
-			body: 'hello world',
+			body: 'x'.repeat(size),
 		});
 		expect(res.status).toBe(201);
-		expect(drive.children('root').some((f) => f.name === 'put-new.txt')).toBe(true);
+		const created = drive.children('root').find((f) => f.name === 'put-new.txt');
+		expect(created?.size).toBe(size);
+		expect(created?.content?.every(byte => byte === 120)).toBe(true);
 	});
 
 	it('PUT over an existing file returns 204', async () => {
@@ -270,13 +272,16 @@ describe('PUT and MKCOL', () => {
 		expect(res.status).toBe(204);
 	});
 
-	it('PUT larger than 5 MiB uses the resumable session and returns 201', async () => {
+	it('PUT larger than one chunk persists the complete resumable upload', async () => {
 		const res = await request('/dav/big.dat', {
 			method: 'PUT',
 			headers: { 'Content-Type': 'application/octet-stream' },
-			body: 'x'.repeat(6 * MEGA),
+			body: 'x'.repeat(11 * MEGA),
 		});
 		expect(res.status).toBe(201);
+		const created = drive.children('root').find((f) => f.name === 'big.dat');
+		expect(created?.size).toBe(11 * MEGA);
+		expect(created?.content?.every(byte => byte === 120)).toBe(true);
 	});
 
 	it('MKCOL on an existing resource returns 405', async () => {

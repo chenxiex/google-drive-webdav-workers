@@ -16,6 +16,7 @@ const davBindings = {
 export default defineConfig({
 	test: {
 		projects: [
+			{ test: { name: 'mock-drive', include: ['test/mock-drive.test.ts'] } },
 			{
 				plugins: [
 					cloudflareTest({

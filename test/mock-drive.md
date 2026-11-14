@@ -31,10 +31,10 @@ Real `size` and quota values are decimal strings. Fixture setup still accepts nu
 
 ## Verification
 
-From the repository root, using the local environment setup where applicable:
+From a fresh checkout, install Node.js 24 and pnpm 11, then run from the repository root:
 
 ```sh
-source .dev.env.sh
+pnpm install --frozen-lockfile
 pnpm exec tsc --noEmit
 pnpm exec tsc --noEmit -p test/tsconfig.json
 pnpm test --run

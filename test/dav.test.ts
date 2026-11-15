@@ -1,4 +1,4 @@
-import { SELF } from 'cloudflare:test';
+import { SELF, env } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AUTH, FOLDER, MockDrive, ORIGIN, installDriveMock } from './helpers';
 
@@ -28,6 +28,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+	vi.restoreAllMocks();
 	vi.unstubAllGlobals();
 });
 
@@ -181,9 +182,9 @@ describe('MOVE / COPY overwrite semantics', () => {
 			headers: { Destination: ORIGIN + '/dav/dest.txt' },
 		});
 		expect(res.status).toBe(204);
-		// the old destination file was removed and re-created by the copy
-		expect(drive.findById('file-dest')).toBeUndefined();
-		const dest = drive.children('root').find((f) => f.name === 'dest.txt');
+		// The replaced file remains recoverable in Trash.
+		expect(drive.findById('file-dest')?.trashed).toBe(true);
+		const dest = drive.children('root').find((f) => f.name === 'dest.txt' && !f.trashed);
 		expect(dest).toBeDefined();
 		expect(dest!.id).not.toBe('file-dest');
 	});
@@ -239,13 +240,13 @@ describe('MOVE / COPY overwrite semantics', () => {
 		const copy = await request('/dav/', { method: 'COPY', headers: { Destination: ORIGIN + '/dav/x/' } });
 		expect(copy.status).toBe(403);
 	});
-it('MOVE with Overwrite: T replaces the target and returns 204', async () => {
+	it('MOVE with Overwrite: T replaces the target and returns 204', async () => {
 		const res = await request('/dav/a.txt', {
 			method: 'MOVE',
 			headers: { Destination: ORIGIN + '/dav/dest.txt' },
 		});
 		expect(res.status).toBe(204);
-		expect(drive.findById('file-dest')).toBeUndefined();
+		expect(drive.findById('file-dest')?.trashed).toBe(true);
 		expect(drive.findById('file-a')?.name).toBe('dest.txt');
 	});
 });
@@ -309,5 +310,356 @@ describe('HEAD and folder redirects', () => {
 		const res = await request('/dav/docs', { method: 'GET', redirect: 'manual' });
 		expect(res.status).toBe(301);
 		expect(res.headers.get('Location')).toBe(ORIGIN + '/dav/docs/');
+	});
+});
+// Fault injection wraps the verified mock rather than extending its API contract.
+// Injected failures test worker recovery policy, not claims that Google emits each response.
+type Mutation = { method: string; path: string; body: Record<string, unknown>; url: URL };
+function recordMutations(intercept?: (call: Mutation, commit: () => Promise<Response>) => Promise<Response | undefined>): Mutation[] {
+	const calls: Mutation[] = [];
+	const handle = drive.handle.bind(drive);
+	vi.spyOn(drive, 'handle').mockImplementation(async (input, init) => {
+		const req = new Request(input, init);
+		const url = new URL(req.url);
+		if (url.pathname.startsWith('/drive/v3/files') && req.method !== 'GET') {
+			const text = await req.clone().text();
+			const call = { method: req.method, path: url.pathname, body: text ? JSON.parse(text) : {}, url };
+			calls.push(call);
+			const response = await intercept?.(call, () => handle(input, init));
+			if (response) return response;
+		}
+		return handle(input, init);
+	});
+	return calls;
+}
+const overwrite = (method: string, target = '/dav/dest.txt') => request('/dav/a.txt', {
+	method, headers: { Destination: ORIGIN + target },
+});
+const mutationSummary = (calls: Mutation[]) => calls.map(({ method, path, body }) => ({ method, path, body }));
+const isPublish = (call: Mutation) => call.method === 'PATCH' && call.body.name === 'dest.txt';
+const rejectMutation = (status: number) => new Response(JSON.stringify({ error: { message: 'Injected Drive rejection' } }), { status });
+
+describe('recoverable overwrite operations', () => {
+	it('MOVE trashes the old target before moving the source and never deletes it', async () => {
+		const calls = recordMutations();
+		expect((await overwrite('MOVE')).status).toBe(204);
+		expect(mutationSummary(calls)).toEqual([
+			{ method: 'PATCH', path: '/drive/v3/files/file-dest', body: { trashed: true } },
+			{ method: 'PATCH', path: '/drive/v3/files/file-a', body: { name: 'dest.txt' } },
+		]);
+		expect(drive.findById('file-dest')).toMatchObject({ name: 'dest.txt', size: 456, trashed: true });
+		expect(drive.findById('file-a')).toMatchObject({ name: 'dest.txt', size: 123, parents: ['root'] });
+	});
+
+	it('cross-parent MOVE explicitly adds the destination parent and removes the source parent', async () => {
+		drive.findById('file-dest')!.parents = ['folder-docs'];
+		const calls = recordMutations();
+		expect((await overwrite('MOVE', '/dav/docs/dest.txt')).status).toBe(204);
+		expect(calls.map(c => c.method)).toEqual(['PATCH', 'PATCH']);
+		expect(calls[1].url.searchParams.get('addParents')).toBe('folder-docs');
+		expect(calls[1].url.searchParams.get('removeParents')).toBe('root');
+		expect(drive.findById('file-a')).toMatchObject({ name: 'dest.txt', parents: ['folder-docs'] });
+		expect(drive.findById('file-dest')?.trashed).toBe(true);
+	});
+
+	it('COPY stages a unique copy in the destination parent before trashing and publishing', async () => {
+		drive.findById('file-dest')!.parents = ['folder-docs'];
+		const calls = recordMutations();
+		expect((await overwrite('COPY', '/dav/docs/dest.txt')).status).toBe(204);
+		const copied = drive.files.find(f => !['file-a', 'file-dest'].includes(f.id) && f.name === 'dest.txt' && !f.trashed)!;
+		expect(copied).toMatchObject({ parents: ['folder-docs'], size: 123 });
+		expect(mutationSummary(calls)).toEqual([
+			{ method: 'POST', path: '/drive/v3/files/file-a/copy', body: { name: expect.stringMatching(/^\.webdav-copy-[0-9a-f-]{36}$/i), parents: ['folder-docs'] } },
+			{ method: 'PATCH', path: '/drive/v3/files/file-dest', body: { trashed: true } },
+			{ method: 'PATCH', path: '/drive/v3/files/' + copied.id, body: { name: 'dest.txt' } },
+		]);
+		expect(drive.findById('file-dest')?.trashed).toBe(true);
+		expect(drive.findById('file-a')).toMatchObject({ name: 'a.txt', size: 123, parents: ['root'] });
+	});
+
+	it.each(['MOVE', 'COPY'])('%s aborts publication when destination trashing fails', async method => {
+		const calls = recordMutations(async call => call.body.trashed === true ? rejectMutation(403) : undefined);
+		expect((await overwrite(method)).status).toBeGreaterThanOrEqual(400);
+		expect(calls.some(isPublish)).toBe(false);
+		expect(calls.map(c => c.method)).toEqual(method === 'COPY' ? ['POST', 'PATCH'] : ['PATCH']);
+		expect(drive.findById('file-dest')).toMatchObject({ name: 'dest.txt', size: 456 });
+		expect(drive.findById('file-dest')?.trashed).not.toBe(true);
+		expect(drive.findById('file-a')?.name).toBe('a.txt');
+		if (method === 'COPY') expect(drive.files.some(f => f.name.startsWith('.webdav-copy-') && !f.trashed)).toBe(true);
+	});
+
+	it.each(['network', '500', 'malformed', 'missing-id'])('COPY preserves a committed stage after ambiguous %s response without touching the target', async failure => {
+		const calls = recordMutations(async (call, commit) => {
+			if (call.method !== 'POST') return;
+			await commit();
+			if (failure === 'network') throw new Error('Injected lost staging response');
+			if (failure === '500') return rejectMutation(500);
+			return new Response(failure === 'malformed' ? '{invalid JSON' : '{}', { status: 200 });
+		});
+		expect((await overwrite('COPY')).status).toBeGreaterThanOrEqual(400);
+		expect(calls.map(c => c.method)).toEqual(['POST']);
+		expect(drive.findById('file-dest')?.trashed).not.toBe(true);
+		expect(drive.findById('file-a')?.name).toBe('a.txt');
+		expect(drive.files.some(f => f.name === calls[0].body.name && !f.trashed)).toBe(true);
+	});
+
+	it.each(['MOVE', 'COPY'].flatMap(method => ['network', '500', '408', 'malformed'].map(failure => ({ method, failure }))))(
+		'$method aborts without rollback when trashing commits but its $failure response is ambiguous', async ({ method, failure }) => {
+			const calls = recordMutations(async (call, commit) => {
+				if (call.body.trashed !== true) return;
+				await commit();
+				if (failure === 'network') throw new Error('Injected lost trash response');
+				if (failure === 'malformed') return new Response('{invalid JSON', { status: 200 });
+				return rejectMutation(Number(failure));
+			});
+			expect((await overwrite(method)).status).toBeGreaterThanOrEqual(400);
+			expect(calls.map(c => c.method)).toEqual(method === 'COPY' ? ['POST', 'PATCH'] : ['PATCH']);
+			expect(drive.findById('file-dest')?.trashed).toBe(true);
+			expect(drive.findById('file-a')?.name).toBe('a.txt');
+			if (method === 'COPY') expect(drive.files.some(f => f.name === calls[0].body.name && !f.trashed)).toBe(true);
+		},
+	);
+
+	it('COPY retries use distinct staging names and retain both recoverable copies', async () => {
+		const calls = recordMutations(async call => call.body.trashed === true ? rejectMutation(403) : undefined);
+		expect((await overwrite('COPY')).status).toBeGreaterThanOrEqual(400);
+		expect((await overwrite('COPY')).status).toBeGreaterThanOrEqual(400);
+		const names = calls.filter(c => c.method === 'POST').map(c => c.body.name);
+		expect(names).toHaveLength(2);
+		expect(new Set(names).size).toBe(2);
+		expect(drive.files.filter(f => names.includes(f.name) && !f.trashed)).toHaveLength(2);
+		expect(calls.some(c => c.method === 'DELETE')).toBe(false);
+	});
+
+	it.each([403, 500])('COPY staging failure (%i) leaves the old target untouched', async status => {
+		const calls = recordMutations(async call => call.method === 'POST' ? rejectMutation(status) : undefined);
+		expect((await overwrite('COPY')).status).toBeGreaterThanOrEqual(400);
+		expect(calls.map(c => c.method)).toEqual(['POST']);
+		expect(drive.findById('file-dest')?.trashed).not.toBe(true);
+		expect(drive.findById('file-a')?.name).toBe('a.txt');
+	});
+
+	it.each(['MOVE', 'COPY'].flatMap(method => [400, 403, 404, 409, 429].map(status => ({ method, status }))))(
+		'$method restores the old destination after definitive $status publication rejection', async ({ method, status }) => {
+			const calls = recordMutations(async call => isPublish(call) ? rejectMutation(status) : undefined);
+			expect((await overwrite(method)).status).toBeGreaterThanOrEqual(400);
+			expect(mutationSummary(calls).at(-1)).toEqual({ method: 'PATCH', path: '/drive/v3/files/file-dest', body: { trashed: false } });
+			expect(calls.map(c => c.method)).toEqual(method === 'COPY' ? ['POST', 'PATCH', 'PATCH', 'PATCH'] : ['PATCH', 'PATCH', 'PATCH']);
+			expect(drive.findById('file-dest')).toMatchObject({ name: 'dest.txt', size: 456, trashed: false });
+			expect(drive.findById('file-a')?.name).toBe('a.txt');
+			if (method === 'COPY') expect(drive.files.some(f => f.name.startsWith('.webdav-copy-') && !f.trashed)).toBe(true);
+		},
+	);
+
+	it.each(['MOVE', 'COPY'])('%s reports failure if destination restoration is rejected', async method => {
+		const calls = recordMutations(async call => isPublish(call) || call.body.trashed === false ? rejectMutation(403) : undefined);
+		const res = await overwrite(method);
+		expect(res.status).toBeGreaterThanOrEqual(400);
+		expect(await res.text()).toContain('destination restore failed');
+		expect(calls.at(-1)?.body).toEqual({ trashed: false });
+		expect(calls.some(c => c.method === 'DELETE')).toBe(false);
+		expect(drive.findById('file-dest')?.trashed).toBe(true);
+		expect(drive.findById('file-a')?.name).toBe('a.txt');
+	});
+
+	it.each(['MOVE', 'COPY'].flatMap(method => ['network', '500', '408', 'malformed', 'missing-id'].flatMap(failure => [false, true].map(committed => ({ method, failure, committed })))))(
+		'$method does not undo or delete after ambiguous $failure publication (committed=$committed)', async ({ method, failure, committed }) => {
+			const calls = recordMutations(async (call, commit) => {
+				if (!isPublish(call)) return;
+				if (committed) await commit();
+				if (failure === 'network') throw new Error('Injected connection loss');
+				if (failure === 'malformed') return new Response('{invalid JSON', { status: 200 });
+				if (failure === 'missing-id') return new Response('{}', { status: 200 });
+				return rejectMutation(Number(failure));
+			});
+			expect((await overwrite(method)).status).toBeGreaterThanOrEqual(400);
+			expect(calls.map(c => c.method)).toEqual(method === 'COPY' ? ['POST', 'PATCH', 'PATCH'] : ['PATCH', 'PATCH']);
+			expect(drive.findById('file-dest')).toMatchObject({ name: 'dest.txt', size: 456, trashed: true });
+			expect(drive.findById('file-a')?.name).toBe(method === 'MOVE' && committed ? 'dest.txt' : 'a.txt');
+			if (method === 'COPY') expect(drive.files.some(f => f.id !== 'file-dest' && f.name === (committed ? 'dest.txt' : calls[0].body.name))).toBe(true);
+		},
+	);
+});
+
+describe('MOVE / COPY destructive-operation guards', () => {
+	it.each(['MOVE', 'COPY'])('%s protects an identical Drive ID resolved through a different path', async method => {
+		const handle = drive.handle.bind(drive);
+		const mutations: string[] = [];
+		vi.spyOn(drive, 'handle').mockImplementation(async (input, init) => {
+			const req = new Request(input, init);
+			const url = new URL(req.url);
+			if (url.pathname.startsWith('/drive/v3/files') && req.method !== 'GET') mutations.push(req.method);
+			const response = await handle(input, init);
+			if (url.pathname === '/drive/v3/files' && req.method === 'GET') {
+				const body = await response.clone().json() as { files?: { id: string }[] };
+				if (body.files?.some(f => f.id === 'file-dest')) {
+					body.files = body.files.map(f => f.id === 'file-dest' ? { ...f, id: 'file-a' } : f);
+					return new Response(JSON.stringify(body), { status: response.status, headers: response.headers });
+				}
+			}
+			return response;
+		});
+		expect((await overwrite(method)).status).toBe(method === 'MOVE' ? 204 : 403);
+		expect(mutations).toEqual([]);
+		expect(drive.findById('file-a')?.name).toBe('a.txt');
+		expect(drive.findById('file-dest')?.trashed).not.toBe(true);
+	});
+
+	it.each(['MOVE', 'COPY'])('%s resolves a trailing-slash self destination without mutations', async method => {
+		const calls = recordMutations();
+		const res = await request('/dav/docs', { method, headers: { Destination: ORIGIN + '/dav/docs/' } });
+		expect(res.status).toBe(method === 'MOVE' ? 204 : 403);
+		expect(calls).toEqual([]);
+		expect(drive.findById('folder-docs')).toBeDefined();
+		expect(drive.findById('file-b')).toBeDefined();
+	});
+
+	it.each(['/dav/new-folder/', '/dav/dest.txt'])('rejects folder COPY to %s before any mutation', async destination => {
+		const calls = recordMutations();
+		const res = await request('/dav/docs/', { method: 'COPY', headers: { Destination: ORIGIN + destination } });
+		expect(res.status).toBe(403);
+		expect(calls).toEqual([]);
+		expect(drive.findById('file-dest')?.trashed).not.toBe(true);
+	});
+
+	it.each(['MOVE', 'COPY'].flatMap(method => [
+		{ source: '/dav/docs/', destination: '/dav/docs/sub%26dir/' },
+		{ source: '/dav/docs/', destination: '/dav/docs/new-child/' },
+		{ source: '/dav/docs/sub%26dir/', destination: '/dav/docs/' },
+		{ source: '/dav/docs/b%20%26%20c.txt', destination: '/dav/docs/' },
+	].map(paths => ({ method, ...paths }))))('$method rejects related paths $source → $destination before mutation', async ({ method, source, destination }) => {
+		const calls = recordMutations();
+		expect((await request(source, { method, headers: { Destination: ORIGIN + destination } })).status).toBe(403);
+		expect(calls).toEqual([]);
+		expect(drive.findById('folder-docs')).toBeDefined();
+		expect(drive.findById('file-b')).toBeDefined();
+	});
+
+	it.each(['MOVE', 'COPY'].flatMap(method => ['/dav/missing/file.txt', '/dav/dest.txt/file.txt'].map(destination => ({ method, destination }))))(
+		'$method rejects missing or non-folder parent $destination before mutation', async ({ method, destination }) => {
+			const calls = recordMutations();
+			expect((await overwrite(method, destination)).status).toBe(409);
+			expect(calls).toEqual([]);
+			expect(drive.findById('file-a')?.name).toBe('a.txt');
+		},
+	);
+
+	it('directory MOVE preserves its success and logs failures when KV listing fails', async () => {
+		drive.add({ id: 'folder-kv-failure', name: 'kv-failure-source', mimeType: FOLDER, parents: ['root'] });
+		drive.add({ id: 'file-kv-failure', name: 'child.txt', mimeType: 'text/plain', size: 123, parents: ['folder-kv-failure'] });
+		expect((await request('/dav/kv-failure-source/child.txt', { method: 'HEAD' })).status).toBe(200);
+		const kv = (env as Env).KV!;
+		const list = vi.spyOn(kv, 'list').mockRejectedValue(new Error('Injected KV list failure'));
+		const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+		const calls = recordMutations();
+		const res = await request('/dav/kv-failure-source/', { method: 'MOVE', headers: { Destination: ORIGIN + '/dav/kv-failure-dest/' } });
+		expect(res.status).toBe(201);
+		expect(res.headers.get('Location')).toBe(ORIGIN + '/dav/kv-failure-dest/');
+		expect(list).toHaveBeenCalled();
+		expect(log).toHaveBeenCalledWith('Transfer cache invalidation failed:', expect.any(Error));
+		expect(calls.map(c => c.method)).toEqual(['PATCH']);
+		expect(drive.findById('folder-kv-failure')?.name).toBe('kv-failure-dest');
+		// Durable descendant cache entries may remain after failed KV invalidation.
+		expect((await request('/dav/kv-failure-dest/child.txt', { method: 'HEAD' })).status).toBe(200);
+	});
+
+	it('MOVE of a directory invalidates cached descendant paths', async () => {
+		expect((await request('/dav/docs/b%20%26%20c.txt', { method: 'HEAD' })).status).toBe(200);
+		const calls = recordMutations();
+		const res = await request('/dav/docs/', { method: 'MOVE', headers: { Destination: ORIGIN + '/dav/renamed/' } });
+		expect(res.status).toBe(201);
+		expect(calls.map(c => c.method)).toEqual(['PATCH']);
+		expect((await request('/dav/docs/b%20%26%20c.txt', { method: 'HEAD' })).status).toBe(404);
+		expect((await request('/dav/renamed/b%20%26%20c.txt', { method: 'HEAD' })).status).toBe(200);
+		expect(drive.findById('folder-docs')?.name).toBe('renamed');
+		expect(drive.findById('file-b')?.parents).toEqual(['folder-docs']);
+	});
+});
+
+// Folder-tree behavior is independently verified in mock-drive.test.ts.
+describe('recoverable collection overwrites', () => {
+	let targetName: string;
+	function targetTree(): void {
+		targetName = 'target-tree-' + crypto.randomUUID();
+		drive.add({ id: 'old-tree', name: targetName, mimeType: FOLDER, parents: ['root'] });
+		drive.add({ id: 'old-sub', name: 'nested', mimeType: FOLDER, parents: ['old-tree'] });
+		drive.add({ id: 'old-leaf', name: 'keep.bin', mimeType: 'application/octet-stream', parents: ['old-sub'], content: new Uint8Array([1, 2, 255]), size: 3 });
+		drive.add({ id: 'old-trash', name: 'already-trashed', mimeType: 'text/plain', parents: ['old-tree'], trashed: true });
+	}
+	const transfer = (method: string, folder = false) => request(folder ? '/dav/docs/' : '/dav/a.txt', {
+		method, headers: { Destination: ORIGIN + '/dav/' + targetName + '/' },
+	});
+
+	it.each(['MOVE', 'COPY'])('%s replacing a collection preserves its whole tree in Trash and evicts cached descendants', async method => {
+		targetTree();
+		expect((await request('/dav/' + targetName + '/nested/keep.bin', { method: 'HEAD' })).status).toBe(200);
+		const calls = recordMutations();
+		expect((await transfer(method)).status).toBe(204);
+		for (const id of ['old-tree', 'old-trash']) expect(drive.findById(id)?.trashed).toBe(true);
+		for (const id of ['old-sub', 'old-leaf']) expect(drive.findById(id)?.trashed).toBe(true);
+		expect(drive.findById('old-leaf')?.content).toEqual(new Uint8Array([1, 2, 255]));
+		expect((await request('/dav/' + targetName + '/nested/keep.bin', { method: 'HEAD' })).status).toBe(404);
+		expect((await request('/dav/' + targetName + '', { method: 'HEAD' })).status).toBe(200);
+		expect(calls.some(c => c.method === 'DELETE')).toBe(false);
+	});
+
+	it.each(['MOVE', 'COPY'])('%s hides old paths even while descendant trash flags lag behind the parent', async method => {
+		targetTree();
+		expect((await request('/dav/' + targetName + '/nested/keep.bin', { method: 'HEAD' })).status).toBe(200);
+		recordMutations(async (call, commit) => {
+			if (call.body.trashed !== true) return;
+			const response = await commit();
+			// Observed live transient state; timing is intentionally deterministic.
+			for (const id of ['old-sub', 'old-leaf']) drive.findById(id)!.trashed = false;
+			return response;
+		});
+		expect((await transfer(method)).status).toBe(204);
+		// Publication may recompute the mock's settled flags. Reproduce stale
+		// descendant reads at the moment the client next resolves the old path.
+		for (const id of ['old-sub', 'old-leaf']) drive.findById(id)!.trashed = false;
+		expect((await request('/dav/' + targetName + '/nested/keep.bin', { method: 'HEAD' })).status).toBe(404);
+	});
+
+	it('folder MOVE overwrites an unrelated folder without losing either subtree', async () => {
+		targetTree();
+		expect((await request('/dav/docs/b%20%26%20c.txt', { method: 'HEAD' })).status).toBe(200);
+		expect((await request('/dav/' + targetName + '/nested/keep.bin', { method: 'HEAD' })).status).toBe(200);
+		const calls = recordMutations();
+		expect((await transfer('MOVE', true)).status).toBe(204);
+		expect(drive.findById('old-tree')?.trashed).toBe(true);
+		expect(drive.findById('old-leaf')?.parents).toEqual(['old-sub']);
+		expect(drive.findById('file-b')?.trashed).not.toBe(true);
+		expect(drive.findById('file-b')?.parents).toEqual(['folder-docs']);
+		expect((await request('/dav/docs/b%20%26%20c.txt', { method: 'HEAD' })).status).toBe(404);
+		expect((await request('/dav/' + targetName + '/b%20%26%20c.txt', { method: 'HEAD' })).status).toBe(200);
+		expect((await request('/dav/' + targetName + '/nested/keep.bin', { method: 'HEAD' })).status).toBe(404);
+		expect(calls.map(c => c.method)).toEqual(['PATCH', 'PATCH']);
+	});
+
+	it.each(['MOVE', 'COPY'])('%s restores the destination tree after an injected publication rejection, including independently trashed children', async method => {
+		targetTree();
+		const calls = recordMutations(async call => call.body.name === targetName ? rejectMutation(403) : undefined);
+		expect((await transfer(method)).status).toBe(403);
+		expect(drive.findById('old-tree')?.trashed).toBe(false);
+		for (const id of ['old-sub', 'old-leaf']) expect(drive.findById(id)?.trashed).not.toBe(true);
+		expect(drive.findById('old-trash')).toMatchObject({ trashed: false, explicitlyTrashed: false });
+		expect(drive.findById('old-leaf')?.content).toEqual(new Uint8Array([1, 2, 255]));
+		expect((await request('/dav/' + targetName + '/nested/keep.bin', { method: 'HEAD' })).status).toBe(200);
+		expect(calls.at(-1)?.body).toEqual({ trashed: false });
+		expect(calls.some(c => c.method === 'DELETE')).toBe(false);
+	});
+
+	it.each(['MOVE', 'COPY'])('%s preserves the recoverable tree after a committed publication loses its response', async method => {
+		targetTree();
+		const calls = recordMutations(async (call, commit) => {
+			if (call.body.name !== targetName) return;
+			await commit();
+			throw new Error('Injected lost publication response');
+		});
+		expect((await transfer(method)).status).toBeGreaterThanOrEqual(400);
+		expect(drive.findById('old-tree')?.trashed).toBe(true);
+		for (const id of ['old-sub', 'old-leaf']) expect(drive.findById(id)).toBeDefined();
+		expect(calls.some(c => c.body.trashed === false || c.method === 'DELETE')).toBe(false);
+		expect((await request('/dav/' + targetName + '', { method: 'HEAD' })).status).toBe(200);
 	});
 });

@@ -13,6 +13,7 @@ export interface DriveFile {
 	parents: string[];
 	modifiedTime?: string;
 	trashed?: boolean;
+	explicitlyTrashed?: boolean;
 	content?: Uint8Array;
 }
 
@@ -54,7 +55,7 @@ function parseMetadata(bytes: Uint8Array): Metadata | Response {
 
 // Drive partial-response selectors used by this worker. Unknown supported-API
 // features fail loudly instead of pretending that the real API accepted them.
-const fileFields = new Set(['kind', 'id', 'name', 'mimeType', 'size', 'modifiedTime', 'parents', 'trashed', 'description', 'iconLink', 'thumbnailLink', 'imageMediaMetadata']);
+const fileFields = new Set(['kind', 'id', 'name', 'mimeType', 'size', 'modifiedTime', 'parents', 'trashed', 'explicitlyTrashed', 'description', 'iconLink', 'thumbnailLink', 'imageMediaMetadata']);
 function selections(fields: string): string[] {
 	let depth = 0;
 	let start = 0;
@@ -93,7 +94,7 @@ function project(data: Record<string, unknown>, fields: string, allowed: Set<str
 function representation(file: DriveFile): Record<string, unknown> {
 	return {
 		kind: 'drive#file', id: file.id, name: file.name, mimeType: file.mimeType,
-		parents: [...file.parents], modifiedTime: file.modifiedTime, trashed: file.trashed ?? false,
+		parents: [...file.parents], modifiedTime: file.modifiedTime, trashed: file.trashed ?? false, explicitlyTrashed: file.explicitlyTrashed ?? false,
 		...(file.mimeType !== FOLDER ? { size: String(file.size ?? 0) } : {}),
 	};
 }
@@ -138,7 +139,9 @@ export class MockDrive {
 	add(file: DriveFile): DriveFile {
 		file.parents = [...file.parents];
 		file.modifiedTime ??= '2024-01-01T00:00:00.000Z';
+		file.explicitlyTrashed ??= file.trashed ?? false;
 		this.files.push(file);
+		this.refreshTrashState();
 		return file;
 	}
 	remove(id: string): void {
@@ -149,6 +152,20 @@ export class MockDrive {
 	findById(id: string): DriveFile | undefined { return this.files.find(f => f.id === id); }
 	children(parentId: string): DriveFile[] { return this.files.filter(f => f.parents.includes(parentId)); }
 
+	// Model settled My Drive state. Real descendant propagation is asynchronous;
+	// this deterministic mock does not simulate its transient visibility window.
+	private refreshTrashState(): void {
+		const isTrashed = (file: DriveFile, seen = new Set<string>()): boolean => {
+			if (file.explicitlyTrashed) return true;
+			if (seen.has(file.id)) unsupported('folder cycles');
+			seen.add(file.id);
+			return file.parents.some(id => {
+				const parent = this.findById(id);
+				return parent ? isTrashed(parent, new Set(seen)) : false;
+			});
+		};
+		for (const file of this.files) file.trashed = isTrashed(file);
+	}
 	private validateParents(parents: string[]): Response | undefined {
 		if (parents.length > 1) return apiError(403, 'cannotAddParent', 'Increasing the number of parents is not allowed');
 		for (const parent of parents) {
@@ -167,10 +184,11 @@ export class MockDrive {
 			parents, content: content.slice(), size: content.length, trashed: meta.trashed ?? false, modifiedTime: new Date().toISOString() });
 	}
 	private update(file: DriveFile, meta: Metadata, url: URL, content?: Uint8Array, mimeType?: string): Response | undefined {
-		if (file.mimeType === FOLDER && meta.trashed !== undefined) unsupported('trashing or restoring folder trees');
 		if (meta.parents !== undefined) return apiError(403, 'fieldNotWritable', 'The parents field is not directly writable in update requests. Use the addParents and removeParents parameters instead.');
 		const added = (url.searchParams.get('addParents') ?? '').split(',').filter(Boolean);
 		const removed = (url.searchParams.get('removeParents') ?? '').split(',').filter(Boolean);
+		if ((added.length || removed.length) && (file.trashed || added.some(id => this.findById(id)?.trashed))) unsupported('moving from or into Trash');
+		if (meta.trashed !== undefined && file.parents.some(id => this.findById(id)?.trashed)) unsupported('changing trash state under a trashed ancestor');
 		const error = this.validateParents(added);
 		if (error) return error;
 		if (file.mimeType === FOLDER && added.length) {
@@ -180,9 +198,21 @@ export class MockDrive {
 		}
 		// In My Drive, adding a different single parent moves the file even if
 		// removeParents is absent. Confirmed with live Drive on 2026-11-13.
-		file.parents = added.length ? [...added] : file.parents.filter(p => !removed.includes(p));
+		const nextParents = added.length ? [...added] : file.parents.filter(p => !removed.includes(p));
+		if ((meta.name && meta.name !== file.name) || JSON.stringify(nextParents) !== JSON.stringify(file.parents)) file.modifiedTime = new Date().toISOString();
+		file.parents = nextParents;
 		if (meta.name) file.name = meta.name;
-		if (meta.trashed !== undefined) file.trashed = meta.trashed;
+		if (meta.trashed !== undefined) file.explicitlyTrashed = meta.trashed;
+		if (meta.trashed === false && file.mimeType === FOLDER) {
+			// Live settled behavior: restoring a folder also restores descendants
+			// that had been explicitly trashed before the ancestor was trashed.
+			const restored = new Set([file.id]);
+			for (const parent of restored) for (const child of this.children(parent)) {
+				child.explicitlyTrashed = false;
+				restored.add(child.id);
+			}
+		}
+		this.refreshTrashState();
 		// Metadata-only MIME changes are ignored by Drive for binary files.
 		if (content !== undefined) {
 			file.content = content.slice(); file.size = content.length;

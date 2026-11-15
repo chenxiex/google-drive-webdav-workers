@@ -1,6 +1,6 @@
 var config: AppConfig = {
-    client_id: '202264815644.apps.googleusercontent.com', // Google API Client ID
-    client_secret: 'X4Z3ca8xfWDb1Voo-F9a7ZxJ', // Google API Client Secret
+    client_id: '', // Configure your own Google OAuth client through bindings
+    client_secret: '', // No shared OAuth credentials are bundled
     refresh_token: '', // Google Drive API Refresh Token
 
     path: '/dav/',
@@ -185,6 +185,27 @@ class KVCache {
         if (parent !== fpath) await this.delete(parent, 'meta');
         if (parentId) await this.delete(parentId, 'objects');
     }
+
+    async invalidateTransferPath(path: string, parentId?: string, tree = false): Promise<void> {
+        const prefix = path.replace(/\/+$/, '') + '/';
+        // Directory moves/replacements invalidate all descendant path mappings,
+        // including entries only present in KV. KV remains eventually consistent.
+        if (tree) {
+            for (const key of Object.keys(config.cache.meta)) {
+                if (key.startsWith(prefix)) delete config.cache.meta[key];
+            }
+        }
+        await this.invalidateFileAndParent(path, parentId);
+        if (tree && this.env?.KV) {
+            let cursor: string | undefined;
+            do {
+                const page = await this.env.KV.list({ prefix: 'meta.' + prefix, cursor });
+                await Promise.all(page.keys.map(key => this.env.KV!.delete(key.name)));
+                cursor = page.list_complete ? undefined : page.cursor;
+            } while (cursor);
+        }
+    }
+
 }
 
 class StatusError extends Error {
@@ -194,6 +215,12 @@ class StatusError extends Error {
     constructor(message: string, status: number) {
         super(message);
         this.status = status;
+    }
+}
+
+class TransferError extends StatusError {
+    constructor(message: string, status: number, public definitive: boolean) {
+        super(message, status);
     }
 }
 
@@ -640,122 +667,128 @@ class GDrive {
         }
     }
 
-    async MOVE(request: Request): Promise<Response | undefined> {
-        let { fpath } = getUrl(request.url);
-        if (fpath === '/') return new Response(null, { status: 403 });
-        let destination = request.headers.get('Destination');
-        if (!destination) return new Response(null, { status: 403 });
-        const { fpath: dest_fpath } = getUrl(destination);
-        if (dest_fpath === '/') return new Response(null, { status: 403 });
-        // A MOVE onto itself is a no-op that must not delete the source.
-        if (dest_fpath === fpath) return new Response(null, { status: 204 });
-        const metadata = await this.getMetadata(fpath);
-        if (!metadata) return new Response(null, { status: 404 });
-
-        // RFC 4918: Overwrite defaults to "T"; "F" must 412 when the target
-        // already exists. Drive never dedupes by name, so emulate overwrite by
-        // replacing the destination first.
-        const overwrite = (request.headers.get('Overwrite') || 'T').toUpperCase() !== 'F';
-        const destExists = !!(await this.getMetadata(dest_fpath));
-        if (destExists) {
-            if (!overwrite) return new Response(null, { status: 412 });
-            await this.removeIfExists(dest_fpath);
-        }
-
-        const { name, parent } = splitPath(fpath);
-        const { name: dest_name, parent: dest_parent } = splitPath(dest_fpath);
-
-        let patchUrl: string | undefined;
-        let originalParentId = metadata.parents && metadata.parents.length > 0 ? metadata.parents[0] : null;
-        let destParentId = originalParentId;
-
-        if (dest_parent !== parent) {
-            const dest_metadata = await this.getMetadata(dest_parent);
-            if (!dest_metadata) return new Response(null, { status: 404 });
-            destParentId = dest_metadata.id;
-            let parentsArray = [...metadata.parents];
-            patchUrl = 'removeParents=' + parentsArray.pop() + '&addParents=' + destParentId;
-        }
-
-        const response = await fetch('https://www.googleapis.com/drive/v3/files/' + metadata.id + '?supportsAllDrives=true&' + (patchUrl || ''), {
-            method: 'PATCH', headers: { 'Content-Type': 'application/json; charset=UTF-8', Authorization: 'Bearer ' + (await this.getAccessToken()) },
-            body: name !== dest_name ? JSON.stringify({ name: dest_name }) : null
-        });
-
-        const bodyText = await response.text();
-        if (!response.ok) return new Response(bodyText, { status: response.status });
-
-        let result: any = {};
-        try { result = JSON.parse(bodyText); } catch { /* not JSON */ }
-        if (!result.id) return new Response(bodyText, { status: 500 });
-
-        // The destination path now resolves to a different file, and both
-        // the old and the new parent lost a child.
-        await this.cache.invalidateFileAndParent(fpath, originalParentId);
-        await this.cache.delete(dest_fpath, 'meta');
-        if (destParentId && destParentId !== originalParentId) await this.cache.delete(destParentId, 'objects');
-
-        return destExists
-            ? new Response(null, { status: 204 })
-            : new Response(null, { status: 201, headers: { 'Location': destination } });
+    async MOVE(request: Request): Promise<Response> {
+        return this.transfer(request, false);
     }
 
     async COPY(request: Request): Promise<Response> {
-        let { fpath } = getUrl(request.url);
-        if (fpath === '/') return new Response(null, { status: 403 });
-        let destination = request.headers.get('Destination');
-        if (!destination) return new Response(null, { status: 403 });
-        const { fpath: dest_fpath } = getUrl(destination);
-        if (dest_fpath === '/') return new Response(null, { status: 403 });
-        // Copying a resource onto itself is an error, not a no-op.
-        if (dest_fpath === fpath) return new Response(null, { status: 403 });
-        const metadata = await this.getMetadata(fpath);
-        if (!metadata) return new Response(null, { status: 404 });
-
-        const overwrite = (request.headers.get('Overwrite') || 'T').toUpperCase() !== 'F';
-        const destExists = !!(await this.getMetadata(dest_fpath));
-        if (destExists) {
-            if (!overwrite) return new Response(null, { status: 412 });
-            await this.removeIfExists(dest_fpath);
-        }
-
-        const { name, parent } = splitPath(fpath);
-        const { name: dest_name, parent: dest_parent } = splitPath(dest_fpath);
-
-        let parents = metadata.parents;
-        let destParentId = null;
-
-        if (dest_parent !== parent) {
-            const dest_metadata = await this.getMetadata(dest_parent);
-            if (!dest_metadata) return new Response(null, { status: 404 });
-            destParentId = dest_metadata.id;
-            parents = [destParentId];
-        } else {
-            destParentId = metadata.parents && metadata.parents.length > 0 ? metadata.parents[0] : null;
-        }
-
-        const copyResponse = await fetch('https://www.googleapis.com/drive/v3/files/' + metadata.id + '/copy?supportsAllDrives=true', {
-            method: 'POST', headers: { 'Content-Type': 'application/json; charset=UTF-8', Authorization: 'Bearer ' + (await this.getAccessToken()) },
-            body: JSON.stringify({ name: dest_name, parents: parents })
-        });
-        if (!copyResponse.ok) return new Response(await copyResponse.text(), { status: copyResponse.status });
-
-        await this.cache.delete(dest_fpath, 'meta');
-        if (destParentId) await this.cache.delete(destParentId, 'objects');
-
-        return new Response(null, { status: destExists ? 204 : 201 });
+        return this.transfer(request, true);
     }
 
-    // Remove the resource at `fpath` if it exists. Used to emulate WebDAV
-    // overwrite semantics (RFC 4918 "Overwrite") for MOVE/COPY targets, since
-    // Google Drive allows duplicate names within a folder and never replaces
-    // an existing file in place.
-    async removeIfExists(fpath: string): Promise<boolean> {
-        const metadata = await this.getMetadata(fpath);
-        if (!metadata) return false;
-        const response = await fetch('https://www.googleapis.com/drive/v3/files/' + metadata.id + '?supportsAllDrives=true', { method: 'DELETE', headers: { Authorization: 'Bearer ' + (await this.getAccessToken()) } });
-        await this.cache.invalidateFileAndParent(fpath, metadata.parents && metadata.parents[0]);
-        return response.ok;
+    // Drive has no atomic replace-by-name operation. Keep the old destination
+    // recoverable in Trash, and never compensate an ambiguous write: it may
+    // already have succeeded even when its response was lost.
+    async transfer(request: Request, copy: boolean): Promise<Response> {
+        const canonical = (path: string) => path.replace(/\/+$/, '') || '/';
+        const fpath = canonical(getUrl(request.url).fpath);
+        const destination = request.headers.get('Destination');
+        if (!destination) return new Response(null, { status: 403 });
+        const destPath = canonical(getUrl(destination).fpath);
+        if (fpath === '/' || destPath === '/') return new Response(null, { status: 403 });
+
+        const source = await this.getMetadata(fpath);
+        if (!source) return new Response(null, { status: 404 });
+        if (destPath === fpath) return new Response(null, { status: copy ? 403 : 204 });
+        if (copy && source.mimeType === FOLDER_MIME) {
+            return new Response('Collection COPY is not supported', { status: 403 });
+        }
+        // Reject overlapping trees before touching either resource. This is a
+        // path guard, not a claim of isolation from concurrent Drive changes.
+        if (fpath.startsWith(destPath + '/') || destPath.startsWith(fpath + '/')) {
+            return new Response('Source and destination paths overlap', { status: 403 });
+        }
+        const target = await this.getMetadata(destPath);
+        if (target?.id === source.id) return new Response(null, { status: copy ? 403 : 204 });
+        if (target && (request.headers.get('Overwrite') || 'T').toUpperCase() === 'F') {
+            return new Response(null, { status: 412 });
+        }
+        const { parent } = splitPath(fpath);
+        const { name, parent: destParent } = splitPath(destPath);
+        const sourceParentId = source.parents?.[0];
+        // Same-directory operations already have the parent ID. Only resolve
+        // the destination parent when needed; do not add read-after-write probes.
+        const parentMetadata = parent === destParent && sourceParentId
+            ? { id: sourceParentId, mimeType: FOLDER_MIME }
+            : await this.getMetadata(destParent || '/');
+        if (!parentMetadata || parentMetadata.mimeType !== FOLDER_MIME) {
+            return new Response('Destination parent is not a collection', { status: 409 });
+        }
+        if (parentMetadata.id === source.id || parentMetadata.id === target?.id) {
+            return new Response('Source and destination overlap', { status: 403 });
+        }
+
+        const parentId = parentMetadata.id;
+        const headers = {
+            'Content-Type': 'application/json; charset=UTF-8',
+            Authorization: 'Bearer ' + (await this.getAccessToken())
+        };
+        let targetTrashed = false;
+        let stageId: string | undefined;
+        const stageName = copy && target ? '.webdav-copy-' + crypto.randomUUID() : undefined;
+        try {
+            if (copy) {
+                const staged = await this.transferWrite(source.id, { name: stageName || name, parents: [parentId] }, headers, true);
+                stageId = staged.id;
+            }
+            if (target) {
+                await this.transferWrite(target.id, { trashed: true }, headers);
+                targetTrashed = true;
+            }
+            if (copy) {
+                if (target) await this.transferWrite(stageId!, { name }, headers);
+            } else {
+                const parents = sourceParentId !== parentId
+                    ? '&addParents=' + encodeURIComponent(parentId) + (sourceParentId ? '&removeParents=' + encodeURIComponent(sourceParentId) : '')
+                    : '';
+                await this.transferWrite(source.id, { name }, headers, false, parents);
+            }
+            return new Response(null, {
+                status: target ? 204 : 201,
+                ...(!copy && !target ? { headers: { Location: destination } } : {})
+            });
+        } catch (error) {
+            let message = error instanceof Error ? error.message : String(error);
+            if (targetTrashed && error instanceof TransferError && error.definitive) {
+                try {
+                    await this.transferWrite(target.id, { trashed: false }, headers);
+                    message += '; previous destination restored';
+                } catch (restoreError) {
+                    message += '; destination restore failed: ' + (restoreError instanceof Error ? restoreError.message : String(restoreError));
+                }
+            } else if (targetTrashed) {
+                message += '; previous destination retained in Trash; write outcome uncertain, inspect before retrying';
+            }
+            // Retain staged data on failure rather than add cleanup writes that
+            // could destroy a successfully published copy after a lost response.
+            if (target) message += '; previous destination ID: ' + target.id;
+            if (stageName) message += '; recovery copy: ' + stageName + (stageId ? ' (ID ' + stageId + ')' : ' (creation outcome may be uncertain)');
+            return new Response(message, { status: errorStatus(error) });
+        } finally {
+            // Also evict after failed/ambiguous writes, not just confirmed ones.
+            // Run this after Drive writes so KV work does not widen the replace gap.
+            // Cache failures must not hide the Drive outcome/recovery IDs or
+            // prevent invalidating the other path. Local subtree eviction comes first.
+            const invalidations = [this.cache.invalidateTransferPath(destPath, parentId, target?.mimeType === FOLDER_MIME)];
+            if (!copy) invalidations.push(this.cache.invalidateTransferPath(fpath, sourceParentId, source.mimeType === FOLDER_MIME));
+            await Promise.all(invalidations.map(promise => promise.catch(error => console.error('Transfer cache invalidation failed:', error))));
+        }
+    }
+
+    async transferWrite(id: string, body: Record<string, unknown>, headers: Record<string, string>, copy = false, parents = ''): Promise<{ id: string }> {
+        const response = await fetch('https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(id)
+            + (copy ? '/copy' : '') + '?supportsAllDrives=true&fields=id' + parents, {
+            method: copy ? 'POST' : 'PATCH', headers, body: JSON.stringify(body)
+        });
+        if (!response.ok) {
+            throw new TransferError('Drive write for ' + id + ' failed: ' + await response.text(), response.status,
+                response.status >= 400 && response.status < 500 && response.status !== 408);
+        }
+        let result: any;
+        try { result = await response.json(); } catch { /* success with an unreadable body is ambiguous */ }
+        if (!result || typeof result.id !== 'string' || !result.id || (copy ? result.id === id : result.id !== id)) {
+            throw new TransferError('Drive write for ' + id + ' returned no valid ID; outcome uncertain', 502, false);
+        }
+        return result;
     }
 
     async DELETE(request: Request): Promise<Response> {
@@ -1129,9 +1162,11 @@ export default {
                     // credentials shipped in the default config.
                     config.users = {};
                 }
-                if (env.CLIENT_ID) config.client_id = env.CLIENT_ID;
-                if (env.CLIENT_SECRET) config.client_secret = env.CLIENT_SECRET;
-                if (env.REFRESH_TOKEN) config.refresh_token = env.REFRESH_TOKEN;
+                // Bindings must supply the complete OAuth configuration. Never
+                // combine a partial binding with credentials from static CONFIG.
+                config.client_id = env.CLIENT_ID?.trim() || '';
+                config.client_secret = env.CLIENT_SECRET?.trim() || '';
+                config.refresh_token = env.REFRESH_TOKEN?.trim() || '';
                 if (env.ROOT_ID) config.cache.meta['/']!.data.id = env.ROOT_ID;
                 if (env.PATH) config.path = env.PATH;
                 if (env.NAME) config.name = env.NAME;

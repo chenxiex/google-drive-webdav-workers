@@ -29,6 +29,20 @@ An invalid `fields` parameter does **not** guarantee an atomic failure. In the l
 
 Real `size` and quota values are decimal strings. Fixture setup still accepts numeric sizes for existing tests, but API responses serialize them correctly. Binary content is stored separately from metadata and multipart parsing searches bytes directly, avoiding a large per-byte string allocation at the 5 MiB boundary.
 
+## MOVE/COPY contract extension: 2026-11-15
+
+The overwrite fix required contracts that the original audit did **not** establish: binary-file trash/restore, nonempty folder-tree trash/restore, explicit versus inherited trash, copy staging with a caller-selected name and destination parent, and folder moves preserving descendants. These were checked directly against the configured My Drive account using seven new disposable resources in one isolated folder (136 HTTP requests including setup, polling, readbacks and cleanup, not 136 test cases). No existing user files were changed, and no permanent deletion was performed. The test folder and all six descendants were explicitly moved to Trash at cleanup; they remain recoverable there.
+
+The mock now models **settled** folder-tree trash state, with separate `explicitlyTrashed` and effective `trashed` fields. Google propagates descendant changes asynchronously: immediate metadata/list responses can still show the old state. A deterministic mock is not a real-time consistency guarantee. WebDAV tests additionally inject the observed stale-descendant state and check that old paths stay inaccessible after overwrite/cache eviction.
+
+**Important restore side effect:** after settling, restoring an ancestor also restored a child that had already been explicitly trashed before the ancestor was trashed. Immediate reads temporarily suggested the opposite. The mock clears descendant explicit-trash state on folder restore, and recovery tests assert this observed behavior. Consequently, rolling back a collection overwrite can also restore previously trashed children; it is not an exact snapshot rollback.
+
+The extension verifies repeated trash/restore PATCH requests with `fields=id`, preserved identity/parents/bytes, copy bytes and independent identity in the requested parent, publication by rename, and ordinary cross-parent folder moves preserving descendants. Rename/move updates modification time; trash/restore preserves it. Normal tests remain offline.
+
+Overwrite acceptance covers file and collection targets, folder MOVE, successful replacement, rejected publication and restoration, ambiguous committed writes, no permanent cleanup, and descendant-cache invalidation. Network failures, malformed responses, rate limits and permission failures are **fault injection**, not claims that Google necessarily emits these responses or that every 4xx response is mutation-free. The existing invalid-fields contract still demonstrates a committed write can return 400; production transfer uses a fixed valid `fields=id` mask.
+
+This is acceptance of the current MOVE/COPY implementation against these bounded contracts, not exhaustive Drive or distributed-consistency certification. No extra live WebDAV acceptance pass was needed or run. Shared-drive permissions, concurrent changes, trash propagation latency and cross-region KV visibility remain outside this mock's guarantees.
+
 ## Verification
 
 From a fresh checkout, install Node.js 24 and pnpm 11, then run from the repository root:
@@ -41,11 +55,11 @@ pnpm test --run
 pnpm run build
 ```
 
-The audit's final suite has 44 focused mock contract tests and 34 existing/auth/WebDAV cases (78 total). The WebDAV upload cases now verify persisted content at the 5 MiB multipart boundary and across two resumable chunks (11 MiB), rather than checking only HTTP success. Build is Wrangler's dry run, not a deployment.
+The original audit had 44 focused mock contract tests and 34 existing/auth/WebDAV cases (78 total). The final extended suite has 172 passing tests: 50 mock contracts and 122 WebDAV/auth/configuration cases, including the overwrite contracts and recovery cases above. Both TypeScript checks and the Wrangler dry-run build pass. The WebDAV upload cases now verify persisted content at the 5 MiB multipart boundary and across two resumable chunks (11 MiB), rather than checking only HTTP success. Build is Wrangler's dry run, not a deployment.
 
 ## Deliberate limits
 
-This is a **bounded test double**, not a full Google API emulator. It supports the worker's ordinary binary-file and folder operations and the query/field expressions described above. It fails loudly for unimplemented routes, verbs, query operators, metadata fields, Workspace conversion, media writes to folders/native documents, folder-tree trash/restore, folder cycles, overlapping/replayed chunks, and selected unverified upload forms. Extend the verified contract before using those features in tests.
+This is a **bounded test double**, not a full Google API emulator. It supports the worker's ordinary binary-file and folder operations and the query/field expressions described above. It fails loudly for unimplemented routes, verbs, query operators, metadata fields, Workspace conversion, media writes to folders/native documents, moves from/into Trash, changes to trash state beneath a trashed ancestor, folder cycles, overlapping/replayed chunks, and selected unverified upload forms. Extend the verified contract before using those features in tests.
 
 Other unmodeled dimensions include shared-drive permissions and ownership, concurrent mutations during pagination, real account quota enforcement/unlimited plans, OAuth revocation/expiry/consent, retries/rate limiting, session expiry, Workspace document conversion/export, complex query grammar, and Google's optional metadata fields. The synthetic account, root/file IDs, timestamps, quota and token values are fixture data, not literal live values. Tests must not assert that unsupported or unprobed API combinations conform.
 
@@ -59,3 +73,5 @@ Official references:
 - [Upload protocols](https://developers.google.com/workspace/drive/api/guides/manage-uploads)
 - [Copy limitations](https://developers.google.com/workspace/drive/api/guides/create-file#copy-files)
 - [Drive errors](https://developers.google.com/workspace/drive/api/guides/handle-errors)
+
+- [Trash and restore semantics and asynchronous propagation](https://developers.google.com/workspace/drive/api/guides/delete)

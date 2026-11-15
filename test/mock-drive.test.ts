@@ -262,3 +262,64 @@ describe('resumable uploads', () => {
 		expect((await api(drive, UPLOADS + '?uploadType=resumable&upload_id=missing', { method: 'PUT' })).status).toBe(404);
 	});
 });
+
+// Real My Drive audit on 2026-11-15. Descendant trash flags are settled-state
+// contracts: the live API returned stale flags immediately after folder updates.
+describe('trash/restore and transfer contracts', () => {
+	it.each(['source', 'a'])('trash/restore %s returns the same ID and is repeatable', async id => {
+		const drive = fixture();
+		const before = structuredClone(drive.findById(id)!);
+		for (const trashed of [true, true, false, false]) {
+			const response = await api(drive, FILES + '/' + id + '?fields=id', metadata({ trashed }, 'PATCH'));
+			expect(response.status).toBe(200);
+			expect(await response.json()).toEqual({ id });
+			expect(drive.findById(id)).toMatchObject({ name: before.name, parents: before.parents, modifiedTime: before.modifiedTime, trashed, explicitlyTrashed: trashed });
+		}
+		expect(drive.findById('source')?.content).toEqual(bytes);
+	});
+
+	it('trashes a nested tree and restores even independently trashed descendants', async () => {
+		const drive = fixture();
+		drive.add({ id: 'sub', name: 'sub', mimeType: FOLDER, parents: ['a'] });
+		drive.findById('source')!.parents = ['sub'];
+		drive.add({ id: 'independent', name: 'independent', mimeType: 'text/plain', parents: ['sub'], trashed: true });
+		await api(drive, FILES + '/a?fields=id', metadata({ trashed: true }, 'PATCH'));
+		for (const id of ['a', 'sub', 'source', 'independent']) expect(drive.findById(id)?.trashed).toBe(true);
+		expect(drive.findById('sub')?.explicitlyTrashed).toBe(false);
+		expect(drive.findById('source')?.explicitlyTrashed).toBe(false);
+		expect(await (await listed(drive, "'sub' in parents and trashed = false", '&fields=files(id)')).json()).toEqual({ files: [] });
+		expect(await (await listed(drive, "'sub' in parents and trashed = true", '&fields=files(id,explicitlyTrashed)')).json()).toEqual({ files: [
+			{ id: 'source', explicitlyTrashed: false }, { id: 'independent', explicitlyTrashed: true },
+		] });
+		await api(drive, FILES + '/a?fields=id', metadata({ trashed: false }, 'PATCH'));
+		for (const id of ['a', 'sub', 'source']) expect(drive.findById(id)?.trashed).toBe(false);
+		expect(drive.findById('independent')).toMatchObject({ trashed: false, explicitlyTrashed: false });
+		expect(drive.findById('source')).toMatchObject({ parents: ['sub'], content: bytes, size: bytes.length });
+	});
+
+	it('fails loudly for unmodeled mutations under or across Trash', async () => {
+		const drive = fixture();
+		await api(drive, FILES + '/a?fields=id', metadata({ trashed: true }, 'PATCH'));
+		await expect(api(drive, FILES + '/source?addParents=b&removeParents=a', metadata({}, 'PATCH'))).rejects.toThrow('moving from or into Trash');
+		await expect(api(drive, FILES + '/source', metadata({ trashed: false }, 'PATCH'))).rejects.toThrow('changing trash state under a trashed ancestor');
+		expect(drive.findById('source')).toMatchObject({ parents: ['a'], trashed: true });
+	});
+
+	it('moves a folder across parents while keeping descendant identities and bytes', async () => {
+		const drive = fixture();
+		const response = await api(drive, FILES + '/a?addParents=b&removeParents=root&fields=id,name,parents', metadata({ name: 'moved' }, 'PATCH'));
+		expect(await response.json()).toEqual({ id: 'a', name: 'moved', parents: ['b'] });
+		expect(drive.findById('source')).toMatchObject({ parents: ['a'], content: bytes });
+		expect(drive.findById('a')?.modifiedTime).not.toBe('2024-01-01T00:00:00.000Z');
+	});
+
+	it('stages a named copy in a different parent and publishes without changing bytes or source', async () => {
+		const drive = fixture();
+		const copy: any = await (await api(drive, FILES + '/source/copy?fields=id', metadata({ name: '.webdav-copy-test', parents: ['b'] }))).json();
+		expect(copy.id).not.toBe('source');
+		expect(drive.findById(copy.id)).toMatchObject({ name: '.webdav-copy-test', parents: ['b'], content: bytes, size: bytes.length });
+		expect(await (await api(drive, FILES + '/' + copy.id + '?fields=id', metadata({ name: 'published.bin' }, 'PATCH'))).json()).toEqual({ id: copy.id });
+		expect(drive.findById(copy.id)).toMatchObject({ name: 'published.bin', parents: ['b'], content: bytes });
+		expect(drive.findById('source')).toMatchObject({ name: 'source.bin', parents: ['a'], content: bytes });
+	});
+});

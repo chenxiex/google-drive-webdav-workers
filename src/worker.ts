@@ -188,7 +188,7 @@ class KVCache {
 
     async invalidateTransferPath(path: string, parentId?: string, tree = false): Promise<void> {
         const prefix = path.replace(/\/+$/, '') + '/';
-        // Directory moves/replacements invalidate all descendant path mappings,
+        // Directory moves/replacements/deletions invalidate descendant path mappings,
         // including entries only present in KV. KV remains eventually consistent.
         if (tree) {
             for (const key of Object.keys(config.cache.meta)) {
@@ -796,10 +796,15 @@ class GDrive {
         if (fpath === '/') return new Response(null, { status: 403 });
         const metadata = await this.getMetadata(fpath);
         if (metadata) {
-            const response = await fetch('https://www.googleapis.com/drive/v3/files/' + metadata.id + '?supportsAllDrives=true', { method: 'DELETE', headers: { Authorization: 'Bearer ' + (await this.getAccessToken()) } });
-
-            await this.cache.invalidateFileAndParent(fpath, metadata.parents && metadata.parents[0]);
-            return new Response(null, { status: response.status });
+            try {
+                const response = await fetch('https://www.googleapis.com/drive/v3/files/' + metadata.id + '?supportsAllDrives=true', { method: 'DELETE', headers: { Authorization: 'Bearer ' + (await this.getAccessToken()) } });
+                return new Response(null, { status: response.status });
+            } finally {
+                // Evict even after an ambiguous upstream failure. Clear local paths
+                // first, and never replace the Drive outcome with a cache error.
+                await this.cache.invalidateTransferPath(fpath, metadata.parents?.[0], metadata.mimeType === FOLDER_MIME)
+                    .catch(error => console.error('DELETE cache invalidation failed:', error));
+            }
         }
         return new Response(null, { status: 404 });
     }

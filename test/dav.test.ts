@@ -576,6 +576,111 @@ describe('MOVE / COPY destructive-operation guards', () => {
 	});
 });
 
+describe('DELETE cache invalidation', () => {
+	let path: string;
+	const head = (suffix = '/nested/leaf.txt') => request('/dav' + path + suffix, { method: 'HEAD' });
+	beforeEach(() => {
+		path = '/delete-' + crypto.randomUUID();
+		drive.add({ id: 'delete-tree', name: path.slice(1), mimeType: FOLDER, parents: ['root'] });
+		drive.add({ id: 'delete-sub', name: 'nested', mimeType: FOLDER, parents: ['delete-tree'] });
+		drive.add({ id: 'delete-leaf', name: 'leaf.txt', mimeType: 'text/plain', size: 3, parents: ['delete-sub'] });
+	});
+
+	it.each(['', '/'])('evicts cached descendants with directory suffix "%s" and resolves recreated names to new IDs', async suffix => {
+		expect((await head()).status).toBe(200);
+		expect((await head('/nested/')).status).toBe(200);
+		expect((await request('/dav' + path + suffix, { method: 'DELETE' })).status).toBe(204);
+		expect(drive.findById('delete-leaf')).toBeUndefined();
+		expect((await head()).status).toBe(404);
+		expect((await head('/nested/')).status).toBe(404);
+		expect((await head('/')).status).toBe(404);
+		expect((await request('/dav' + path + '/nested/', { method: 'MKCOL' })).status).toBe(201);
+		expect((await request('/dav' + path + '/nested/leaf.txt', { method: 'PUT', body: 'replacement', headers: { 'Content-Type': 'text/plain', 'Content-Length': '11' } })).status).toBe(201);
+		const recreated = await head();
+		expect(recreated.status).toBe(200);
+		expect(recreated.headers.get('Content-Length')).toBe('11');
+		const calls = recordMutations();
+		expect((await request('/dav' + path + '/nested/leaf.txt', { method: 'DELETE' })).status).toBe(204);
+		expect(calls).toHaveLength(1);
+		expect(calls[0].path).not.toBe('/drive/v3/files/delete-leaf');
+	});
+
+	it('deletes paginated KV-only descendant mappings without touching adjacent names', async () => {
+		const kv = (env as Env).KV!;
+		const keys = ['meta.' + path + '/cold/', 'meta.' + path + '/cold/deep.txt/'];
+		const adjacent = 'meta.' + path + '-other/keep.txt/';
+		for (const key of [...keys, adjacent]) await kv.put(key, JSON.stringify({ id: 'stale', mimeType: 'text/plain' }));
+		const list = vi.spyOn(kv, 'list')
+			.mockResolvedValueOnce({ keys: [{ name: keys[0] }], list_complete: false, cursor: 'next-page', cacheStatus: null })
+			.mockResolvedValueOnce({ keys: [{ name: keys[1] }], list_complete: true, cacheStatus: null });
+		expect((await request('/dav' + path, { method: 'DELETE' })).status).toBe(204);
+		expect(list).toHaveBeenNthCalledWith(1, { prefix: 'meta.' + path + '/', cursor: undefined });
+		expect(list).toHaveBeenNthCalledWith(2, { prefix: 'meta.' + path + '/', cursor: 'next-page' });
+		for (const key of keys) expect(await kv.get(key)).toBeNull();
+		expect(await kv.get(adjacent)).not.toBeNull();
+		expect((await head('/cold/deep.txt')).status).toBe(404);
+	});
+
+	it.each([403, 500])('preserves upstream %s without deleting the live subtree', async status => {
+		expect((await head()).status).toBe(200);
+		const calls = recordMutations(async call => call.method === 'DELETE' ? new Response(null, { status }) : undefined);
+		expect((await request('/dav' + path, { method: 'DELETE' })).status).toBe(status);
+		expect(calls).toHaveLength(1);
+		expect(drive.findById('delete-leaf')).toBeDefined();
+		expect((await head()).status).toBe(200);
+	});
+
+	it('evicts descendants even when the upstream deletion commits then loses its response', async () => {
+		expect((await head()).status).toBe(200);
+		recordMutations(async (call, commit) => {
+			if (call.method === 'DELETE') { await commit(); throw new Error('Injected lost DELETE response'); }
+		});
+		expect((await request('/dav' + path, { method: 'DELETE' })).status).toBe(500);
+		expect(drive.findById('delete-leaf')).toBeUndefined();
+		expect((await head()).status).toBe(404);
+	});
+
+	it.each(['list', 'delete'])('preserves successful DELETE and evicts local descendants when KV %s fails', async failure => {
+		expect((await head()).status).toBe(200);
+		const kv = (env as Env).KV!;
+		if (failure === 'list') vi.spyOn(kv, 'list').mockRejectedValue(new Error('Injected KV list failure'));
+		else {
+			const remove = kv.delete.bind(kv);
+			vi.spyOn(kv, 'delete').mockImplementation(key => key === 'meta.' + path + '/nested/leaf.txt/'
+				? Promise.reject(new Error('Injected KV descendant delete failure')) : remove(key));
+		}
+		const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+		expect((await request('/dav' + path, { method: 'DELETE' })).status).toBe(204);
+		expect(log).toHaveBeenCalledWith('DELETE cache invalidation failed:', expect.any(Error));
+		expect(drive.findById('delete-leaf')).toBeUndefined();
+		// KV failures may leave stale durable mappings. Remove those manually
+		// to verify local eviction independently of durable cleanup.
+		if (failure === 'delete') vi.mocked(kv.delete).mockRestore();
+		await kv.delete('meta.' + path + '/nested/leaf.txt/');
+		await kv.delete('meta.' + path + '/nested/');
+		expect((await head()).status).toBe(404);
+	});
+
+	it('keeps file DELETE non-recursive and refreshes the parent listing', async () => {
+		expect((await head()).status).toBe(200);
+		await request('/dav' + path + '/nested/', { method: 'PROPFIND', headers: { Depth: '1' } });
+		const list = vi.spyOn((env as Env).KV!, 'list');
+		expect((await request('/dav' + path + '/nested/leaf.txt', { method: 'DELETE' })).status).toBe(204);
+		expect(list).not.toHaveBeenCalled();
+		expect((await head()).status).toBe(404);
+		expect((await head('/nested/')).status).toBe(200);
+		const listing = await request('/dav' + path + '/nested/', { method: 'PROPFIND', headers: { Depth: '1' } });
+		expect(await listing.text()).not.toContain('leaf.txt');
+	});
+
+	it('does not mutate Drive for root or missing paths', async () => {
+		const calls = recordMutations();
+		expect((await request('/dav/', { method: 'DELETE' })).status).toBe(403);
+		expect((await request('/dav' + path + '/missing', { method: 'DELETE' })).status).toBe(404);
+		expect(calls).toEqual([]);
+	});
+});
+
 // Folder-tree behavior is independently verified in mock-drive.test.ts.
 describe('recoverable collection overwrites', () => {
 	let targetName: string;

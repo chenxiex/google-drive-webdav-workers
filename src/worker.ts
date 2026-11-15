@@ -140,8 +140,13 @@ class KVCache {
         if (this.env && this.env.KV) {
             const v = await this.env.KV.get(ns + '.' + k, { type: 'json' });
             if (v) {
-                if (!config.cache[ns]) config.cache[ns] = {};
-                config.cache[ns]![k] = { data: v, expire: now + 300000 };
+                // KV does not expose the remaining TTL here. Promoting metadata
+                // or listings would restart their lifetime on every cold instance.
+                // Keep the existing session caching behavior for TUS uploads.
+                if (ns !== 'meta' && ns !== 'objects') {
+                    if (!config.cache[ns]) config.cache[ns] = {};
+                    config.cache[ns]![k] = { data: v, expire: now + 300000 };
+                }
                 return v;
             }
         }

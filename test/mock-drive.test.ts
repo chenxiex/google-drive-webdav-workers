@@ -346,3 +346,81 @@ describe('media download contract', () => {
 		await expect(api(fixture(), FILES + '/source?alt=media', { headers: { Range: range } })).rejects.toThrow('unverified media range');
 	});
 });
+
+// Fresh isolated live Drive fixtures on 2026-11-16 confirmed these contracts.
+describe('Drive property metadata contracts', () => {
+	const fields = 'id,name,mimeType,createdTime,modifiedTime,description,starred,appProperties,folderColorRgb';
+	const path = (id = 'source') => `${FILES}/${id}?fields=${fields}`;
+	it('reads root metadata without adding a root entry to ordinary listings', async () => {
+		const drive = fixture();
+		expect(await (await api(drive, path('root'))).json()).toMatchObject({ id: 'root', mimeType: FOLDER, starred: false });
+		expect(await (await api(drive, FILES + '?fields=files(id)')).json()).toEqual({ files: [{ id: 'a' }, { id: 'b' }, { id: 'source' }] });
+	});
+	it('writes modifiedTime, description, starred and private properties in one update', async () => {
+		const drive = fixture();
+		const response = await api(drive, path(), metadata({ modifiedTime: '2021-02-03T04:05:06Z', description: 'description', starred: true, appProperties: { a: 'hello', keep: 'present' } }, 'PATCH'));
+		expect(response.status).toBe(200);
+		expect(await response.json()).toMatchObject({ modifiedTime: '2021-02-03T04:05:06.000Z', description: 'description', starred: true, appProperties: { a: 'hello', keep: 'present' } });
+	});
+	it('merges private properties, preserves empty values and removes only explicit null keys', async () => {
+		const drive = fixture();
+		await api(drive, path(), metadata({ appProperties: { a: 'hello', keep: 'present' } }, 'PATCH'));
+		const response = await api(drive, path(), metadata({ appProperties: { a: null, empty: '', missing: null } }, 'PATCH'));
+		expect(await response.json()).toMatchObject({ appProperties: { keep: 'present', empty: '' } });
+		await api(drive, path(), metadata({ appProperties: { keep: null, empty: null } }, 'PATCH'));
+		expect(await (await api(drive, path())).json()).not.toHaveProperty('appProperties');
+	});
+	it('advances modifiedTime for nonempty property patches, not starred or empty patches', async () => {
+		const drive = fixture();
+		await api(drive, path(), metadata({ appProperties: { a: 'hello' }, modifiedTime: '2021-02-03T04:05:06Z' }, 'PATCH'));
+		await api(drive, path(), metadata({ starred: true, appProperties: {} }, 'PATCH'));
+		expect(drive.findById('source')!.modifiedTime).toBe('2021-02-03T04:05:06.000Z');
+		await api(drive, path(), metadata({ appProperties: { a: 'hello' } }, 'PATCH'));
+		expect(drive.findById('source')!.modifiedTime).not.toBe('2021-02-03T04:05:06.000Z');
+	});
+	it('ignores null description and clears it with an empty string', async () => {
+		const drive = fixture();
+		await api(drive, path(), metadata({ description: 'kept' }, 'PATCH'));
+		await api(drive, path(), metadata({ description: null }, 'PATCH'));
+		expect(drive.findById('source')!.description).toBe('kept');
+		await api(drive, path(), metadata({ description: '' }, 'PATCH'));
+		expect(drive.findById('source')!.description).toBe('');
+	});
+	it.each([
+		[{ createdTime: '2020-01-02T03:04:05Z' }, 403, 'fieldNotWritable'],
+		[{ modifiedTime: 'bad' }, 400, 'invalid'],
+		[{ appProperties: { size: 'x'.repeat(121) } }, 403, 'propertyLengthLimitExceeded'],
+		[{ appProperties: { size: '界'.repeat(40) + 'x' } }, 403, 'propertyLengthLimitExceeded'],
+		[{ appProperties: Object.fromEntries(Array.from({ length: 31 }, (_, i) => ['p' + i, 'v'])) }, 403, 'propertyCountLimitExceeded'],
+	] as const)('rejects invalid metadata without partially committing other fields: %j', async (patch, status, reason) => {
+		const drive = fixture();
+		const before = structuredClone(drive.findById('source'));
+		const response = await api(drive, path(), metadata({ description: 'must not write', starred: true, ...patch }, 'PATCH'));
+		expect(response.status).toBe(status);
+		expect(await response.json()).toMatchObject({ error: { errors: [expect.objectContaining({ reason })] } });
+		expect(drive.findById('source')).toEqual(before);
+	});
+	it('accepts the 124 UTF-8 byte and 30 private-property boundaries', async () => {
+		const drive = fixture();
+		expect((await api(drive, path(), metadata({ appProperties: { size: '界'.repeat(40) } }, 'PATCH'))).status).toBe(200);
+		const patch = Object.fromEntries(Array.from({ length: 29 }, (_, i) => ['p' + i, 'v']));
+		expect((await api(drive, path(), metadata({ appProperties: patch }, 'PATCH'))).status).toBe(200);
+		expect((await api(drive, path(), metadata({ appProperties: { extra: 'v' } }, 'PATCH'))).status).toBe(403);
+	});
+	it('does not inherit appProperties on copy unless explicitly passed, but copies description/starred', async () => {
+		const drive = fixture();
+		await api(drive, path(), metadata({ description: 'copied', starred: true, appProperties: { a: 'hello' } }, 'PATCH'));
+		const copy = await (await api(drive, FILES + '/source/copy?fields=' + fields, metadata({ name: 'copy' }))).json() as any;
+		expect(copy).toMatchObject({ description: 'copied', starred: true });
+		expect(copy).not.toHaveProperty('appProperties');
+		const explicit = await (await api(drive, FILES + '/source/copy?fields=' + fields, metadata({ appProperties: { a: 'hello' } }))).json();
+		expect(explicit).toMatchObject({ appProperties: { a: 'hello' } });
+	});
+	it('normalizes verified folder colors and rejects color on binary files', async () => {
+		const drive = fixture();
+		const colored = await api(drive, path('a'), metadata({ folderColorRgb: '#ff0000' }, 'PATCH'));
+		expect(await colored.json()).toMatchObject({ folderColorRgb: '#f83a22' });
+		expect(await (await api(drive, path('a'), metadata({ folderColorRgb: '#f83a22' }, 'PATCH'))).json()).toMatchObject({ folderColorRgb: '#f83a22' });
+		expect((await api(drive, path(), metadata({ folderColorRgb: '#ff0000' }, 'PATCH'))).status).toBe(403);
+	});
+});

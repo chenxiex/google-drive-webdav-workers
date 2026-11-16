@@ -1,3 +1,4 @@
+import { uploadChunks } from './upload-stream';
 import { DOMParser } from '@xmldom/xmldom';
 import { DavProperty, key as propertyKey, parsePatch, parseFind, readDeadProperties, writeDeadProperties, propertyNameXml } from './dav-properties';
 
@@ -593,22 +594,91 @@ class GDrive {
         return new Response('Method Not Allowed', { status: 405 });
     }
 
+    private async putEmpty(fpath: string, name: string, parentId: string, existingFileId: string | null, mimeType: string): Promise<Response> {
+        const api = 'https://www.googleapis.com/upload/drive/v3/files';
+        if (existingFileId) {
+            // A JSON PATCH with "{}" only touches metadata and would leave the
+            // previous bytes behind, so truncate through the media endpoint.
+            const response = await fetch(`${api}/${existingFileId}?uploadType=media`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': mimeType, Authorization: 'Bearer ' + (await this.getAccessToken()) },
+                body: new Uint8Array(0)
+            });
+            if (response.ok) {
+                await this.cache.invalidateFileAndParent(fpath, parentId);
+                return new Response(null, { status: 204 });
+            }
+            return new Response(null, { status: response.status });
+        }
+        const response = await fetch('https://www.googleapis.com/drive/v3/files', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json; charset=UTF-8', Authorization: 'Bearer ' + (await this.getAccessToken()) },
+            body: JSON.stringify({ name, parents: [parentId], mimeType })
+        });
+        if (response.ok) {
+            await this.cache.invalidateFileAndParent(fpath, parentId);
+            return new Response(null, { status: 201 });
+        }
+        return new Response(null, { status: response.status });
+    }
+
+    private async putUnknownLength(body: ReadableStream<Uint8Array>, fpath: string, name: string, parentId: string, existingFileId: string | null, mimeType: string): Promise<Response> {
+        let uploadUrl: string | null = null;
+        let offset = 0;
+        try {
+            for await (const { bytes, final } of uploadChunks(body)) {
+                if (!bytes.length) return this.putEmpty(fpath, name, parentId, existingFileId, mimeType);
+                if (!uploadUrl) {
+                    const api = 'https://www.googleapis.com/upload/drive/v3/files';
+                    const init = await fetch(`${api}${existingFileId ? '/' + existingFileId : ''}?uploadType=resumable`, {
+                        method: existingFileId ? 'PATCH' : 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-Upload-Content-Type': mimeType,
+                            Authorization: 'Bearer ' + (await this.getAccessToken())
+                        },
+                        body: JSON.stringify(existingFileId ? {} : { name, parents: [parentId], mimeType })
+                    });
+                    if (!init.ok) return new Response('Failed to initiate Google Drive upload', { status: init.status });
+                    uploadUrl = init.headers.get('Location');
+                    if (!uploadUrl) return new Response('Failed to get Resumable Upload URL', { status: 502 });
+                }
+                const end = offset + bytes.length;
+                const response = await fetch(uploadUrl, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Length': String(bytes.length),
+                        'Content-Range': `bytes ${offset}-${end - 1}/${final ? end : '*'}`
+                    },
+                    body: bytes
+                });
+                // Never report success or continue from an unconfirmed offset.
+                // Ambiguous failures are not retried: the upload may have committed.
+                if (final ? response.status !== 200 && response.status !== 201 : response.status !== 308) {
+                    return new Response('Google Drive upload did not confirm the chunk', {
+                        status: response.status >= 400 && response.status <= 599 ? response.status : 502
+                    });
+                }
+                if (!final && response.headers.get('Range') !== `bytes=0-${end - 1}`) {
+                    return new Response('Google Drive upload offset mismatch', { status: 502 });
+                }
+                offset = end;
+            }
+            await this.cache.invalidateFileAndParent(fpath, parentId);
+            return new Response(null, { status: existingFileId ? 204 : 201 });
+        } catch {
+            // Do not expose the resumable session URL in errors or logs.
+            return new Response('Upload failed', { status: 502 });
+        }
+    }
+
     async PUT(request: Request): Promise<Response> {
         let { fpath } = getUrl(request.url);
         if (fpath.slice(-1) === '/') return new Response(null, { status: 405 });
         const mimeType = request.headers.get('Content-Type') || 'application/octet-stream';
 
-        let contentLength = parseInt(request.headers.get('Content-Length') || '0', 10);
-        let body: ReadableStream<Uint8Array> | null = request.body;
-
-        // A chunked upload carries no Content-Length header, so the size is
-        // unknown and the request would otherwise be treated as a zero byte
-        // write. Buffer the body to recover the length.
-        if (body && !request.headers.has('Content-Length')) {
-            const buffered = await request.arrayBuffer();
-            contentLength = buffered.byteLength;
-            body = contentLength > 0 ? new Response(buffered).body : null;
-        }
+        const contentLength = parseInt(request.headers.get('Content-Length') || '0', 10);
+        const body: ReadableStream<Uint8Array> | null = request.body;
 
         const { name, parent } = splitPath(fpath);
         const parentMetadata = await this.ensureDir(parent);
@@ -616,31 +686,11 @@ class GDrive {
         const metadata = await this.getMetadata(fpath);
         const existingFileId = metadata?.id || null;
         const api = 'https://www.googleapis.com/upload/drive/v3/files';
+        if (body && !request.headers.has('Content-Length')) {
+            return this.putUnknownLength(body, fpath, name, parentMetadata.id, existingFileId, mimeType);
+        }
         if (contentLength === 0 || !body) {
-            if (existingFileId) {
-                // A JSON PATCH with "{}" only touches metadata and would leave the
-                // previous bytes behind, so truncate through the media endpoint.
-                const response = await fetch(`${api}/${existingFileId}?uploadType=media`, {
-                    method: 'PATCH',
-                    headers: { 'Content-Type': mimeType, Authorization: 'Bearer ' + (await this.getAccessToken()) },
-                    body: new Uint8Array(0)
-                });
-                if (response.ok) {
-                    await this.cache.invalidateFileAndParent(fpath, parentMetadata.id);
-                    return new Response(null, { status: 204 });
-                }
-                return new Response(null, { status: response.status });
-            }
-            const response = await fetch('https://www.googleapis.com/drive/v3/files', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json; charset=UTF-8', Authorization: 'Bearer ' + (await this.getAccessToken()) },
-                body: JSON.stringify({ name, parents: [parentMetadata.id], mimeType })
-            });
-            if (response.ok) {
-                await this.cache.invalidateFileAndParent(fpath, parentMetadata.id);
-                return new Response(null, { status: 201 });
-            }
-            return new Response(null, { status: response.status });
+            return this.putEmpty(fpath, name, parentMetadata.id, existingFileId, mimeType);
         }
         if (contentLength <= 5 * 1024 * 1024) {
             const reader = body.getReader();

@@ -39,6 +39,12 @@ Property semantics follow [RFC 4918](https://www.rfc-editor.org/rfc/rfc4918.html
 - Property writes invalidate metadata and parent listings, waiting for this instance's already-started KV write and eviction before returning. A KV failure is logged without changing the confirmed Drive outcome. This cannot synchronously invalidate other instances or guarantee global immediate freshness.
 - Changing dead properties can advance Drive's modification time. When a request also explicitly sets `modifiedTime`, that timestamp is sent in the same PATCH. Folder colors and timestamp precision can be normalized by Drive; read-back uses the returned Drive representation.
 
+## PUT uploads
+
+- PUT with a known `Content-Length` retains the small media/multipart and large resumable upload paths. Without a length, the worker streams through resumable uploads instead of buffering the entire file.
+- Unknown-length uploads hold a 10 MiB upload buffer plus the current input chunk, with one-read lookahead to identify the final chunk (including an exact 10 MiB boundary). Each chunk is acknowledged before assembling the next. Runtime/network buffering and concurrent requests still consume additional memory; this does not bypass the Worker ingress request-size limit.
+- Empty uploads create an empty file or truncate an existing file. Nonempty uploads report success only after Drive confirms completion. An unexpected offset, incomplete final response, stream error, or upstream failure stops the upload; there is no automatic retry or rollback. An ambiguous failure can follow a committed write, so inspect the destination before retrying.
+
 ## File downloads
 
 - Ordinary file GET uses Drive's original-content endpoint (`files.get?alt=media`), including for images with a `thumbnailLink`. It does not substitute a preview or fetch the thumbnail CDN. The former image `param` query parameter no longer selects a preview size.

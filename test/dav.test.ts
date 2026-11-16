@@ -1,6 +1,9 @@
-import { SELF, env } from 'cloudflare:test';
+import { SELF, env, createExecutionContext, waitOnExecutionContext } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AUTH, FOLDER, MockDrive, ORIGIN, installDriveMock } from './helpers';
+
+import worker from '../src/worker';
+import { UPLOAD_CHUNK_SIZE, uploadChunks } from '../src/upload-stream';
 
 const MEGA = 1024 * 1024;
 
@@ -333,6 +336,156 @@ describe('PUT and MKCOL', () => {
 		expect(res.status).toBe(201);
 		const created = drive.children('root').find((f) => f.name === 'new-folder');
 		expect(created?.mimeType).toBe(FOLDER);
+	});
+});
+
+describe('unknown-length PUT', () => {
+	// Use the handler directly for disconnect/error tests: SELF's HTTP bridge
+	// can turn a producer error into EOF before the handler sees it.
+	async function directPut(path: string, body: ReadableStream<Uint8Array>): Promise<Response> {
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(new Request(ORIGIN + path, { method: 'PUT', headers: AUTH, body }), env as Env, ctx);
+		await waitOnExecutionContext(ctx);
+		return response;
+	}
+
+	// Zero queueing makes the producer's reads observable independently of
+	// the request transport's own buffering.
+	function stream(size: number, onPull = () => {}, onCancel = () => {}): ReadableStream<Uint8Array> {
+		let offset = 0;
+		return new ReadableStream({
+			pull(controller) {
+				onPull();
+				if (offset === size) { controller.close(); return; }
+				const length = Math.min(256 * 1024, size - offset);
+				controller.enqueue(new Uint8Array(length).fill(97));
+				offset += length;
+			},
+			cancel: onCancel,
+		}, { highWaterMark: 0 });
+	}
+
+	it.each([
+		['partial', 2 * UPLOAD_CHUNK_SIZE + 3, '/dav/stream.dat', 201],
+		['exact', UPLOAD_CHUNK_SIZE, '/dav/a.txt', 204],
+	] as const)('uploads %s EOF with a known final total, preserving bytes', async (_, size, path, status) => {
+		const ranges: string[] = [];
+		let produced = 0;
+		const original = drive.handle.bind(drive);
+		vi.spyOn(drive, 'handle').mockImplementation((input, init) => {
+			const headers = new Headers(init?.headers);
+			if (String(input).includes('uploadType=resumable') && init?.method !== 'PUT') {
+				expect(headers.has('X-Upload-Content-Length')).toBe(false);
+			}
+			if (headers.has('Content-Range')) {
+				if (!ranges.length && size > UPLOAD_CHUNK_SIZE) expect(produced).toBeLessThan(size / (256 * 1024));
+				ranges.push(headers.get('Content-Range')!);
+			}
+			return original(input, init);
+		});
+		const response = await request(path, { method: 'PUT', body: stream(size, () => produced++) });
+		expect(response.status).toBe(status);
+		const file = drive.children('root').find(f => f.name === path.split('/').at(-1));
+		expect(file?.size).toBe(size);
+		expect(file?.content?.every(byte => byte === 97)).toBe(true);
+		expect(ranges).toEqual(size === UPLOAD_CHUNK_SIZE
+			? [`bytes 0-${size - 1}/${size}`]
+			: [`bytes 0-${UPLOAD_CHUNK_SIZE - 1}/*`, `bytes ${UPLOAD_CHUNK_SIZE}-${2 * UPLOAD_CHUNK_SIZE - 1}/*`, `bytes ${2 * UPLOAD_CHUNK_SIZE}-${size - 1}/${size}`]);
+	});
+
+	it('creates and truncates empty streams without an unusable resumable session', async () => {
+		const handle = vi.spyOn(drive, 'handle');
+		for (const [path, status] of [['/dav/empty.dat', 201], ['/dav/a.txt', 204]] as const) {
+			expect((await request(path, { method: 'PUT', body: stream(0) })).status).toBe(status);
+			const file = drive.children('root').find(f => f.name === path.split('/').at(-1));
+			expect(Number(file?.size)).toBe(0);
+		}
+		expect(handle.mock.calls.some(([input]) => String(input).includes('uploadType=resumable'))).toBe(false);
+	});
+
+	it('bounds assembly to one chunk plus lookahead and stops reading while the consumer waits', async () => {
+		const pull = vi.fn();
+		const cancel = vi.fn();
+		const body = stream(4 * UPLOAD_CHUNK_SIZE, pull, cancel);
+		const chunks = uploadChunks(body);
+		const first = await chunks.next();
+		expect(first.value?.bytes.length).toBe(UPLOAD_CHUNK_SIZE);
+		expect(first.value?.final).toBe(false);
+		expect(pull).toHaveBeenCalledTimes(UPLOAD_CHUNK_SIZE / (256 * 1024) + 1);
+		await Promise.resolve();
+		expect(pull).toHaveBeenCalledTimes(UPLOAD_CHUNK_SIZE / (256 * 1024) + 1);
+		await chunks.return(undefined);
+		expect(cancel).toHaveBeenCalledOnce();
+		expect(body.locked).toBe(false);
+	});
+
+	it('splits oversized input chunks and ignores empty input chunks without losing bytes', async () => {
+		const input = new Uint8Array(UPLOAD_CHUNK_SIZE + 7).fill(19);
+		input.fill(31, UPLOAD_CHUNK_SIZE);
+		const body = new ReadableStream<Uint8Array>({ start(controller) {
+			controller.enqueue(new Uint8Array(0));
+			controller.enqueue(input);
+			controller.enqueue(new Uint8Array(0));
+			controller.close();
+		} });
+		const results = [];
+		for await (const chunk of uploadChunks(body)) {
+			// The assembler reuses its bounded buffer on the next iteration.
+			results.push({ bytes: chunk.bytes.slice(), final: chunk.final });
+		}
+		expect(results.map(chunk => [chunk.bytes.length, chunk.final])).toEqual([[UPLOAD_CHUNK_SIZE, false], [7, true]]);
+		expect(results[0].bytes.every(byte => byte === 19)).toBe(true);
+		expect(results[1].bytes).toEqual(new Uint8Array(7).fill(31));
+		expect(body.locked).toBe(false);
+	});
+
+	it.each(['init', 'chunk', 'range', 'early-complete', 'final-incomplete'] as const)(
+		'stops without retrying or reporting success after %s failure', async failure => {
+			let chunks = 0;
+			let produced = 0;
+			const cancel = vi.fn();
+			const original = drive.handle.bind(drive);
+			vi.spyOn(drive, 'handle').mockImplementation((input, init) => {
+				const url = String(input);
+				if (!url.includes('uploadType=resumable')) return original(input, init);
+				if (init?.method !== 'PUT') return failure === 'init'
+					? Promise.resolve(new Response('injected', { status: 503 })) : original(input, init);
+				chunks++;
+				if (failure === 'chunk') return Promise.resolve(new Response('injected', { status: 503 }));
+				if (failure === 'range') return Promise.resolve(new Response(null, { status: 308, headers: { Range: 'bytes=0-2' } }));
+				if (failure === 'early-complete') return Promise.resolve(new Response('{}', { status: 200 }));
+				return Promise.resolve(new Response(null, { status: 308 }));
+			});
+			const size = failure === 'final-incomplete' ? 3 : 4 * UPLOAD_CHUNK_SIZE;
+			const result = await directPut('/dav/failed.dat', stream(size, () => produced++, cancel));
+			expect(result.status).toBe(failure === 'init' || failure === 'chunk' ? 503 : 502);
+			expect(chunks).toBe(failure === 'init' ? 0 : 1);
+			expect(drive.children('root').some(file => file.name === 'failed.dat')).toBe(false);
+			if (failure !== 'final-incomplete') {
+				// Transport may queue an input chunk, but must not drain the file.
+				expect(produced).toBeLessThan(size / (256 * 1024));
+				expect(cancel).toHaveBeenCalledOnce();
+			}
+		},
+	);
+
+	it('does not commit a truncated file when the incoming stream errors', async () => {
+		let pulls = 0;
+		const body = new ReadableStream<Uint8Array>({
+			pull(controller) {
+				if (++pulls > 43) { controller.error(new Error('injected input failure')); return; }
+				controller.enqueue(new Uint8Array(256 * 1024));
+			},
+		}, { highWaterMark: 0 });
+		const original = drive.handle.bind(drive);
+		let chunks = 0;
+		vi.spyOn(drive, 'handle').mockImplementation((input, init) => {
+			if (new Headers(init?.headers).has('Content-Range')) chunks++;
+			return original(input, init);
+		});
+		expect((await directPut('/dav/input-error.dat', body)).status).toBe(502);
+		expect(chunks).toBe(1);
+		expect(drive.children('root').some(file => file.name === 'input-error.dat')).toBe(false);
 	});
 });
 

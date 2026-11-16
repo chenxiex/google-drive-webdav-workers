@@ -16,6 +16,13 @@ const davBindings = {
 export default defineConfig({
 	test: {
 		projects: [
+            // Independent workers: never warm a custom route via the default path.
+            ...[undefined, '/custom/', '/custom', '/'].map(path => ({
+                plugins: [cloudflareTest({ main: 'src/worker.ts', miniflare: {
+                    ...compat, bindings: { ...davBindings, ...(path === undefined ? {} : { PATH: path }) },
+                } })],
+                test: { name: 'routing-' + (path ?? 'default'), include: ['test/routing.test.ts'] },
+            })),
             // Each missing binding, plus whitespace-only aggregate validation.
             ...[1, 2, 4, 7].map(mask => {
                 const keys = ['CLIENT_ID', 'CLIENT_SECRET', 'REFRESH_TOKEN'] as const;

@@ -254,6 +254,36 @@ describe('resumable uploads', () => {
 		expect((await put('bytes */262149')).status).toBe(200);
 	});
 
+
+	it.each([
+		{ overwrite: false, prefix: true, finalSize: 5 },
+		{ overwrite: true, prefix: true, finalSize: 262144 },
+		{ overwrite: false, prefix: false, finalSize: 262144 },
+	])('accepts omitted total until the final chunk ($overwrite, $prefix, $finalSize)', async ({ overwrite, prefix, finalSize }) => {
+		const drive = fixture();
+		const init = await api(drive, UPLOADS + (overwrite ? '/source' : '') + '?uploadType=resumable&fields=id,size', {
+			...metadata(overwrite ? {} : { name: 'unknown.bin', parents: ['b'] }, overwrite ? 'PATCH' : 'POST'),
+			headers: { 'Content-Type': 'application/json', 'X-Upload-Content-Type': 'application/octet-stream' },
+		});
+		expect(init.status).toBe(200);
+		const location = init.headers.get('Location')!;
+		const put = (range: string, body: Uint8Array) => drive.handle(location, { method: 'PUT', headers: { 'Content-Range': range }, body });
+		const offset = prefix ? 262144 : 0;
+		if (prefix) {
+			const first = await put('bytes 0-262143/*', new Uint8Array(262144).fill(65));
+			expect(first.status).toBe(308);
+			expect(first.headers.get('Range')).toBe('bytes=0-262143');
+		}
+		const total = offset + finalSize;
+		const finished = await put(`bytes ${offset}-${total - 1}/${total}`, new Uint8Array(finalSize).fill(66));
+		expect(finished.status).toBe(200);
+		const file: any = await finished.json();
+		expect(file).toEqual({ id: overwrite ? 'source' : expect.any(String), size: String(total) });
+		const expected = new Uint8Array(total).fill(65);
+		expected.fill(66, offset);
+		expect(drive.findById(file.id)?.content).toEqual(expected);
+	});
+
 	it('issues distinct session URLs and rejects unknown sessions', async () => {
 		const drive = fixture();
 		const start = () => api(drive, UPLOADS + '?uploadType=resumable', metadata({ name: 'new' }));

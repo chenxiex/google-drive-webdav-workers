@@ -65,6 +65,14 @@ Four isolated live audit runs created five binary/folder fixtures plus two copie
 
 Unverified property contracts intentionally remain unsupported: writes to My Drive root, native-document specifics, creation-time/mtime/color overrides during file creation, arbitrary folder-color quantization, nested app-property field masks, and other clients' property quotas. No live end-to-end WebDAV acceptance is implied; default tests remain offline.
 
+## Unknown-length upload contract extension: 2026-11-16
+
+An isolated live audit initiated resumable create and update sessions without `X-Upload-Content-Length`. A 256 KiB chunk with `Content-Range: bytes 0-262143/*` returned 308 and `Range: bytes=0-262143`; the last chunk supplied the final total and returned 200. Downloaded bytes matched for a short tail, an aligned last chunk, a single aligned chunk and replacement of an existing file. Focused mock contracts cover unknown-total creation, replacement and aligned endings without multiplying every combination.
+
+The same audit verified zero-byte create and replacement with `Content-Range: bytes */0`, but this form is not added to the mock: the worker keeps its existing empty-file paths. Empty finalization after previously uploaded unknown-total chunks was not tested. All fixtures were created in a unique audit folder, then moved to Trash with that folder; nothing was permanently deleted. Default tests remain offline.
+
+The [official upload guide](https://developers.google.com/workspace/drive/api/guides/manage-uploads) makes the initial upload length optional, requires non-final chunks to be multiples of 256 KiB, and instructs callers to inspect the response Range rather than assume all sent bytes were accepted. The mock contracts above cover successful complete chunk acknowledgments, not partial acceptance, retries, interruptions or session expiry.
+
 ## Verification
 
 From a fresh checkout, install Node.js 24 and pnpm 11, then run from the repository root:

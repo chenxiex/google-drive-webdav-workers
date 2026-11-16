@@ -1,5 +1,11 @@
 # WebDAV behavior
 
+## Locking
+
+- WebDAV locking is not supported. OPTIONS advertises `DAV: 1`, not Class 2, and does not list LOCK/UNLOCK in Allow. PROPFIND returns an empty `supportedlock` property for files and collections.
+- Authenticated LOCK (including refresh) and UNLOCK requests return **501 Not Implemented**, without issuing a lock token, creating a resource, or calling Drive. Locking is unavailable throughout the service, rather than merely disallowed on a particular resource.
+- Clients must work without locks; clients that require them may refuse writes or editing. There is no lock-based protection against concurrent overwrites. This is not a claim of complete WebDAV conformance or client-by-client compatibility.
+
 ## File downloads
 
 - Ordinary file GET uses Drive's original-content endpoint (`files.get?alt=media`), including for images with a `thumbnailLink`. It does not substitute a preview or fetch the thumbnail CDN. The former image `param` query parameter no longer selects a preview size.

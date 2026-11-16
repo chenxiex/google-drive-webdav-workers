@@ -242,10 +242,9 @@ class GDrive {
     }
 
     async OPTIONS(request: Request): Promise<Response> {
-        // Class 3 (locking) is deliberately not advertised: LOCK/UNLOCK are
-        // no-ops here, so claiming "3" would overstate what the server offers.
+        // Locking (Class 2) is not implemented.
         let allowed_methods = ['GET', 'HEAD', 'OPTIONS', 'PUT', 'PROPFIND', 'MKCOL', 'DELETE', 'MOVE', 'COPY'].join(',');
-        return new Response(null, { status: 200, headers: { 'Allow': allowed_methods, 'DAV': '1, 2', 'MS-Author-Via': 'DAV', 'Accept-Ranges': 'bytes' } });
+        return new Response(null, { status: 200, headers: { 'Allow': allowed_methods, 'DAV': '1', 'MS-Author-Via': 'DAV', 'Accept-Ranges': 'bytes' } });
     }
 
     async PROPFIND(request: Request): Promise<Response> {
@@ -861,8 +860,10 @@ class GDrive {
         return new Response(null, { status: 404 });
     }
 
-    async LOCK(): Promise<Response> { return new Response(null, { status: 200 }); }
-    async UNLOCK(): Promise<Response> { return new Response(null, { status: 200 }); }
+    async LOCK(): Promise<Response> {
+        return new Response('WebDAV locking is not supported', { status: 501 });
+    }
+    async UNLOCK(): Promise<Response> { return this.LOCK(); }
     // Property updates are not persisted. Reply with a well-formed multistatus
     // (207) echoing success instead of a bare 200, which is what DAV clients
     // expect for PROPPATCH regardless of the DAV class advertised.
@@ -1034,10 +1035,6 @@ class GDrive {
 }
 
 function arrayToXml(rpath: string, files: Partial<DriveFile>[]): string {
-    const lock =
-        '<D:supportedlock><D:lockentry><D:lockscope><D:exclusive/></D:lockscope>' +
-        '<D:locktype><D:write/></D:locktype></D:lockentry></D:supportedlock>';
-
     const entries = files.map(file => {
         // The self entry (no name) echoes the requested path.
         let href = file.name ? pathJoin(rpath, file.name) : rpath;
@@ -1068,7 +1065,7 @@ function arrayToXml(rpath: string, files: Partial<DriveFile>[]): string {
                   `<D:getcontenttype>${escapeXml(file.type || 'application/octet-stream')}</D:getcontenttype>`) +
             `<D:getetag>"${etag}"</D:getetag>` +
             `<D:getlastmodified>${file.lastmodified || new Date().toUTCString()}</D:getlastmodified>` +
-            lock + quota +
+            '<D:supportedlock/>' + quota +
             '</D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat>' +
             '</D:response>'
         );

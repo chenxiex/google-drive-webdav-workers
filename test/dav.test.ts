@@ -60,10 +60,11 @@ describe('server metadata', () => {
 		expect(favicon.status).toBe(204);
 	});
 
-	it('advertises class 1 and 2 in OPTIONS', async () => {
+	it('does not advertise Class 2 or locking methods in OPTIONS', async () => {
 		const res = await request('/dav/', { method: 'OPTIONS' });
 		expect(res.status).toBe(200);
-		expect(res.headers.get('DAV')).toBe('1, 2');
+		expect(res.headers.get('DAV')).toBe('1');
+		expect(res.headers.get('Allow')).not.toContain('LOCK');
 		expect(res.headers.get('Allow')).toContain('PROPFIND');
 		expect(res.headers.get('Allow')).toContain('MOVE');
 	});
@@ -82,6 +83,41 @@ describe('server metadata', () => {
 	it('returns 404 for a missing resource', async () => {
 		const res = await request('/dav/missing.txt');
 		expect(res.status).toBe(404);
+	});
+});
+
+describe('unsupported locking', () => {
+	it.each(['/dav/', '/dav/a.txt', '/dav/missing.txt'])(
+		'rejects lock creation, refresh and unlock without contacting Drive (%s)', async path => {
+			const spy = vi.spyOn(drive, 'handle');
+			const attempts: RequestInit[] = [
+				{ method: 'LOCK', headers: { 'Content-Type': 'application/xml', Timeout: 'Second-3600' },
+					body: '<D:lockinfo xmlns:D="DAV:"><D:lockscope><D:exclusive/></D:lockscope><D:locktype><D:write/></D:locktype></D:lockinfo>' },
+				{ method: 'LOCK' },
+				{ method: 'LOCK', headers: { If: '(<opaquelocktoken:test>)' } },
+				{ method: 'UNLOCK', headers: { 'Lock-Token': '<opaquelocktoken:test>' } },
+			];
+			for (const attempt of attempts) {
+				const response = await request(path, attempt);
+				expect(response.status).toBe(501);
+				expect(response.headers.has('Lock-Token')).toBe(false);
+				expect(await response.text()).toBe('WebDAV locking is not supported');
+			}
+			expect(spy).not.toHaveBeenCalled();
+		});
+
+	it.each(['LOCK', 'UNLOCK'])('still authenticates %s requests', async method => {
+		const response = await SELF.fetch(ORIGIN + '/dav/a.txt', { method });
+		expect(response.status).toBe(401);
+	});
+
+	it.each(['/dav/', '/dav/a.txt'])('reports no supported lock types in PROPFIND (%s)', async path => {
+		const response = await request(path, { method: 'PROPFIND', headers: { Depth: '1' } });
+		expect(response.status).toBe(207);
+		const xml = await response.text();
+		expect(xml.match(/<D:supportedlock\/>/g)?.length).toBe(xml.match(/<D:response>/g)?.length);
+		expect(xml).not.toContain('<D:lockentry>');
+		expect(xml).not.toContain('<D:activelock>');
 	});
 });
 

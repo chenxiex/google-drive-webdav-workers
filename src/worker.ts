@@ -1279,18 +1279,6 @@ export default {
                 return response;
             }
 
-            let basePath = config.path.endsWith('/') ? config.path : config.path + '/';
-            if (basePath !== '/') {
-                if (pathname + '/' === basePath) {
-                    const u = new URL(request.url);
-                    u.pathname += '/';
-                    return Response.redirect(u.toString(), 301);
-                }
-                if (!pathname.startsWith(basePath)) {
-                    return new Response('404 Not Found', { status: 404 });
-                }
-            }
-
             // Env
             if (env && !config.env) {
                 if (typeof env.USERS === 'string' && env.USERS.length > 0) {
@@ -1322,6 +1310,19 @@ export default {
                 if (env.COPYRIGHT) config.copyright = env.COPYRIGHT;
                 if (env.COPYRIGHT_LINK) config.copyright_link = env.COPYRIGHT_LINK;
                 config.env = true;
+            }
+
+            // Routing must use the binding on the first request, not CONFIG defaults.
+            let basePath = config.path.endsWith('/') ? config.path : config.path + '/';
+            if (basePath !== '/') {
+                if (pathname + '/' === basePath) {
+                    const u = new URL(request.url);
+                    u.pathname += '/';
+                    return Response.redirect(u.toString(), 301);
+                }
+                if (!pathname.startsWith(basePath)) {
+                    return new Response('404 Not Found', { status: 404 });
+                }
             }
 
             // Global Basic Authentication

@@ -6,6 +6,39 @@
 - Authenticated LOCK (including refresh) and UNLOCK requests return **501 Not Implemented**, without issuing a lock token, creating a resource, or calling Drive. Locking is unavailable throughout the service, rather than merely disallowed on a particular resource.
 - Clients must work without locks; clients that require them may refuse writes or editing. There is no lock-based protection against concurrent overwrites. This is not a claim of complete WebDAV conformance or client-by-client compatibility.
 
+## Properties (PROPFIND / PROPPATCH)
+
+- OPTIONS includes PROPPATCH. PROPFIND supports an empty body / `allprop`, `propname`, selected `prop`, and `allprop` with `include`. Unknown requested properties receive a separate 404 propstat. Dead properties are included in listings and can be read back after setting them.
+- PROPPATCH processes `set` / `remove` in document order. Property identity is the namespace URI plus local name, not the prefix. Dead properties retain XML child elements, attributes, mixed text, significant whitespace, in-scope namespace bindings and inherited `xml:lang`. Empty values differ from absent properties; removing an absent dead property succeeds. UTF-8 XML is limited to 64 KiB and 128 nesting levels; malformed XML and DTD/entity declarations are rejected before writing.
+- `DAV:displayname` is a writable text property stored with the custom metadata. It does **not** rename the Drive file or change its URL; REMOVE suppresses the computed default as well, so subsequent PROPFIND reports it absent; a small tombstone is stored with the property document. SET makes it visible again. Other custom XML properties are stored as dead properties. MOVE preserves them and COPY explicitly sends them to Drive, whose copy endpoint does not inherit `appProperties` automatically.
+
+### Drive-backed live properties
+
+Use the project-defined namespace `urn:google:drive` for native extensions (for example, `<G:description xmlns:G="urn:google:drive">Notes</G:description>`). These change real Drive metadata, not a parallel WebDAV-only value:
+
+| Property | Write value / behavior |
+| --- | --- |
+| `DAV:getlastmodified` | HTTP-date, for example `Mon, 16 Nov 2026 08:00:00 GMT`; updates `modifiedTime` |
+| `G:modifiedTime` | RFC 3339 timestamp; same Drive field as `DAV:getlastmodified` |
+| `G:description` | Text description |
+| `G:starred` | `true` / `false` (also `1` / `0`) |
+| `G:folderColorRgb` | `#rrggbb` on folders; Drive maps it to its nearest supported palette color |
+
+Native live properties cannot be removed while present (409): set an empty description or `starred=false` to clear those values. Removing an already absent native property is a no-op.
+
+`DAV:creationdate` / `G:createdTime` are read-only: Drive rejects changing the creation timestamp of an existing file. Content type, size, ETag, resource type, lock capabilities and quota properties are also protected; metadata-only MIME updates do not change an existing binary file's MIME type. Use file-content operations for content, and MOVE for renaming. Unsupported native extension names are rejected, rather than silently saved as an unrelated custom value.
+
+Property semantics follow [RFC 4918](https://www.rfc-editor.org/rfc/rfc4918.html); backend limits follow [Drive custom properties](https://developers.google.com/workspace/drive/api/guides/properties). These extensions expose selected file metadata, not every Google Drive API operation.
+
+### Storage and failure semantics
+
+- Dead properties are persisted on the resource in OAuth-client-private Drive `appProperties`, using reserved keys `wdp00` through `wdp29`. Keep the same OAuth application to read them. Do not edit those keys directly. Unrelated appProperties are preserved; corrupt stored WebDAV data causes an error rather than being overwritten.
+- Drive permits 30 private properties per application per file, each with at most 124 UTF-8 bytes for key plus value. Each five-byte chunk key leaves 119 payload bytes: at most 3,570 bytes **including the versioned JSON/XML representation**, less if other private properties use slots. Drive's aggregate 100-property limit can further constrain storage. This is bounded metadata storage, not unlimited arbitrary XML; a capacity failure returns 507 without applying the other requested updates. No sidecar files or KV property database are created.
+- All operations are parsed and validated before a single `files.update` PATCH containing the final native fields and dead-property changes. Invalid values receive 409, protected writes receive 403 with `cannot-modify-protected-property`, and the other properties in a rejected batch receive 424. Missing resources receive 404. A 207 is a container: inspect each property's status, not just the outer response.
+- The one Drive PATCH is the atomic boundary. Real-API contract tests verified that invalid multi-field requests do not partially modify valid fields; this is not a cross-request transaction or lock. Concurrent read-modify-write requests can still overwrite one another. A lost response returns 502 with an uncertain-outcome explanation, without retry or rollback; read the properties before deciding whether to retry.
+- Property writes invalidate metadata and parent listings, waiting for this instance's already-started KV write and eviction before returning. A KV failure is logged without changing the confirmed Drive outcome. This cannot synchronously invalidate other instances or guarantee global immediate freshness.
+- Changing dead properties can advance Drive's modification time. When a request also explicitly sets `modifiedTime`, that timestamp is sent in the same PATCH. Folder colors and timestamp precision can be normalized by Drive; read-back uses the returned Drive representation.
+
 ## File downloads
 
 - Ordinary file GET uses Drive's original-content endpoint (`files.get?alt=media`), including for images with a `thumbnailLink`. It does not substitute a preview or fetch the thumbnail CDN. The former image `param` query parameter no longer selects a preview size.

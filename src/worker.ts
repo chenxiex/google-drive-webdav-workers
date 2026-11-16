@@ -1,3 +1,6 @@
+import { DOMParser } from '@xmldom/xmldom';
+import { DavProperty, key as propertyKey, parsePatch, parseFind, readDeadProperties, writeDeadProperties, propertyNameXml } from './dav-properties';
+
 var config: AppConfig = {
     client_id: '', // Configure your own Google OAuth client through bindings
     client_secret: '', // No shared OAuth credentials are bundled
@@ -121,6 +124,10 @@ function basicAuthentication(request: Request): { user: string; pass: string } |
     return { user: decoded.substring(0, index), pass: decoded.substring(index + 1) };
 }
 
+// Order a requested synchronous eviction after this instance's already-started
+// writes. This is not a distributed cache lock or a freshness bypass.
+const pendingKvWrites = new Map<string, Promise<void>>();
+
 class KVCache {
     env: Env;
     ctx: ExecutionContext;
@@ -159,7 +166,11 @@ class KVCache {
             const ttl = customTtl || 300000;
             config.cache[ns]![k] = { data: v, expire: Date.now() + ttl };
             if (this.env && this.env.KV && this.ctx) {
-                const kvPromise = this.env.KV.put(ns + '.' + k, JSON.stringify(v), { expirationTtl: Math.max(60, Math.floor(ttl / 1000)) });
+                const key = ns + '.' + k;
+                const kvPromise = this.env.KV.put(key, JSON.stringify(v), { expirationTtl: Math.max(60, Math.floor(ttl / 1000)) });
+                pendingKvWrites.set(key, kvPromise);
+                const forget = () => { if (pendingKvWrites.get(key) === kvPromise) pendingKvWrites.delete(key); };
+                void kvPromise.then(forget, forget);
                 if (ns === 'tus_session') {
                     await kvPromise;
                 } else {
@@ -169,14 +180,17 @@ class KVCache {
         }
     }
 
-    async delete(k: string, ns: string): Promise<void> {
+    async delete(k: string, ns: string, wait = false): Promise<void> {
         if (ns === 'meta' && !k.endsWith('/')) k += '/';
         if (ns === 'meta' && k === '/') return;
         if (config.cache[ns] && config.cache[ns]![k]) {
             delete config.cache[ns]![k];
         }
         if (this.env && this.env.KV && this.ctx) {
-            this.ctx.waitUntil(this.env.KV.delete(ns + '.' + k));
+            if (wait) await pendingKvWrites.get(ns + '.' + k)?.catch(() => {});
+            const deletion = this.env.KV.delete(ns + '.' + k);
+            if (wait) await deletion;
+            else this.ctx.waitUntil(deletion);
         }
     }
 
@@ -184,11 +198,11 @@ class KVCache {
     // mapping, and the parent's child listing. The last one is what PROPFIND
     // and GET read, so skipping it on an overwrite left stale entries in the
     // directory listing for up to five minutes.
-    async invalidateFileAndParent(fpath: string, parentId?: string | null): Promise<void> {
+    async invalidateFileAndParent(fpath: string, parentId?: string | null, wait = false): Promise<void> {
         const { parent } = splitPath(fpath);
-        await this.delete(fpath, 'meta');
-        if (parent !== fpath) await this.delete(parent, 'meta');
-        if (parentId) await this.delete(parentId, 'objects');
+        await this.delete(fpath, 'meta', wait);
+        if (parent !== fpath) await this.delete(parent, 'meta', wait);
+        if (parentId) await this.delete(parentId, 'objects', wait);
     }
 
     async invalidateTransferPath(path: string, parentId?: string, tree = false): Promise<void> {
@@ -233,6 +247,121 @@ class TransferError extends StatusError {
 // persisted to KV: a bearer token does not belong on durable shared storage.
 let tokenCache: { access_token: string; expires: number } | null = null;
 
+async function readPropertyBody(request: Request): Promise<string> {
+    if (!request.body) return '';
+    const reader = request.body.getReader();
+    const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: false });
+    let size = 0, text = '';
+    try {
+        for (;;) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            size += value.byteLength;
+            if (size > 65536) {
+                await reader.cancel();
+                throw new StatusError('Property XML exceeds 64 KiB', 413);
+            }
+            text += decoder.decode(value, { stream: true });
+        }
+        return text + decoder.decode();
+    } catch (error) {
+        if (error instanceof TypeError) throw new StatusError('Property XML must be valid UTF-8', 400);
+        throw error;
+    } finally { reader.releaseLock(); }
+}
+
+const DAV_NAMESPACE = 'DAV:';
+const DRIVE_NAMESPACE = 'urn:google:drive';
+const PROPERTY_FIELDS = 'id,name,mimeType,size,modifiedTime,createdTime,description,starred,folderColorRgb,appProperties,parents';
+const statusLabels: Record<number, string> = { 200: 'OK', 400: 'Bad Request', 403: 'Forbidden', 404: 'Not Found', 409: 'Conflict', 424: 'Failed Dependency', 429: 'Too Many Requests', 500: 'Internal Server Error', 502: 'Bad Gateway', 503: 'Service Unavailable', 507: 'Insufficient Storage' };
+function propstat(xml: string, status: number, protectedProperty = false): string {
+    return `<D:propstat><D:prop>${xml}</D:prop><D:status>HTTP/1.1 ${status} ${statusLabels[status] || 'Error'}</D:status>`
+        + (protectedProperty ? '<D:error><D:cannot-modify-protected-property/></D:error>' : '') + '</D:propstat>';
+}
+function propertyResponse(path: string, folder: boolean, content: string): string {
+    if (folder && !path.endsWith('/')) path += '/';
+    return `<D:response><D:href>${escapeXml(encodePath(path))}</D:href>${content}</D:response>`;
+}
+function multiStatus(content: string): Response {
+    return new Response(`<?xml version="1.0" encoding="UTF-8"?><D:multistatus xmlns:D="DAV:">${content}</D:multistatus>`, {
+        status: 207, headers: { 'Content-Type': 'application/xml; charset=utf-8', 'Cache-Control': 'no-store' }
+    });
+}
+function isNativeProperty(property: DavProperty): boolean {
+    return property.namespace === DAV_NAMESPACE && property.name === 'getlastmodified'
+        || property.namespace === DRIVE_NAMESPACE && ['description', 'starred', 'modifiedTime', 'folderColorRgb'].includes(property.name);
+}
+function isProtectedProperty(property: DavProperty): boolean {
+    return property.namespace === DAV_NAMESPACE && ['creationdate', 'getcontentlength', 'getcontenttype', 'getetag', 'resourcetype', 'supportedlock', 'lockdiscovery', 'quota-used-bytes', 'quota-available-bytes'].includes(property.name)
+        || property.namespace === DRIVE_NAMESPACE && !['description', 'starred', 'modifiedTime', 'folderColorRgb'].includes(property.name);
+}
+function applyNativeProperty(patch: Record<string, unknown>, property: DavProperty, action: 'set' | 'remove', metadata: any): void {
+    const field = property.namespace === DAV_NAMESPACE ? 'modifiedTime' : property.name;
+    if (action === 'remove') {
+        if (metadata[field] === undefined && patch[field] === undefined) return;
+        // Clearing a description or un-starring is a SET, not removal of the
+        // live property itself. Do not report a false successful REMOVE.
+        throw new StatusError('This Drive live property cannot be removed; set an appropriate value instead', 409);
+    }
+    const element = new DOMParser().parseFromString(property.xml, 'application/xml').documentElement!;
+    for (let node = element.firstChild; node; node = node.nextSibling) {
+        if (node.nodeType === 1) throw new StatusError('This property requires a text value', 409);
+    }
+    const value = element.textContent || '';
+    if (field === 'description') patch.description = value;
+    else if (field === 'starred') {
+        if (!['true', 'false', '1', '0'].includes(value.trim())) throw new StatusError('Expected a boolean', 409);
+        patch.starred = ['true', '1'].includes(value.trim());
+    } else if (field === 'folderColorRgb') {
+        if (!/^#[0-9a-fA-F]{6}$/.test(value)) throw new StatusError('Expected an RGB color', 409);
+        patch.folderColorRgb = value;
+    } else {
+        // DAV uses an HTTP-date; the native extension uses RFC 3339.
+        const validSyntax = property.namespace === DAV_NAMESPACE
+            ? /^(Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT$/.test(value)
+            : /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value);
+        const date = new Date(value);
+        if (!validSyntax || !Number.isFinite(date.getTime())
+            || (property.namespace === DAV_NAMESPACE ? date.toUTCString() !== value
+                : new Date(value.slice(0, 10) + 'T00:00:00Z').toISOString().slice(0, 10) !== value.slice(0, 10))) {
+            throw new StatusError('Invalid timestamp', 409);
+        }
+        patch.modifiedTime = date.toISOString();
+    }
+}
+function davProperties(file: any, quota?: { used: number | string; available: number | string }): Map<string, DavProperty> {
+    const result = new Map<string, DavProperty>();
+    const add = (name: string, value: unknown, namespace = DAV_NAMESPACE, raw = false) => {
+        const prefix = namespace === DAV_NAMESPACE ? 'D' : 'G';
+        const property = { namespace, name, xml: `<${prefix}:${name}${namespace === DAV_NAMESPACE ? '' : ` xmlns:${prefix}="${namespace}"`}>${raw ? value : escapeXml(value)}</${prefix}:${name}>` };
+        result.set(propertyKey(property), property);
+    };
+    const folder = file.mimeType === FOLDER_MIME;
+    add('resourcetype', folder ? '<D:collection/>' : '', DAV_NAMESPACE, true);
+    add('displayname', file.name || '');
+    if (!folder) {
+        add('getcontentlength', Number(file.size) || 0);
+        add('getcontenttype', file.mimeType || 'application/octet-stream');
+    }
+    add('getetag', '"' + (file.id || 'root') + '-' + (file.modifiedTime || '') + '"');
+    if (file.modifiedTime) add('getlastmodified', new Date(file.modifiedTime).toUTCString());
+    if (file.createdTime) add('creationdate', file.createdTime);
+    // Keep the existing empty lock capability element (Class 1, no locks).
+    result.set(propertyKey({ namespace: DAV_NAMESPACE, name: 'supportedlock' }), { namespace: DAV_NAMESPACE, name: 'supportedlock', xml: '<D:supportedlock/>' });
+    if (quota) {
+        add('quota-used-bytes', Number(quota.used) || 0);
+        add('quota-available-bytes', Number(quota.available) || 0);
+    }
+    for (const name of ['description', 'starred', 'modifiedTime', 'createdTime', 'folderColorRgb']) {
+        if (file[name] !== undefined) add(name, file[name], DRIVE_NAMESPACE);
+    }
+    for (const [key, property] of readDeadProperties(file.appProperties)) {
+        if (property.removed) result.delete(key);
+        else result.set(key, property);
+    }
+    return result;
+}
+
 class GDrive {
     cache: KVCache;
     static fetchingTokenPromise: Promise<string> | null = null;
@@ -243,45 +372,47 @@ class GDrive {
 
     async OPTIONS(request: Request): Promise<Response> {
         // Locking (Class 2) is not implemented.
-        let allowed_methods = ['GET', 'HEAD', 'OPTIONS', 'PUT', 'PROPFIND', 'MKCOL', 'DELETE', 'MOVE', 'COPY'].join(',');
+        let allowed_methods = ['GET', 'HEAD', 'OPTIONS', 'PUT', 'PROPFIND', 'PROPPATCH', 'MKCOL', 'DELETE', 'MOVE', 'COPY'].join(',');
         return new Response(null, { status: 200, headers: { 'Allow': allowed_methods, 'DAV': '1', 'MS-Author-Via': 'DAV', 'Accept-Ranges': 'bytes' } });
     }
 
     async PROPFIND(request: Request): Promise<Response> {
-        let { rpath, fpath } = getUrl(request.url);
-        const metadata = await this.getMetadata(fpath);
+        const selection = parseFind(await readPropertyBody(request));
+        const { rpath, fpath } = getUrl(request.url);
+        let metadata = await this.getMetadata(fpath);
         if (!metadata) return new Response(null, { status: 404 });
-
-        // A missing Depth header means "infinity" (RFC 4918). Serving the
-        // immediate children instead keeps a single request useful for clients
-        // that never send the header.
+        // The mapping root is otherwise synthetic; properties belong to the
+        // actual Drive folder, including a configured ROOT_ID.
+        if (fpath === '/') metadata = await this.getPropertyMetadata(metadata.id);
         const depth = request.headers.get('Depth');
-        const isFolder = metadata.mimeType === FOLDER_MIME;
-
-        const self: Partial<DriveFile> = {
-            name: '',
-            dir: isFolder,
-            lastmodified: metadata.modifiedTime ? new Date(metadata.modifiedTime).toUTCString() : new Date().toUTCString(),
-            size: metadata.size,
-            type: metadata.mimeType,
-            etag: (metadata.id || 'root') + '-' + (metadata.modifiedTime || ''),
-            quota: isFolder && depth === '0' && fpath === '/' ? await this.getQuota() : null
-        };
-
-        let entries: Partial<DriveFile>[] = [self];
-        if (isFolder && depth !== '0') {
-            const objects = await this.getObjects(metadata.id);
-            entries = entries.concat(objects.map(object => ({
-                name: object.name,
-                dir: object.mimeType === FOLDER_MIME,
-                lastmodified: new Date(object.modifiedTime).toUTCString(),
-                size: object.size ? object.size : 0,
-                type: object.mimeType,
-                etag: object.id + '-' + (object.modifiedTime || '')
-            })));
+        const files = [{ ...metadata, href: rpath }];
+        if (metadata.mimeType === FOLDER_MIME && depth !== '0') {
+            files.push(...(await this.getObjects(metadata.id)).map(file => ({ ...file, href: pathJoin(rpath, file.name) })));
         }
+        const quota = metadata.mimeType === FOLDER_MIME && depth === '0' && fpath === '/' ? await this.getQuota() : undefined;
+        const responses = files.map((file, index) => {
+            const properties = davProperties(file, index === 0 ? quota : undefined);
+            const requested = selection.mode === 'prop' ? selection.properties
+                : [...properties.values(), ...selection.properties.filter(prop => !properties.has(propertyKey(prop)))];
+            const found: string[] = [], missing: string[] = [];
+            for (const prop of new Map(requested.map(prop => [propertyKey(prop), prop])).values()) {
+                const value = properties.get(propertyKey(prop));
+                if (value) found.push(selection.mode === 'propname' ? propertyNameXml(value) : value.xml);
+                else missing.push(propertyNameXml(prop));
+            }
+            return propertyResponse(file.href, file.mimeType === FOLDER_MIME,
+                (found.length || !missing.length ? propstat(found.join(''), 200) : '') + (missing.length ? propstat(missing.join(''), 404) : ''));
+        });
+        return multiStatus(responses.join(''));
+    }
 
-        return new Response(arrayToXml(rpath, entries), { status: 207, headers: { 'Content-Type': 'application/xml; charset=utf-8' } });
+    async getPropertyMetadata(id: string): Promise<any> {
+        const response = await fetch('https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(id)
+            + '?supportsAllDrives=true&fields=' + encodeURIComponent(PROPERTY_FIELDS), {
+            headers: { Authorization: 'Bearer ' + (await this.getAccessToken()) }
+        });
+        if (!response.ok) throw new StatusError('Drive property read failed: ' + await response.text(), response.status);
+        return response.json();
     }
 
     async MKCOL(request: Request): Promise<Response> {
@@ -722,7 +853,7 @@ class GDrive {
         const stageName = copy && target ? '.webdav-copy-' + crypto.randomUUID() : undefined;
         try {
             if (copy) {
-                const staged = await this.transferWrite(source.id, { name: stageName || name, parents: [parentId] }, headers, true);
+                const staged = await this.transferWrite(source.id, { name: stageName || name, parents: [parentId], ...(source.appProperties ? { appProperties: source.appProperties } : {}) }, headers, true);
                 stageId = staged.id;
             }
             if (target) {
@@ -864,18 +995,78 @@ class GDrive {
         return new Response('WebDAV locking is not supported', { status: 501 });
     }
     async UNLOCK(): Promise<Response> { return this.LOCK(); }
-    // Property updates are not persisted. Reply with a well-formed multistatus
-    // (207) echoing success instead of a bare 200, which is what DAV clients
-    // expect for PROPPATCH regardless of the DAV class advertised.
     async PROPPATCH(request: Request): Promise<Response> {
-        let { rpath } = getUrl(request.url);
-        return new Response(
-            `<?xml version="1.0" encoding="UTF-8"?><D:multistatus xmlns:D="DAV:">` +
-            `<D:response><D:href>${escapeXml(encodePath(rpath))}</D:href>` +
-            `<D:propstat><D:prop/><D:status>HTTP/1.1 200 OK</D:status></D:propstat>` +
-            `</D:response></D:multistatus>`,
-            { status: 207, headers: { 'Content-Type': 'application/xml; charset=utf-8' } }
-        );
+        const operations = parsePatch(await readPropertyBody(request));
+        const { rpath, fpath } = getUrl(request.url);
+        const resolved = await this.getMetadata(fpath);
+        if (!resolved) return new Response(null, { status: 404 });
+        // Read the current property document, not the path cache: this is the
+        // input to the single PATCH, not a read-after-write verification loop.
+        const metadata = await this.getPropertyMetadata(resolved.id);
+        const dead = readDeadProperties(metadata.appProperties);
+        const patch: Record<string, unknown> = {};
+        const errors = new Map<string, { status: number; protected?: boolean }>();
+        let deadChanged = false;
+        for (const operation of operations) {
+            const { property, action } = operation;
+            const key = propertyKey(property);
+            try {
+                if (isProtectedProperty(property)) {
+                    errors.set(key, { status: 403, protected: true });
+                } else if (isNativeProperty(property)) {
+                    applyNativeProperty(patch, property, action, metadata);
+                } else {
+                    if (action === 'set' && property.namespace === DAV_NAMESPACE && property.name === 'displayname') {
+                        const element = new DOMParser().parseFromString(property.xml, 'application/xml').documentElement!;
+                        if (Array.from(element.childNodes).some(node => node.nodeType === 1)) throw new StatusError('Display name requires text', 409);
+                    }
+                    if (action === 'remove') {
+                        if (property.namespace === DAV_NAMESPACE && property.name === 'displayname') dead.set(key, { ...property, removed: true });
+                        else dead.delete(key);
+                    } else dead.set(key, property);
+                    deadChanged = true;
+                }
+            } catch (error) { errors.set(key, { status: errorStatus(error) }); }
+        }
+        if (!errors.size && deadChanged) {
+            try { patch.appProperties = writeDeadProperties(dead, metadata.appProperties || {}); }
+            catch (error) {
+                // Storage is shared by all dead properties in this request.
+                for (const { property } of operations) if (!isNativeProperty(property)) errors.set(propertyKey(property), { status: errorStatus(error) });
+            }
+        }
+        const result = (fallback: number) => {
+            const unique = new Map(operations.map(({ property }) => [propertyKey(property), property]));
+            return multiStatus(propertyResponse(rpath, metadata.mimeType === FOLDER_MIME,
+                [...unique].map(([key, property]) => {
+                    const error = errors.get(key);
+                    return propstat(propertyNameXml(property), error?.status || fallback, error?.protected);
+                }).join('')));
+        };
+        if (errors.size) return result(424);
+        try {
+            // One metadata PATCH is the atomic boundary. No split native/dead
+            // writes, post-write checks, retries, or speculative rollback.
+            const response = await fetch('https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(metadata.id)
+                + '?supportsAllDrives=true&fields=id', {
+                method: 'PATCH', headers: { Authorization: 'Bearer ' + (await this.getAccessToken()), 'Content-Type': 'application/json' },
+                body: JSON.stringify(patch)
+            });
+            if (!response.ok) {
+                const error: any = await response.json().catch(() => ({}));
+                const reason = error.error?.errors?.[0]?.reason;
+                const status = ['propertyLengthLimitExceeded', 'propertyCountLimitExceeded'].includes(reason) ? 507 : response.status;
+                return result(status);
+            }
+            return result(200);
+        } catch {
+            // A lost response does not prove the PATCH failed. Do not claim
+            // success or undo a potentially completed operation.
+            return new Response('Drive property update outcome uncertain; read properties before retrying', { status: 502 });
+        } finally {
+            await this.cache.invalidateFileAndParent(fpath, metadata.parents?.[0], true)
+                .catch(error => console.error('PROPPATCH cache invalidation failed:', error));
+        }
     }
 
     // Create any missing folder along the way to `path`, so a client can PUT
@@ -929,7 +1120,7 @@ class GDrive {
                     includeItemsFromAllDrives: true,
                     supportsAllDrives: true,
                     q: `'${metadata.id}' in parents and name = '${escapeQuery(name)}' and trashed = false`,
-                    fields: `files(id, name, mimeType, size, modifiedTime, description, iconLink, thumbnailLink, imageMediaMetadata, parents)`,
+                    fields: `files(${PROPERTY_FIELDS},iconLink,thumbnailLink,imageMediaMetadata)`,
                 });
                 if (result.files && result.files.length > 0) {
                     await this.cache.put(fullpath, result.files[0], 'meta');
@@ -953,7 +1144,7 @@ class GDrive {
             includeItemsFromAllDrives: true,
             supportsAllDrives: true,
             q: `'${id}' in parents and trashed = false AND name != '.password'`,
-            fields: `nextPageToken, files(id, name, mimeType, size, modifiedTime, description, iconLink, thumbnailLink, imageMediaMetadata)`,
+            fields: `nextPageToken, files(${PROPERTY_FIELDS},iconLink,thumbnailLink,imageMediaMetadata)`,
             orderBy: 'folder, name'
         };
         do {
@@ -1032,46 +1223,6 @@ class GDrive {
         })();
         return await GDrive.fetchingTokenPromise;
     }
-}
-
-function arrayToXml(rpath: string, files: Partial<DriveFile>[]): string {
-    const entries = files.map(file => {
-        // The self entry (no name) echoes the requested path.
-        let href = file.name ? pathJoin(rpath, file.name) : rpath;
-        if (file.dir && !href.endsWith('/')) href += '/';
-        const displayname = file.name || rpath.split('/').filter(Boolean).pop() || '';
-        const etag = String(file.etag || '0').replace(/[<>&"]/g, '');
-        // Numeric fields are serialised as numbers, never as whatever Drive
-        // happened to hand back; an unbounded quota is reported as NaN.
-        const size = Number(file.size) || 0;
-        const quota = file.quota
-            ? `<D:quota-used-bytes>${Number(file.quota.used) || 0}</D:quota-used-bytes>` +
-              `<D:quota-available-bytes>${Number(file.quota.available) || 0}</D:quota-available-bytes>`
-            : '';
-
-        return (
-            '<D:response>' +
-            `<D:href>${escapeXml(encodePath(href))}</D:href>` +
-            '<D:propstat><D:prop>' +
-            (file.dir
-                ? '<D:resourcetype><D:collection/></D:resourcetype>'
-                : '<D:resourcetype></D:resourcetype>') +
-            `<D:displayname>${escapeXml(displayname)}</D:displayname>` +
-            // Folders deliberately omit getcontentlength: an empty size on a
-            // collection upsets several clients.
-            (file.dir
-                ? ''
-                : `<D:getcontentlength>${size}</D:getcontentlength>` +
-                  `<D:getcontenttype>${escapeXml(file.type || 'application/octet-stream')}</D:getcontenttype>`) +
-            `<D:getetag>"${etag}"</D:getetag>` +
-            `<D:getlastmodified>${file.lastmodified || new Date().toUTCString()}</D:getlastmodified>` +
-            '<D:supportedlock/>' + quota +
-            '</D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat>' +
-            '</D:response>'
-        );
-    });
-
-    return `<?xml version="1.0" encoding="UTF-8"?><D:multistatus xmlns:D="DAV:">${entries.join('')}</D:multistatus>`;
 }
 
 function arrayToHtml(rpath: string, files: Partial<DriveFile>[]): string {

@@ -12,6 +12,11 @@ export interface DriveFile {
 	size?: number | string;
 	parents: string[];
 	modifiedTime?: string;
+	createdTime?: string;
+	description?: string;
+	starred?: boolean;
+	folderColorRgb?: string;
+	appProperties?: Record<string, string>;
 	trashed?: boolean;
 	explicitlyTrashed?: boolean;
 	content?: Uint8Array;
@@ -20,7 +25,7 @@ export interface DriveFile {
 
 type FetchInput = Parameters<typeof fetch>[0];
 type FetchInit = Parameters<typeof fetch>[1];
-type Metadata = { name?: string; mimeType?: string; parents?: string[]; trashed?: boolean };
+type Metadata = { name?: string; mimeType?: string; parents?: string[]; trashed?: boolean; createdTime?: string; modifiedTime?: string; description?: string | null; starred?: boolean; folderColorRgb?: string | null; appProperties?: Record<string, string | null> };
 type Session = { metadata: Metadata; id?: string; mimeType: string; total?: number; bytes: Uint8Array; fields: string | null; completed?: DriveFile; failure?: string };
 const API = 'https://www.googleapis.com';
 const decoder = new TextDecoder();
@@ -43,8 +48,12 @@ function parseMetadata(bytes: Uint8Array): Metadata | Response {
 	try {
 		const value = JSON.parse(decoder.decode(bytes));
 		if (!value || typeof value !== 'object' || Array.isArray(value)) return invalid('body');
-		for (const key of Object.keys(value)) if (!['name', 'mimeType', 'parents', 'trashed'].includes(key)) unsupported(`metadata field ${key}`);
+		for (const key of Object.keys(value)) if (!['name', 'mimeType', 'parents', 'trashed', 'createdTime', 'modifiedTime', 'description', 'starred', 'folderColorRgb', 'appProperties'].includes(key)) unsupported(`metadata field ${key}`);
 		for (const key of ['name', 'mimeType']) if (value[key] !== undefined && typeof value[key] !== 'string') return invalid(key);
+		for (const key of ['description', 'folderColorRgb']) if (value[key] != null && typeof value[key] !== 'string') return invalid(key);
+		if (value.starred !== undefined && typeof value.starred !== 'boolean') return invalid('starred');
+		for (const key of ['createdTime', 'modifiedTime']) if (value[key] !== undefined && (typeof value[key] !== 'string' || !Number.isFinite(Date.parse(value[key])))) return invalid(key);
+		if (value.appProperties !== undefined && (!value.appProperties || Array.isArray(value.appProperties) || typeof value.appProperties !== 'object' || Object.values(value.appProperties).some(v => v !== null && typeof v !== 'string'))) return invalid('appProperties');
 		if (value.trashed !== undefined && typeof value.trashed !== 'boolean') return invalid('trashed');
 		if (value.parents !== undefined && (!Array.isArray(value.parents) || value.parents.some((p: unknown) => typeof p !== 'string'))) return invalid('parents');
 		return value;
@@ -56,7 +65,7 @@ function parseMetadata(bytes: Uint8Array): Metadata | Response {
 
 // Drive partial-response selectors used by this worker. Unknown supported-API
 // features fail loudly instead of pretending that the real API accepted them.
-const fileFields = new Set(['kind', 'id', 'name', 'mimeType', 'size', 'modifiedTime', 'parents', 'trashed', 'explicitlyTrashed', 'description', 'iconLink', 'thumbnailLink', 'imageMediaMetadata']);
+const fileFields = new Set(['kind', 'id', 'name', 'mimeType', 'size', 'modifiedTime', 'createdTime', 'starred', 'folderColorRgb', 'appProperties', 'parents', 'trashed', 'explicitlyTrashed', 'description', 'iconLink', 'thumbnailLink', 'imageMediaMetadata']);
 function selections(fields: string): string[] {
 	let depth = 0;
 	let start = 0;
@@ -95,6 +104,10 @@ function project(data: Record<string, unknown>, fields: string, allowed: Set<str
 function representation(file: DriveFile): Record<string, unknown> {
 	return {
 		kind: 'drive#file', id: file.id, name: file.name, mimeType: file.mimeType,
+		createdTime: file.createdTime, starred: file.starred ?? false,
+		...(file.description !== undefined ? { description: file.description } : {}),
+		...(file.folderColorRgb !== undefined ? { folderColorRgb: file.folderColorRgb } : {}),
+		...(file.appProperties && Object.keys(file.appProperties).length ? { appProperties: { ...file.appProperties } } : {}),
 		...(file.thumbnailLink ? { thumbnailLink: file.thumbnailLink } : {}),
 		parents: [...file.parents], modifiedTime: file.modifiedTime, trashed: file.trashed ?? false, explicitlyTrashed: file.explicitlyTrashed ?? false,
 		...(file.mimeType !== FOLDER ? { size: String(file.size ?? 0) } : {}),
@@ -134,6 +147,7 @@ function multipart(bytes: Uint8Array, contentType: string): { metadata: Metadata
 /** A verified subset of Drive v3, not a general Google API emulator. See mock-drive.md. */
 export class MockDrive {
 	files: DriveFile[] = [];
+	private root: DriveFile = { id: 'root', name: 'My Drive', mimeType: FOLDER, parents: [], createdTime: '2024-01-01T00:00:00.000Z', modifiedTime: '2024-01-01T00:00:00.000Z' };
 	private sessions = new Map<string, Session>();
 	private pages = new Map<string, { offset: number; query: string; order: string }>();
 	constructor(private oauth = { clientId: 'test-client-id', clientSecret: 'test-client-secret', refreshToken: 'test-refresh-token-history' }) {}
@@ -141,6 +155,9 @@ export class MockDrive {
 	add(file: DriveFile): DriveFile {
 		file.parents = [...file.parents];
 		file.modifiedTime ??= '2024-01-01T00:00:00.000Z';
+		file.createdTime ??= file.modifiedTime;
+		if (file.mimeType === FOLDER) file.folderColorRgb ??= '#8f8f8f';
+		if (file.appProperties) file.appProperties = { ...file.appProperties };
 		file.explicitlyTrashed ??= file.trashed ?? false;
 		this.files.push(file);
 		this.refreshTrashState();
@@ -151,7 +168,7 @@ export class MockDrive {
 		for (const parent of removed) for (const child of this.children(parent)) removed.add(child.id);
 		this.files = this.files.filter(f => !removed.has(f.id));
 	}
-	findById(id: string): DriveFile | undefined { return this.files.find(f => f.id === id); }
+	findById(id: string): DriveFile | undefined { return this.files.find(f => f.id === id) ?? (id === 'root' ? this.root : undefined); }
 	children(parentId: string): DriveFile[] { return this.files.filter(f => f.parents.includes(parentId)); }
 
 	// Model settled My Drive state. Real descendant propagation is asynchronous;
@@ -177,16 +194,42 @@ export class MockDrive {
 			if (found.mimeType !== FOLDER) return apiError(403, 'parentNotAFolder', 'The specified parent is not a folder.');
 		}
 	}
+	private properties(existing: Record<string, string> = {}, patch: Record<string, string | null> = {}): Record<string, string> | Response {
+		const next = { ...existing };
+		for (const [key, value] of Object.entries(patch)) {
+			if (value === null) delete next[key];
+			else {
+				if (new TextEncoder().encode(key + value).length > 124) return apiError(403, 'propertyLengthLimitExceeded', 'Properties and app properties are limited to 124 bytes in UTF-8 encoding, counting both the key and the value.');
+				next[key] = value;
+			}
+		}
+		if (Object.keys(next).length > 30) return apiError(403, 'propertyCountLimitExceeded', "The file's property and app property limit has been reached. Files can have up to 30 properties and 30 app properties per app, with a maximum of 100 in total.");
+		return next;
+	}
 	private create(meta: Metadata, content: Uint8Array = new Uint8Array(), mimeType?: string): DriveFile | Response {
+		if (meta.createdTime !== undefined || meta.modifiedTime !== undefined || meta.folderColorRgb !== undefined) unsupported('unverified timestamps or folder color on create');
 		if (meta.mimeType?.startsWith('application/vnd.google-apps.') && meta.mimeType !== FOLDER) unsupported('Google Workspace document conversion');
 		const parents = meta.parents?.length ? meta.parents : ['root'];
 		const error = this.validateParents(parents);
 		if (error) return error;
-		return this.add({ id: crypto.randomUUID(), name: meta.name || 'Untitled', mimeType: meta.mimeType || mimeType || 'application/octet-stream',
+		const appProperties = this.properties({}, meta.appProperties);
+		if (appProperties instanceof Response) return appProperties;
+		return this.add({ appProperties, description: meta.description ?? undefined, starred: meta.starred, createdTime: meta.createdTime, id: crypto.randomUUID(), name: meta.name || 'Untitled', mimeType: meta.mimeType || mimeType || 'application/octet-stream',
 			parents, content: content.slice(), size: content.length, trashed: meta.trashed ?? false, modifiedTime: new Date().toISOString() });
 	}
 	private update(file: DriveFile, meta: Metadata, url: URL, content?: Uint8Array, mimeType?: string): Response | undefined {
+		if (file === this.root) unsupported('writing My Drive root metadata');
+		if (meta.createdTime !== undefined) return apiError(403, 'fieldNotWritable', 'The resource body includes fields which are not directly writable.');
+		const appProperties = this.properties(file.appProperties, meta.appProperties);
+		if (appProperties instanceof Response) return appProperties;
 		if (meta.parents !== undefined) return apiError(403, 'fieldNotWritable', 'The parents field is not directly writable in update requests. Use the addParents and removeParents parameters instead.');
+		let folderColorRgb = file.folderColorRgb;
+		if (meta.folderColorRgb != null && meta.folderColorRgb !== '') {
+			if (file.mimeType !== FOLDER) return apiError(403, 'colorNotSupportedForItem', 'Color is not supported on this item.');
+			const verified: Record<string, string> = { '#ff0000': '#f83a22', '#f83a22': '#f83a22', '#8f8f8f': '#8f8f8f', 'nope': '#8f8f8f' };
+			if (!(meta.folderColorRgb in verified)) unsupported('unverified folder color quantization');
+			folderColorRgb = verified[meta.folderColorRgb];
+		}
 		const added = (url.searchParams.get('addParents') ?? '').split(',').filter(Boolean);
 		const removed = (url.searchParams.get('removeParents') ?? '').split(',').filter(Boolean);
 		if ((added.length || removed.length) && (file.trashed || added.some(id => this.findById(id)?.trashed))) unsupported('moving from or into Trash');
@@ -202,6 +245,11 @@ export class MockDrive {
 		// removeParents is absent. Confirmed with live Drive on 2026-11-13.
 		const nextParents = added.length ? [...added] : file.parents.filter(p => !removed.includes(p));
 		if ((meta.name && meta.name !== file.name) || JSON.stringify(nextParents) !== JSON.stringify(file.parents)) file.modifiedTime = new Date().toISOString();
+		if ((meta.description != null && meta.description !== file.description) || Object.keys(meta.appProperties ?? {}).length) file.modifiedTime = new Date().toISOString();
+		if (meta.description != null) file.description = meta.description;
+		if (meta.starred !== undefined) file.starred = meta.starred;
+		file.appProperties = appProperties;
+		file.folderColorRgb = folderColorRgb;
 		file.parents = nextParents;
 		if (meta.name) file.name = meta.name;
 		if (meta.trashed !== undefined) file.explicitlyTrashed = meta.trashed;
@@ -214,6 +262,7 @@ export class MockDrive {
 				restored.add(child.id);
 			}
 		}
+		if (meta.modifiedTime !== undefined) file.modifiedTime = new Date(meta.modifiedTime).toISOString();
 		this.refreshTrashState();
 		// Metadata-only MIME changes are ignored by Drive for binary files.
 		if (content !== undefined) {
@@ -387,7 +436,7 @@ export class MockDrive {
 			const meta = parseMetadata(await bodyBytes(input, init)); if (meta instanceof Response) return meta;
 			if (!source) return notFound(copy[1]);
 			if (source.mimeType === FOLDER) return apiError(403, 'cannotCopyFile', 'This file cannot be copied by the user.');
-			const created = this.create({ name: source.name, parents: source.parents, ...meta, mimeType: source.mimeType }, source.content ?? new Uint8Array());
+			const created = this.create({ name: source.name, parents: source.parents, description: source.description, starred: source.starred, ...meta, mimeType: source.mimeType }, source.content ?? new Uint8Array());
 			if (created instanceof Response) return created;
 			created.size = source.size ?? 0;
 			return fileResponse(created, fields);
@@ -416,6 +465,10 @@ export class MockDrive {
 			return new Response(content.slice(start, end + 1), {
 				status: 206, headers: { 'Content-Type': file.mimeType, 'Content-Length': String(end - start + 1), 'Content-Range': `bytes ${start}-${end}/${content.length}` },
 			});
+		}
+		if (match && method === 'GET') {
+			const file = this.findById(match[1]);
+			return file ? fileResponse(file, fields) : notFound(match[1]);
 		}
 		if (match && ['PATCH', 'DELETE'].includes(method)) {
 			const file = this.findById(match[1]);

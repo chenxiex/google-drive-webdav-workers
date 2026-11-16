@@ -51,6 +51,20 @@ MockDrive now models full binary media GET and in-bounds closed byte ranges usin
 
 WebDAV regressions verify original image bytes/MIME/length even when thumbnail metadata is present, HEAD/GET length agreement, removal of the old preview `param` behavior, no CDN fetch, and forwarding of Range with the original partial response. These fixtures are synthetic; this is not a claim that a live thumbnail necessarily changes image bytes, nor a live JPEG/PNG end-to-end acceptance pass. Default tests stay entirely offline. After this extension, all 197 tests pass; both TypeScript checks and the Wrangler dry-run build pass. The three new WebDAV download regressions fail against the pre-fix worker and pass with the fix.
 
+## Property metadata contract extension: 2026-11-16
+
+Four isolated live audit runs created five binary/folder fixtures plus two copies (all moved to Trash afterward; no permanent deletion). A separate root metadata GET was read-only. These observations extend the mock for PROPPATCH/PROPFIND:
+
+- `files.get`, `files.list` and field masks expose `createdTime`, `modifiedTime`, `description`, `starred`, `folderColorRgb` and `appProperties`. Absent/empty app properties are omitted from the response. Mock root identifiers and dates remain synthetic.
+- One `files.update` can set `modifiedTime`, `description`, `starred` and `appProperties`. `createdTime` on an existing file returns 403 `fieldNotWritable`. Invalid timestamp strings return 400. Explicit modification timestamps are normalized to RFC 3339 milliseconds and override the automatic timestamp bump.
+- Private properties merge by key: omitted keys survive, `null` removes a key, and `""` is a present empty value. Nonempty app-property patches advance modification time, including setting a key to its current value; `{}` does not. Description changes advance modification time; `description: null` is ignored and an empty string clears it. Star and folder-color changes do not advance modification time.
+- A key plus value of 124 UTF-8 bytes succeeds; 125 bytes returns 403 `propertyLengthLimitExceeded`. Both ASCII and multibyte boundaries were tested. Thirty private properties succeed; adding a thirty-first returns 403 `propertyCountLimitExceeded`. The mock covers one application's private-property quota; the real API additionally limits total public/private properties across applications. It does not emulate other applications' hidden properties.
+- Mixed updates rejected for an invalid timestamp, a non-writable creation timestamp or excessive property length left the other supplied fields unchanged. Count rejection preserved the existing property set. This supports using a single PATCH rather than a chain of property writes; it is not evidence of cross-request/distributed transactions or certainty after a lost response.
+- `files.copy` inherits description and starred state, **not appProperties**. Passing appProperties explicitly in the copy request preserves them. This matters for WebDAV dead properties.
+- Folder colors are quantized by Drive: `#ff0000` became `#f83a22`; palette colors `#f83a22` and `#8f8f8f` stayed unchanged. A fresh folder uses `#8f8f8f`. An invalid string `nope` also became gray with HTTP 200; `""`/`null` retained the current color. Binary-file color writes return 403 `colorNotSupportedForItem`. The mock recognizes only these measured colors and fails loudly for unverified color quantization.
+
+Unverified property contracts intentionally remain unsupported: writes to My Drive root, native-document specifics, creation-time/mtime/color overrides during file creation, arbitrary folder-color quantization, nested app-property field masks, and other clients' property quotas. No live end-to-end WebDAV acceptance is implied; default tests remain offline.
+
 ## Verification
 
 From a fresh checkout, install Node.js 24 and pnpm 11, then run from the repository root:

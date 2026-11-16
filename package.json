@@ -16,5 +16,8 @@
     "typescript": "^6.0.3",
     "vitest": "~4.1.5",
     "wrangler": "^4.90.0"
+  },
+  "dependencies": {
+    "@xmldom/xmldom": "^0.9.12"
   }
 }

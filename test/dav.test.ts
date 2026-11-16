@@ -214,20 +214,6 @@ describe('PROPFIND', () => {
 	});
 });
 
-describe('PROPPATCH', () => {
-	it('answers with a 207 multistatus', async () => {
-		const res = await request('/dav/a.txt', {
-			method: 'PROPPATCH',
-			headers: { 'Content-Type': 'application/xml; charset=utf-8' },
-			body: '<?xml version="1.0"?><D:propertyupdate xmlns:D="DAV:"/>',
-		});
-		expect(res.status).toBe(207);
-		const body = await res.text();
-		expect(body).toContain('<D:href>/dav/a.txt</D:href>');
-		expect(body).toContain('<D:status>HTTP/1.1 200 OK</D:status>');
-	});
-});
-
 describe('MOVE / COPY overwrite semantics', () => {
 	it('COPY to a new destination returns 201', async () => {
 		const res = await request('/dav/a.txt', {

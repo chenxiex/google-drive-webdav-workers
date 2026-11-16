@@ -27,7 +27,7 @@ export default defineConfig({
                     test: { name: 'oauth-missing-' + mask, include: ['test/oauth-config.test.ts'] },
                 };
             }),
-			{ test: { name: 'mock-drive', include: ['test/mock-drive.test.ts'] } },
+			{ test: { name: 'mock-drive', include: ['test/mock-drive.test.ts', 'test/dav-properties.test.ts'] } },
 			{
 				plugins: [
 					cloudflareTest({
@@ -37,6 +37,10 @@ export default defineConfig({
 				],
 				test: { name: 'dav', include: ['test/dav.test.ts'] },
 			},
+			{
+                plugins: [cloudflareTest({ main: 'src/worker.ts', miniflare: { ...compat, bindings: davBindings } })],
+                test: { name: 'properties', include: ['test/properties.test.ts'] },
+            },
 			{
 				plugins: [
 					cloudflareTest({

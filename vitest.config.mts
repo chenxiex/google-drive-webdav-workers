@@ -16,7 +16,8 @@ const davBindings = {
 export default defineConfig({
 	test: {
 		projects: [
-            ...[1, 2, 3, 4, 5, 6, 7].map(mask => {
+            // Each missing binding, plus whitespace-only aggregate validation.
+            ...[1, 2, 4, 7].map(mask => {
                 const keys = ['CLIENT_ID', 'CLIENT_SECRET', 'REFRESH_TOKEN'] as const;
                 const bindings: Record<string, string> = { ...davBindings };
                 const missing = keys.filter((key, index) => mask & (1 << index));

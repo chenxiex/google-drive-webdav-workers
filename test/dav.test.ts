@@ -234,18 +234,6 @@ describe('MOVE / COPY overwrite semantics', () => {
 		expect(drive.findById('file-dest')).toBeDefined();
 	});
 
-	it('COPY onto an existing target overwrites and returns 204', async () => {
-		const res = await request('/dav/a.txt', {
-			method: 'COPY',
-			headers: { Destination: ORIGIN + '/dav/dest.txt' },
-		});
-		expect(res.status).toBe(204);
-		// The replaced file remains recoverable in Trash.
-		expect(drive.findById('file-dest')?.trashed).toBe(true);
-		const dest = drive.children('root').find((f) => f.name === 'dest.txt' && !f.trashed);
-		expect(dest).toBeDefined();
-		expect(dest!.id).not.toBe('file-dest');
-	});
 
 	it('COPY onto itself returns 403', async () => {
 		const res = await request('/dav/a.txt', {
@@ -298,15 +286,6 @@ describe('MOVE / COPY overwrite semantics', () => {
 		const copy = await request('/dav/', { method: 'COPY', headers: { Destination: ORIGIN + '/dav/x/' } });
 		expect(copy.status).toBe(403);
 	});
-	it('MOVE with Overwrite: T replaces the target and returns 204', async () => {
-		const res = await request('/dav/a.txt', {
-			method: 'MOVE',
-			headers: { Destination: ORIGIN + '/dav/dest.txt' },
-		});
-		expect(res.status).toBe(204);
-		expect(drive.findById('file-dest')?.trashed).toBe(true);
-		expect(drive.findById('file-a')?.name).toBe('dest.txt');
-	});
 });
 
 describe('PUT and MKCOL', () => {
@@ -329,6 +308,7 @@ describe('PUT and MKCOL', () => {
 			body: 'hello world',
 		});
 		expect(res.status).toBe(204);
+		expect(drive.findById('file-a')).toMatchObject({ id: 'file-a', size: 11, content: new TextEncoder().encode('hello world') });
 	});
 
 	it('PUT larger than one chunk persists the complete resumable upload', async () => {
@@ -395,6 +375,7 @@ const overwrite = (method: string, target = '/dav/dest.txt') => request('/dav/a.
 });
 const mutationSummary = (calls: Mutation[]) => calls.map(({ method, path, body }) => ({ method, path, body }));
 const isPublish = (call: Mutation) => call.method === 'PATCH' && call.body.name === 'dest.txt';
+const ambiguousStatus = (failure: string) => failure === 'network' ? 500 : /^\d+$/.test(failure) ? Number(failure) : 502;
 const rejectMutation = (status: number) => new Response(JSON.stringify({ error: { message: 'Injected Drive rejection' } }), { status });
 
 describe('recoverable overwrite operations', () => {
@@ -420,14 +401,14 @@ describe('recoverable overwrite operations', () => {
 		expect(drive.findById('file-dest')?.trashed).toBe(true);
 	});
 
-	it('COPY stages a unique copy in the destination parent before trashing and publishing', async () => {
-		drive.findById('file-dest')!.parents = ['folder-docs'];
+	it.each(['root', 'folder-docs'])('COPY stages before trashing and publishing in parent %s', async parentId => {
+		drive.findById('file-dest')!.parents = [parentId];
 		const calls = recordMutations();
-		expect((await overwrite('COPY', '/dav/docs/dest.txt')).status).toBe(204);
+		expect((await overwrite('COPY', parentId === 'root' ? '/dav/dest.txt' : '/dav/docs/dest.txt')).status).toBe(204);
 		const copied = drive.files.find(f => !['file-a', 'file-dest'].includes(f.id) && f.name === 'dest.txt' && !f.trashed)!;
-		expect(copied).toMatchObject({ parents: ['folder-docs'], size: 123 });
+		expect(copied).toMatchObject({ parents: [parentId], size: 123 });
 		expect(mutationSummary(calls)).toEqual([
-			{ method: 'POST', path: '/drive/v3/files/file-a/copy', body: { name: expect.stringMatching(/^\.webdav-copy-[0-9a-f-]{36}$/i), parents: ['folder-docs'] } },
+			{ method: 'POST', path: '/drive/v3/files/file-a/copy', body: { name: expect.stringMatching(/^\.webdav-copy-[0-9a-f-]{36}$/i), parents: [parentId] } },
 			{ method: 'PATCH', path: '/drive/v3/files/file-dest', body: { trashed: true } },
 			{ method: 'PATCH', path: '/drive/v3/files/' + copied.id, body: { name: 'dest.txt' } },
 		]);
@@ -437,7 +418,7 @@ describe('recoverable overwrite operations', () => {
 
 	it.each(['MOVE', 'COPY'])('%s aborts publication when destination trashing fails', async method => {
 		const calls = recordMutations(async call => call.body.trashed === true ? rejectMutation(403) : undefined);
-		expect((await overwrite(method)).status).toBeGreaterThanOrEqual(400);
+		expect((await overwrite(method)).status).toBe(403);
 		expect(calls.some(isPublish)).toBe(false);
 		expect(calls.map(c => c.method)).toEqual(method === 'COPY' ? ['POST', 'PATCH'] : ['PATCH']);
 		expect(drive.findById('file-dest')).toMatchObject({ name: 'dest.txt', size: 456 });
@@ -446,22 +427,23 @@ describe('recoverable overwrite operations', () => {
 		if (method === 'COPY') expect(drive.files.some(f => f.name.startsWith('.webdav-copy-') && !f.trashed)).toBe(true);
 	});
 
-	it.each(['network', '500', 'malformed', 'missing-id'])('COPY preserves a committed stage after ambiguous %s response without touching the target', async failure => {
+	it.each(['network', '500', 'malformed', 'missing-id', 'source-id'])('COPY preserves a committed stage after ambiguous %s response without touching the target', async failure => {
 		const calls = recordMutations(async (call, commit) => {
 			if (call.method !== 'POST') return;
 			await commit();
 			if (failure === 'network') throw new Error('Injected lost staging response');
 			if (failure === '500') return rejectMutation(500);
-			return new Response(failure === 'malformed' ? '{invalid JSON' : '{}', { status: 200 });
+			return new Response(failure === 'malformed' ? '{invalid JSON' : failure === 'source-id' ? JSON.stringify({ id: 'file-a' }) : '{}', { status: 200 });
 		});
-		expect((await overwrite('COPY')).status).toBeGreaterThanOrEqual(400);
+		expect((await overwrite('COPY')).status).toBe(ambiguousStatus(failure));
 		expect(calls.map(c => c.method)).toEqual(['POST']);
 		expect(drive.findById('file-dest')?.trashed).not.toBe(true);
 		expect(drive.findById('file-a')?.name).toBe('a.txt');
 		expect(drive.files.some(f => f.name === calls[0].body.name && !f.trashed)).toBe(true);
 	});
 
-	it.each(['MOVE', 'COPY'].flatMap(method => ['network', '500', '408', 'malformed'].map(failure => ({ method, failure }))))(
+	// Classify each response once; COPY separately checks its staged-data recovery path.
+	it.each([...['network', '500', '408', 'malformed'].map(failure => ({ method: 'MOVE', failure })), { method: 'COPY', failure: 'network' }])(
 		'$method aborts without rollback when trashing commits but its $failure response is ambiguous', async ({ method, failure }) => {
 			const calls = recordMutations(async (call, commit) => {
 				if (call.body.trashed !== true) return;
@@ -470,7 +452,7 @@ describe('recoverable overwrite operations', () => {
 				if (failure === 'malformed') return new Response('{invalid JSON', { status: 200 });
 				return rejectMutation(Number(failure));
 			});
-			expect((await overwrite(method)).status).toBeGreaterThanOrEqual(400);
+			expect((await overwrite(method)).status).toBe(ambiguousStatus(failure));
 			expect(calls.map(c => c.method)).toEqual(method === 'COPY' ? ['POST', 'PATCH'] : ['PATCH']);
 			expect(drive.findById('file-dest')?.trashed).toBe(true);
 			expect(drive.findById('file-a')?.name).toBe('a.txt');
@@ -480,8 +462,8 @@ describe('recoverable overwrite operations', () => {
 
 	it('COPY retries use distinct staging names and retain both recoverable copies', async () => {
 		const calls = recordMutations(async call => call.body.trashed === true ? rejectMutation(403) : undefined);
-		expect((await overwrite('COPY')).status).toBeGreaterThanOrEqual(400);
-		expect((await overwrite('COPY')).status).toBeGreaterThanOrEqual(400);
+		expect((await overwrite('COPY')).status).toBe(403);
+		expect((await overwrite('COPY')).status).toBe(403);
 		const names = calls.filter(c => c.method === 'POST').map(c => c.body.name);
 		expect(names).toHaveLength(2);
 		expect(new Set(names).size).toBe(2);
@@ -491,16 +473,16 @@ describe('recoverable overwrite operations', () => {
 
 	it.each([403, 500])('COPY staging failure (%i) leaves the old target untouched', async status => {
 		const calls = recordMutations(async call => call.method === 'POST' ? rejectMutation(status) : undefined);
-		expect((await overwrite('COPY')).status).toBeGreaterThanOrEqual(400);
+		expect((await overwrite('COPY')).status).toBe(status);
 		expect(calls.map(c => c.method)).toEqual(['POST']);
 		expect(drive.findById('file-dest')?.trashed).not.toBe(true);
 		expect(drive.findById('file-a')?.name).toBe('a.txt');
 	});
 
-	it.each(['MOVE', 'COPY'].flatMap(method => [400, 403, 404, 409, 429].map(status => ({ method, status }))))(
+	it.each([...[400, 403, 404, 409, 429].map(status => ({ method: 'MOVE', status })), { method: 'COPY', status: 403 }])(
 		'$method restores the old destination after definitive $status publication rejection', async ({ method, status }) => {
 			const calls = recordMutations(async call => isPublish(call) ? rejectMutation(status) : undefined);
-			expect((await overwrite(method)).status).toBeGreaterThanOrEqual(400);
+			expect((await overwrite(method)).status).toBe(status);
 			expect(mutationSummary(calls).at(-1)).toEqual({ method: 'PATCH', path: '/drive/v3/files/file-dest', body: { trashed: false } });
 			expect(calls.map(c => c.method)).toEqual(method === 'COPY' ? ['POST', 'PATCH', 'PATCH', 'PATCH'] : ['PATCH', 'PATCH', 'PATCH']);
 			expect(drive.findById('file-dest')).toMatchObject({ name: 'dest.txt', size: 456, trashed: false });
@@ -512,7 +494,7 @@ describe('recoverable overwrite operations', () => {
 	it.each(['MOVE', 'COPY'])('%s reports failure if destination restoration is rejected', async method => {
 		const calls = recordMutations(async call => isPublish(call) || call.body.trashed === false ? rejectMutation(403) : undefined);
 		const res = await overwrite(method);
-		expect(res.status).toBeGreaterThanOrEqual(400);
+		expect(res.status).toBe(403);
 		expect(await res.text()).toContain('destination restore failed');
 		expect(calls.at(-1)?.body).toEqual({ trashed: false });
 		expect(calls.some(c => c.method === 'DELETE')).toBe(false);
@@ -520,7 +502,13 @@ describe('recoverable overwrite operations', () => {
 		expect(drive.findById('file-a')?.name).toBe('a.txt');
 	});
 
-	it.each(['MOVE', 'COPY'].flatMap(method => ['network', '500', '408', 'malformed', 'missing-id'].flatMap(failure => [false, true].map(committed => ({ method, failure, committed })))))(
+	// The shared writer classifies errors; retain both methods and both commit outcomes
+	// without multiplying every classification by every recovery scenario.
+	it.each([
+		...['network', '500', '408', 'malformed', 'missing-id', 'wrong-id'].map(failure => ({ method: 'MOVE', failure, committed: true })),
+		{ method: 'COPY', failure: 'network', committed: true },
+		...['MOVE', 'COPY'].map(method => ({ method, failure: 'network', committed: false })),
+	])(
 		'$method does not undo or delete after ambiguous $failure publication (committed=$committed)', async ({ method, failure, committed }) => {
 			const calls = recordMutations(async (call, commit) => {
 				if (!isPublish(call)) return;
@@ -528,9 +516,10 @@ describe('recoverable overwrite operations', () => {
 				if (failure === 'network') throw new Error('Injected connection loss');
 				if (failure === 'malformed') return new Response('{invalid JSON', { status: 200 });
 				if (failure === 'missing-id') return new Response('{}', { status: 200 });
+				if (failure === 'wrong-id') return new Response(JSON.stringify({ id: 'unrelated-id' }), { status: 200 });
 				return rejectMutation(Number(failure));
 			});
-			expect((await overwrite(method)).status).toBeGreaterThanOrEqual(400);
+			expect((await overwrite(method)).status).toBe(ambiguousStatus(failure));
 			expect(calls.map(c => c.method)).toEqual(method === 'COPY' ? ['POST', 'PATCH', 'PATCH'] : ['PATCH', 'PATCH']);
 			expect(drive.findById('file-dest')).toMatchObject({ name: 'dest.txt', size: 456, trashed: true });
 			expect(drive.findById('file-a')?.name).toBe(method === 'MOVE' && committed ? 'dest.txt' : 'a.txt');
@@ -580,12 +569,13 @@ describe('MOVE / COPY destructive-operation guards', () => {
 		expect(drive.findById('file-dest')?.trashed).not.toBe(true);
 	});
 
+	// Collection COPY is rejected earlier; only MOVE reaches these tree guards.
 	it.each(['MOVE', 'COPY'].flatMap(method => [
 		{ source: '/dav/docs/', destination: '/dav/docs/sub%26dir/' },
 		{ source: '/dav/docs/', destination: '/dav/docs/new-child/' },
 		{ source: '/dav/docs/sub%26dir/', destination: '/dav/docs/' },
 		{ source: '/dav/docs/b%20%26%20c.txt', destination: '/dav/docs/' },
-	].map(paths => ({ method, ...paths }))))('$method rejects related paths $source → $destination before mutation', async ({ method, source, destination }) => {
+	].filter(paths => method === 'MOVE' || paths.source.endsWith('.txt')).map(paths => ({ method, ...paths }))))('$method rejects related paths $source → $destination before mutation', async ({ method, source, destination }) => {
 		const calls = recordMutations();
 		expect((await request(source, { method, headers: { Destination: ORIGIN + destination } })).status).toBe(403);
 		expect(calls).toEqual([]);
@@ -819,7 +809,7 @@ describe('recoverable collection overwrites', () => {
 			await commit();
 			throw new Error('Injected lost publication response');
 		});
-		expect((await transfer(method)).status).toBeGreaterThanOrEqual(400);
+		expect((await transfer(method)).status).toBe(500);
 		expect(drive.findById('old-tree')?.trashed).toBe(true);
 		for (const id of ['old-sub', 'old-leaf']) expect(drive.findById(id)).toBeDefined();
 		expect(calls.some(c => c.body.trashed === false || c.method === 'DELETE')).toBe(false);

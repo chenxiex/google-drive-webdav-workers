@@ -323,3 +323,26 @@ describe('trash/restore and transfer contracts', () => {
 		expect(drive.findById('source')).toMatchObject({ name: 'source.bin', parents: ['a'], content: bytes });
 	});
 });
+
+// Media GET is a bounded contract: ordinary binary files and in-bounds closed ranges.
+describe('media download contract', () => {
+	it('returns the stored original bytes, MIME type and length', async () => {
+		const response = await api(fixture(), FILES + '/source?alt=media');
+		expect(response.status).toBe(200);
+		expect(response.headers.get('Content-Type')).toBe('application/octet-stream');
+		expect(response.headers.get('Content-Length')).toBe('5');
+		expect(new Uint8Array(await response.arrayBuffer())).toEqual(bytes);
+	});
+	it.each(['bytes=0-2', 'bytes=1-3'])('returns the requested original range: %s', async range => {
+		const start = range === 'bytes=0-2' ? 0 : 1;
+		const response = await api(fixture(), FILES + '/source?alt=media', { headers: { Range: range } });
+		expect(response.status).toBe(206);
+		expect(response.headers.get('Content-Type')).toBe('application/octet-stream');
+		expect(response.headers.get('Content-Length')).toBe('3');
+		expect(response.headers.get('Content-Range')).toBe(`bytes ${start}-${start + 2}/5`);
+		expect(new Uint8Array(await response.arrayBuffer())).toEqual(bytes.slice(start, start + 3));
+	});
+	it.each(['bytes=1-', 'bytes=-2', 'bytes=9-10', 'bytes=0-1,3-4'])('fails loudly for unverified ranges: %s', async range => {
+		await expect(api(fixture(), FILES + '/source?alt=media', { headers: { Range: range } })).rejects.toThrow('unverified media range');
+	});
+});

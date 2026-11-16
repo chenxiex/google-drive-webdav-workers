@@ -1,5 +1,10 @@
 # WebDAV behavior
 
+## File downloads
+
+- Ordinary file GET uses Drive's original-content endpoint (`files.get?alt=media`), including for images with a `thumbnailLink`. It does not substitute a preview or fetch the thumbnail CDN. The former image `param` query parameter no longer selects a preview size.
+- Client `Range` is forwarded to Drive; successful upstream status, body and content headers are returned unchanged. This does not add thumbnail generation or Google Workspace document export.
+
 ## MOVE / COPY replacement
 
 - `Overwrite: F` rejects an existing destination with 412. Otherwise, successful replacement returns 204; creating a new destination returns 201.

@@ -21,7 +21,7 @@ The requests include setup, independent readbacks, and cleanup; **115 is not a c
 | PATCH media upload | Overwrite and zero-byte truncation update bytes/size without replacing identity; original binary MIME type is preserved. |
 | POST/PATCH resumable initialization and PUT session | Unique Location with empty 200 body; no early commit; status PUT and nonfinal chunks return empty 308 with Range; final 200 returns File and commits bytes; successful create and overwrite; completed status returns 200. Small nonfinal chunks and conflicting totals return 400 and leave the session failed. |
 
-Independent real GET metadata and media/range requests verified mutation effects. They were **not added as mock interfaces**, because they were not provided by the original mock.
+Independent real GET metadata and media/range requests verified mutation effects. They were **not added as mock interfaces in that audit**, because they were not provided by the original mock. The later media-download extension below adds a bounded subset.
 
 ### Non-obvious Google behavior
 
@@ -42,6 +42,14 @@ The extension verifies repeated trash/restore PATCH requests with `fields=id`, p
 Overwrite acceptance covers file and collection targets, folder MOVE, successful replacement, rejected publication and restoration, ambiguous committed writes, no permanent cleanup, and descendant-cache invalidation. Network failures, malformed responses, rate limits and permission failures are **fault injection**, not claims that Google necessarily emits these responses or that every 4xx response is mutation-free. The existing invalid-fields contract still demonstrates a committed write can return 400; production transfer uses a fixed valid `fields=id` mask.
 
 This is acceptance of the current MOVE/COPY implementation against these bounded contracts, not exhaustive Drive or distributed-consistency certification. No extra live WebDAV acceptance pass was needed or run. Shared-drive permissions, concurrent changes, trash propagation latency and cross-region KV visibility remain outside this mock's guarantees.
+
+## Media-download contract extension: 2026-11-16
+
+Ordinary image GET now uses the original-content endpoint rather than a thumbnail CDN. The mock previously had no media GET endpoint. A read-only recheck of an existing retained four-byte binary audit fixture made one OAuth request and three media GET requests, with no Drive writes: full download returned 200 and byte-identical content; `bytes=0-2` and `bytes=1-3` returned 206 with exact bytes and matching Content-Type, Content-Length and Content-Range. Earlier audit evidence also includes a five-byte range readback after a larger upload.
+
+MockDrive now models full binary media GET and in-bounds closed byte ranges using those observations. It requires explicit fixture bytes and matching size. Open-ended, suffix, multipart, invalid and out-of-bounds ranges, and native-document/folder downloads remain deliberately unsupported rather than guessed. The worker forwards Range unchanged, so these mock limits are not restrictions introduced into production downloads. Thumbnail links are optional fixture metadata; no CDN response or thumbnail-generation contract is modeled.
+
+WebDAV regressions verify original image bytes/MIME/length even when thumbnail metadata is present, HEAD/GET length agreement, removal of the old preview `param` behavior, no CDN fetch, and forwarding of Range with the original partial response. These fixtures are synthetic; this is not a claim that a live thumbnail necessarily changes image bytes, nor a live JPEG/PNG end-to-end acceptance pass. Default tests stay entirely offline. After this extension, all 197 tests pass; both TypeScript checks and the Wrangler dry-run build pass. The three new WebDAV download regressions fail against the pre-fix worker and pass with the fix.
 
 ## Verification
 

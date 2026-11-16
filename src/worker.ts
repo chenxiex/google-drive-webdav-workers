@@ -332,15 +332,6 @@ class GDrive {
                     }
                     return new Response(arrayToHtml(rpath, files), { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8' } });
                 }
-                if (metadata.mimeType.startsWith('image/') && metadata.thumbnailLink) {
-                    const tempLink = metadata.thumbnailLink.replace(/=s\d+$/, '');
-                    const rawParam = url.searchParams.get('param');
-                    // Plain fetch: the client's Authorization header must never be
-                    // forwarded to Google's CDN. If the short-lived link has
-                    // expired, fall through to the download endpoint below.
-                    const thumb = await fetch(tempLink + (rawParam ? `=${rawParam}` : '=s0'));
-                    if (thumb.ok) return thumb;
-                }
                 const abuse = url.searchParams.get('abuse') === 'true';
                 const range = request.headers.get('Range');
                 response = await this.getRawContent(metadata.id, range, abuse);

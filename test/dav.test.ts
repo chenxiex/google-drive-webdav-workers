@@ -85,6 +85,42 @@ describe('server metadata', () => {
 	});
 });
 
+describe('original file downloads', () => {
+	const content = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 0, 255, 42, 99]);
+	beforeEach(() => {
+		drive.add({ id: 'image', name: 'image.png', mimeType: 'image/png', parents: ['root'], size: content.length, content,
+			thumbnailLink: 'https://thumbnail.example/image=s220' });
+	});
+
+	it.each(['', '?param=s32'])('downloads original image bytes, not a thumbnail (%s)', async query => {
+		const spy = vi.spyOn(drive, 'handle');
+		const head = await request('/dav/image.png', { method: 'HEAD' });
+		const response = await request('/dav/image.png' + query);
+		expect(response.status).toBe(200);
+		expect(response.headers.get('Content-Type')).toBe('image/png');
+		expect(response.headers.get('Content-Length')).toBe(String(content.length));
+		expect(head.headers.get('Content-Length')).toBe(response.headers.get('Content-Length'));
+		expect(new Uint8Array(await response.arrayBuffer())).toEqual(content);
+		const urls = spy.mock.calls.map(([input]) => new URL(input instanceof Request ? input.url : String(input)));
+		expect(urls.some(url => url.searchParams.get('alt') === 'media')).toBe(true);
+		expect(urls.every(url => url.hostname === 'www.googleapis.com')).toBe(true);
+	});
+
+	it('forwards the client Range and preserves the partial original response', async () => {
+		const spy = vi.spyOn(drive, 'handle');
+		const response = await request('/dav/image.png', { headers: { Range: 'bytes=1-3' } });
+		expect(response.status).toBe(206);
+		expect(response.headers.get('Content-Type')).toBe('image/png');
+		expect(response.headers.get('Content-Length')).toBe('3');
+		expect(response.headers.get('Content-Range')).toBe('bytes 1-3/12');
+		expect(new Uint8Array(await response.arrayBuffer())).toEqual(content.slice(1, 4));
+		const media = spy.mock.calls.find(([input]) => String(input).includes('alt=media'));
+		expect(media).toBeDefined();
+		expect(new Headers(media![1]?.headers).get('Range')).toBe('bytes=1-3');
+		expect(new Headers(media![1]?.headers).get('Authorization')).toBe('Bearer test-access-token');
+	});
+});
+
 describe('PROPFIND', () => {
 	it('lists children with encoded hrefs and numeric sizes (Depth 1)', async () => {
 		const res = await request('/dav/', {

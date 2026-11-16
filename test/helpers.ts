@@ -15,6 +15,7 @@ export interface DriveFile {
 	trashed?: boolean;
 	explicitlyTrashed?: boolean;
 	content?: Uint8Array;
+	thumbnailLink?: string;
 }
 
 type FetchInput = Parameters<typeof fetch>[0];
@@ -94,6 +95,7 @@ function project(data: Record<string, unknown>, fields: string, allowed: Set<str
 function representation(file: DriveFile): Record<string, unknown> {
 	return {
 		kind: 'drive#file', id: file.id, name: file.name, mimeType: file.mimeType,
+		...(file.thumbnailLink ? { thumbnailLink: file.thumbnailLink } : {}),
 		parents: [...file.parents], modifiedTime: file.modifiedTime, trashed: file.trashed ?? false, explicitlyTrashed: file.explicitlyTrashed ?? false,
 		...(file.mimeType !== FOLDER ? { size: String(file.size ?? 0) } : {}),
 	};
@@ -399,6 +401,22 @@ export class MockDrive {
 			}
 		}
 		const match = url.pathname.match(/^\/drive\/v3\/files\/([^/]+)$/);
+		if (match && method === 'GET' && url.searchParams.get('alt') === 'media') {
+			const file = this.findById(match[1]);
+			if (!file) return notFound(match[1]);
+			if (file.mimeType.startsWith('application/vnd.google-apps.')) unsupported('media downloads of folders/native documents');
+			const content = file.content;
+			if (!content || Number(file.size) !== content.length) unsupported('media fixture without explicit bytes and matching size');
+			const range = headers.get('Range');
+			if (!range) return new Response(content.slice(), { headers: { 'Content-Type': file.mimeType, 'Content-Length': String(content.length) } });
+			const parsed = range.match(/^bytes=(\d+)-(\d+)$/);
+			if (!parsed) unsupported('unverified media range syntax');
+			const start = Number(parsed[1]), end = Number(parsed[2]);
+			if (start > end || end >= content.length) unsupported('unverified media range bounds');
+			return new Response(content.slice(start, end + 1), {
+				status: 206, headers: { 'Content-Type': file.mimeType, 'Content-Length': String(end - start + 1), 'Content-Range': `bytes ${start}-${end}/${content.length}` },
+			});
+		}
 		if (match && ['PATCH', 'DELETE'].includes(method)) {
 			const file = this.findById(match[1]);
 			const bytes = await bodyBytes(input, init);

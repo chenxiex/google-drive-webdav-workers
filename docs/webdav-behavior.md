@@ -9,6 +9,13 @@
 - A timeout, network error, 5xx, 408, or invalid success response can mean a write already happened. The worker returns an error without retrying or blindly rolling back. Inspect Drive before retrying: the previous destination may be in Trash, and COPY may leave a staged file (or an already-published copy). Error responses include recovery names/known IDs. Failed COPY stages are retained, not automatically deleted; clean them up manually once their outcome is known. Trash is subject to Google Drive's retention rules and is not a permanent backup.
 - This is a recoverable, multi-request workflow, **not an atomic transaction**. Concurrent clients can still produce duplicate names or race with restoration, and there is a brief interval without the destination name. Existing metadata caches and cross-instance KV propagation can also be stale. Directory transfers evict affected descendant metadata locally and attempt KV eviction after the Drive writes. KV failures are logged without masking the Drive result; they can leave stale entries. This does not provide cross-instance locking or eliminate in-flight cache races.
 
+## Metadata and listing caches
+
+- Fresh Drive metadata is cached in the writing instance for 300 seconds and directory listings for 30 seconds. With KV configured, those writes also use KV TTLs of 300 and 60 seconds respectively; KV's minimum TTL means a listing can remain available there after its local 30-second entry expires.
+- Metadata and listing hits from KV are returned directly, without promotion to instance memory. A hit near KV expiry no longer starts another five-minute local lifetime. Once the local entry is absent or expired, each read consults KV again; this deliberately trades more KV reads for avoiding that lifetime extension. Fresh Drive results still populate both caches.
+- This does not enforce a 30-second end-to-end listing freshness limit or immediate visibility of external Drive changes. KV propagation and edge caching remain eventually consistent. Invalidating one instance cannot synchronously clear other instances' existing memory entries.
+- TUS session caching is unchanged: session writes are awaited in KV, use a one-day TTL, and KV session hits retain the existing five-minute local promotion.
+
 ## Verification and scope
 
 The mock contract and acceptance tests cover the behaviors above within their documented limits. They do not certify shared-drive permissions, concurrent mutations, or cross-region cache consistency. See the [Drive mock contract and audit](../test/mock-drive.md) for verification details.

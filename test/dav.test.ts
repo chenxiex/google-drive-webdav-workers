@@ -576,6 +576,111 @@ describe('MOVE / COPY destructive-operation guards', () => {
 	});
 });
 
+describe('DELETE cache invalidation', () => {
+	let path: string;
+	const head = (suffix = '/nested/leaf.txt') => request('/dav' + path + suffix, { method: 'HEAD' });
+	beforeEach(() => {
+		path = '/delete-' + crypto.randomUUID();
+		drive.add({ id: 'delete-tree', name: path.slice(1), mimeType: FOLDER, parents: ['root'] });
+		drive.add({ id: 'delete-sub', name: 'nested', mimeType: FOLDER, parents: ['delete-tree'] });
+		drive.add({ id: 'delete-leaf', name: 'leaf.txt', mimeType: 'text/plain', size: 3, parents: ['delete-sub'] });
+	});
+
+	it.each(['', '/'])('evicts cached descendants with directory suffix "%s" and resolves recreated names to new IDs', async suffix => {
+		expect((await head()).status).toBe(200);
+		expect((await head('/nested/')).status).toBe(200);
+		expect((await request('/dav' + path + suffix, { method: 'DELETE' })).status).toBe(204);
+		expect(drive.findById('delete-leaf')).toBeUndefined();
+		expect((await head()).status).toBe(404);
+		expect((await head('/nested/')).status).toBe(404);
+		expect((await head('/')).status).toBe(404);
+		expect((await request('/dav' + path + '/nested/', { method: 'MKCOL' })).status).toBe(201);
+		expect((await request('/dav' + path + '/nested/leaf.txt', { method: 'PUT', body: 'replacement', headers: { 'Content-Type': 'text/plain', 'Content-Length': '11' } })).status).toBe(201);
+		const recreated = await head();
+		expect(recreated.status).toBe(200);
+		expect(recreated.headers.get('Content-Length')).toBe('11');
+		const calls = recordMutations();
+		expect((await request('/dav' + path + '/nested/leaf.txt', { method: 'DELETE' })).status).toBe(204);
+		expect(calls).toHaveLength(1);
+		expect(calls[0].path).not.toBe('/drive/v3/files/delete-leaf');
+	});
+
+	it('deletes paginated KV-only descendant mappings without touching adjacent names', async () => {
+		const kv = (env as Env).KV!;
+		const keys = ['meta.' + path + '/cold/', 'meta.' + path + '/cold/deep.txt/'];
+		const adjacent = 'meta.' + path + '-other/keep.txt/';
+		for (const key of [...keys, adjacent]) await kv.put(key, JSON.stringify({ id: 'stale', mimeType: 'text/plain' }));
+		const list = vi.spyOn(kv, 'list')
+			.mockResolvedValueOnce({ keys: [{ name: keys[0] }], list_complete: false, cursor: 'next-page', cacheStatus: null })
+			.mockResolvedValueOnce({ keys: [{ name: keys[1] }], list_complete: true, cacheStatus: null });
+		expect((await request('/dav' + path, { method: 'DELETE' })).status).toBe(204);
+		expect(list).toHaveBeenNthCalledWith(1, { prefix: 'meta.' + path + '/', cursor: undefined });
+		expect(list).toHaveBeenNthCalledWith(2, { prefix: 'meta.' + path + '/', cursor: 'next-page' });
+		for (const key of keys) expect(await kv.get(key)).toBeNull();
+		expect(await kv.get(adjacent)).not.toBeNull();
+		expect((await head('/cold/deep.txt')).status).toBe(404);
+	});
+
+	it.each([403, 500])('preserves upstream %s without deleting the live subtree', async status => {
+		expect((await head()).status).toBe(200);
+		const calls = recordMutations(async call => call.method === 'DELETE' ? new Response(null, { status }) : undefined);
+		expect((await request('/dav' + path, { method: 'DELETE' })).status).toBe(status);
+		expect(calls).toHaveLength(1);
+		expect(drive.findById('delete-leaf')).toBeDefined();
+		expect((await head()).status).toBe(200);
+	});
+
+	it('evicts descendants even when the upstream deletion commits then loses its response', async () => {
+		expect((await head()).status).toBe(200);
+		recordMutations(async (call, commit) => {
+			if (call.method === 'DELETE') { await commit(); throw new Error('Injected lost DELETE response'); }
+		});
+		expect((await request('/dav' + path, { method: 'DELETE' })).status).toBe(500);
+		expect(drive.findById('delete-leaf')).toBeUndefined();
+		expect((await head()).status).toBe(404);
+	});
+
+	it.each(['list', 'delete'])('preserves successful DELETE and evicts local descendants when KV %s fails', async failure => {
+		expect((await head()).status).toBe(200);
+		const kv = (env as Env).KV!;
+		if (failure === 'list') vi.spyOn(kv, 'list').mockRejectedValue(new Error('Injected KV list failure'));
+		else {
+			const remove = kv.delete.bind(kv);
+			vi.spyOn(kv, 'delete').mockImplementation(key => key === 'meta.' + path + '/nested/leaf.txt/'
+				? Promise.reject(new Error('Injected KV descendant delete failure')) : remove(key));
+		}
+		const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+		expect((await request('/dav' + path, { method: 'DELETE' })).status).toBe(204);
+		expect(log).toHaveBeenCalledWith('DELETE cache invalidation failed:', expect.any(Error));
+		expect(drive.findById('delete-leaf')).toBeUndefined();
+		// KV failures may leave stale durable mappings. Remove those manually
+		// to verify local eviction independently of durable cleanup.
+		if (failure === 'delete') vi.mocked(kv.delete).mockRestore();
+		await kv.delete('meta.' + path + '/nested/leaf.txt/');
+		await kv.delete('meta.' + path + '/nested/');
+		expect((await head()).status).toBe(404);
+	});
+
+	it('keeps file DELETE non-recursive and refreshes the parent listing', async () => {
+		expect((await head()).status).toBe(200);
+		await request('/dav' + path + '/nested/', { method: 'PROPFIND', headers: { Depth: '1' } });
+		const list = vi.spyOn((env as Env).KV!, 'list');
+		expect((await request('/dav' + path + '/nested/leaf.txt', { method: 'DELETE' })).status).toBe(204);
+		expect(list).not.toHaveBeenCalled();
+		expect((await head()).status).toBe(404);
+		expect((await head('/nested/')).status).toBe(200);
+		const listing = await request('/dav' + path + '/nested/', { method: 'PROPFIND', headers: { Depth: '1' } });
+		expect(await listing.text()).not.toContain('leaf.txt');
+	});
+
+	it('does not mutate Drive for root or missing paths', async () => {
+		const calls = recordMutations();
+		expect((await request('/dav/', { method: 'DELETE' })).status).toBe(403);
+		expect((await request('/dav' + path + '/missing', { method: 'DELETE' })).status).toBe(404);
+		expect(calls).toEqual([]);
+	});
+});
+
 // Folder-tree behavior is independently verified in mock-drive.test.ts.
 describe('recoverable collection overwrites', () => {
 	let targetName: string;
@@ -662,4 +767,96 @@ describe('recoverable collection overwrites', () => {
 		expect(calls.some(c => c.body.trashed === false || c.method === 'DELETE')).toBe(false);
 		expect((await request('/dav/' + targetName + '', { method: 'HEAD' })).status).toBe(200);
 	});
+});
+
+
+describe('KV cache lifetime', () => {
+    it.each(['meta', 'objects'])('returns repeated %s KV hits directly, then observes KV expiry', async ns => {
+        const kv = (env as Env).KV!;
+        const path = '/kv-lifetime-' + ns;
+        const id = 'kv-lifetime-' + ns;
+        drive.add({ id, name: path.slice(1), mimeType: ns === 'objects' ? FOLDER : 'text/plain', size: 123, parents: ['root'] });
+        const key = ns === 'meta' ? 'meta.' + path + '/' : 'objects.' + id;
+        const stale = ns === 'meta'
+            ? { id: 'old-id', name: path.slice(1), mimeType: 'text/plain', size: 999, parents: ['root'] }
+            : [{ id: 'old-child', name: 'old-child.txt', mimeType: 'text/plain', size: 999 }];
+        const start = Date.now();
+        let now = start;
+        vi.spyOn(Date, 'now').mockImplementation(() => now);
+        const originalGet = kv.get.bind(kv);
+        // Model a value with only one second left in KV. This is not a
+        // simulation of cross-region propagation or Cloudflare's edge cache.
+        const get = vi.spyOn(kv as { get(key: string, options?: unknown): Promise<unknown> }, 'get').mockImplementation(((name: string, options: any) =>
+            name === key ? Promise.resolve(now < start + 1000 ? stale : null) : originalGet(name, options)) as any);
+        const read = () => request('/dav' + path, { method: ns === 'meta' ? 'HEAD' : 'PROPFIND', headers: { Depth: '1' } });
+        for (let i = 0; i < 2; i++) {
+            const response = await read();
+            if (ns === 'meta') expect(response.headers.get('Content-Length')).toBe('999');
+            else expect(await response.text()).toContain('old-child.txt');
+        }
+        // No instance promotion means another KV read for every hit.
+        expect(get.mock.calls.filter(([name]) => name === key)).toHaveLength(2);
+        now = start + 1000;
+        const fresh = await read();
+        if (ns === 'meta') expect(fresh.headers.get('Content-Length')).toBe('123');
+        else expect(await fresh.text()).not.toContain('old-child.txt');
+        expect(get.mock.calls.filter(([name]) => name === key).length).toBeGreaterThan(2);
+    });
+
+    it.each(['meta', 'objects'])('keeps locally written %s TTL and does not extend it after a KV fallback', async ns => {
+        const kv = (env as Env).KV!;
+        const path = '/kv-local-' + ns;
+        const id = 'kv-local-' + ns;
+        drive.add({ id, name: path.slice(1), mimeType: ns === 'objects' ? FOLDER : 'text/plain', size: 123, parents: ['root'] });
+        const key = ns === 'meta' ? 'meta.' + path + '/' : 'objects.' + id;
+        const ttl = ns === 'meta' ? 300000 : 30000;
+        const start = Date.now();
+        let now = start;
+        vi.spyOn(Date, 'now').mockImplementation(() => now);
+        const originalGet = kv.get.bind(kv);
+        const get = vi.spyOn(kv as { get(key: string, options?: unknown): Promise<unknown> }, 'get');
+        const put = vi.spyOn(kv, 'put');
+        const read = async () => {
+            const res = await request('/dav' + path, { method: ns === 'meta' ? 'HEAD' : 'PROPFIND', headers: { Depth: '1' } });
+            expect(res.status).toBe(ns === 'meta' ? 200 : 207);
+            await res.text();
+        };
+        await read();
+        expect(put).toHaveBeenCalledWith(key, expect.any(String), { expirationTtl: ns === 'meta' ? 300 : 60 });
+        const reads = get.mock.calls.filter(([name]) => name === key).length;
+        now = start + ttl - 1;
+        await read();
+        expect(get.mock.calls.filter(([name]) => name === key)).toHaveLength(reads);
+        // Keep KV available after local expiry, as when a list's 30-second
+        // memory entry expires before KV's 60-second minimum TTL.
+        const stored = JSON.parse(put.mock.calls.find(([name]) => name === key)![1] as string);
+        get.mockImplementation(((name: string, options: any) =>
+            name === key ? Promise.resolve(stored) : originalGet(name, options)) as any);
+        now = start + ttl;
+        await read();
+        await read();
+        expect(get.mock.calls.filter(([name]) => name === key)).toHaveLength(reads + 2);
+    });
+
+    it('preserves TUS session promotion and its existing five-minute local lifetime', async () => {
+        const kv = (env as Env).KV!;
+        const sessionId = 'kv-session-lifetime';
+        const key = 'tus_session.' + sessionId;
+        const start = Date.now();
+        let now = start;
+        vi.spyOn(Date, 'now').mockImplementation(() => now);
+        const get = vi.spyOn(kv as { get(key: string, options?: unknown): Promise<unknown> }, 'get').mockResolvedValue({ uploadUrl: 'https://upload.example.test/session', totalSize: 10 });
+        vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 308, headers: { Range: 'bytes=0-4' } })));
+        const read = () => request('/dav/tus_uploads/' + sessionId, { method: 'HEAD' });
+        const first = await read();
+        expect(first.status).toBe(200);
+        expect(first.headers.get('Upload-Offset')).toBe('5');
+        get.mockResolvedValue(null);
+        now = start + 299999;
+        expect((await read()).status).toBe(200);
+        expect(get.mock.calls.filter(([name]) => name === key)).toHaveLength(1);
+        now = start + 300000;
+        expect((await read()).status).toBe(404);
+        expect(get.mock.calls.filter(([name]) => name === key)).toHaveLength(2);
+    });
 });

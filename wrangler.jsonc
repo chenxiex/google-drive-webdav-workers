@@ -7,6 +7,8 @@
 	"send_metrics": false,
 	"keep_names": false,
 	"minify": true,
+	"durable_objects": { "bindings": [{ "name": "TUS_UPLOADS", "class_name": "TusUpload" }] },
+	"migrations": [{ "tag": "v1-tus", "new_sqlite_classes": ["TusUpload"] }],
 	"kv_namespaces": [
 		{
 			"binding": "KV",

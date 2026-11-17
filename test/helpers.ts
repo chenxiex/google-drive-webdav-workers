@@ -207,7 +207,7 @@ export class MockDrive {
 		return next;
 	}
 	private create(meta: Metadata, content: Uint8Array = new Uint8Array(), mimeType?: string): DriveFile | Response {
-		if (meta.createdTime !== undefined || meta.modifiedTime !== undefined || meta.folderColorRgb !== undefined) unsupported('unverified timestamps or folder color on create');
+		if (meta.createdTime !== undefined || meta.folderColorRgb !== undefined) unsupported('unverified timestamps or folder color on create');
 		if (meta.mimeType?.startsWith('application/vnd.google-apps.') && meta.mimeType !== FOLDER) unsupported('Google Workspace document conversion');
 		const parents = meta.parents?.length ? meta.parents : ['root'];
 		const error = this.validateParents(parents);
@@ -215,7 +215,7 @@ export class MockDrive {
 		const appProperties = this.properties({}, meta.appProperties);
 		if (appProperties instanceof Response) return appProperties;
 		return this.add({ appProperties, description: meta.description ?? undefined, starred: meta.starred, createdTime: meta.createdTime, id: crypto.randomUUID(), name: meta.name || 'Untitled', mimeType: meta.mimeType || mimeType || 'application/octet-stream',
-			parents, content: content.slice(), size: content.length, trashed: meta.trashed ?? false, modifiedTime: new Date().toISOString() });
+			parents, content: content.slice(), size: content.length, trashed: meta.trashed ?? false, modifiedTime: meta.modifiedTime === undefined ? new Date().toISOString() : new Date(meta.modifiedTime).toISOString() });
 	}
 	private update(file: DriveFile, meta: Metadata, url: URL, content?: Uint8Array, mimeType?: string): Response | undefined {
 		if (file === this.root) unsupported('writing My Drive root metadata');
@@ -269,7 +269,7 @@ export class MockDrive {
 			file.content = content.slice(); file.size = content.length;
 			// Updating a binary file's bytes preserves its existing MIME type,
 			// even when the media request declares a different Content-Type.
-			file.modifiedTime = new Date().toISOString();
+			if (meta.modifiedTime === undefined) file.modifiedTime = new Date().toISOString();
 		}
 	}
 	private list(url: URL): Response {
@@ -331,11 +331,12 @@ export class MockDrive {
 		const range = headers.get('Content-Range');
 		if (session.completed) return fileResponse(session.completed, session.fields);
 		const progress = () => new Response(null, { status: 308, headers: session.bytes.length ? { Range: `bytes=0-${session.bytes.length - 1}` } : {} });
-		if (range?.match(/^bytes \*\/(\d+|\*)$/) && !bytes.length) return progress();
-		let total = session.total;
+		const emptyFinal = range === 'bytes */0' && !bytes.length && !session.bytes.length;
+		if (range?.match(/^bytes \*\/(\d+|\*)$/) && !bytes.length && !emptyFinal) return progress();
+		let total = emptyFinal ? 0 : session.total;
 		let start = 0;
 		if (!range && total === undefined) total = bytes.length;
-		if (range) {
+		if (range && !emptyFinal) {
 			const parsed = range.match(/^bytes (\d+)-(\d+)\/(\d+|\*)$/);
 			if (!parsed || +parsed[2] - +parsed[1] + 1 !== bytes.length) return new Response('Invalid Content-Range header.', { status: 400 });
 			start = +parsed[1];
@@ -347,12 +348,19 @@ export class MockDrive {
 		}
 		if (total !== undefined) session.total = total;
 		if (!range && total !== undefined && bytes.length < total && bytes.length >= 262144) unsupported('a short whole-file resumable PUT without Content-Range');
-		if (start < session.bytes.length) unsupported('overlapping or replayed resumable chunks');
+		// Drive keeps the already accepted prefix, even if replayed bytes differ.
+		if (start < session.bytes.length) {
+			bytes = bytes.subarray(Math.min(bytes.length, session.bytes.length - start));
+			start = session.bytes.length;
+			if (!bytes.length) return progress();
+		}
 		if (start !== session.bytes.length || (total !== undefined && start + bytes.length > total)) return new Response('Invalid upload offset.', { status: 400 });
 		if ((total === undefined || start + bytes.length < total) && bytes.length < 262144) {
 			session.failure = `Invalid request.  The number of bytes uploaded is required to be equal or greater than 262144, except for the final request (it's recommended to be the exact multiple of 262144).  The received request contained ${bytes.length} bytes, which does not meet this requirement.`;
 			return new Response(session.failure, { status: 400 });
 		}
+		// Non-final requests only acknowledge whole 256 KiB blocks.
+		if (total === undefined || start + bytes.length < total) bytes = bytes.subarray(0, Math.floor(bytes.length / 262144) * 262144);
 		const accumulated = new Uint8Array(start + bytes.length);
 		accumulated.set(session.bytes); accumulated.set(bytes, start);
 		session.bytes = accumulated;

@@ -7,6 +7,7 @@ declare namespace Cloudflare {
 	}
 	interface Env {
 		KV: KVNamespace;
+		TUS_UPLOADS: DurableObjectNamespace<import("./src/tus-upload").TusUpload>;
 		CLIENT_ID: string;
 		CLIENT_SECRET: string;
 		REFRESH_TOKEN: string;

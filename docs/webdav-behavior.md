@@ -45,6 +45,39 @@ Property semantics follow [RFC 4918](https://www.rfc-editor.org/rfc/rfc4918.html
 - Unknown-length uploads hold a 10 MiB upload buffer plus the current input chunk, with one-read lookahead to identify the final chunk (including an exact 10 MiB boundary). Each chunk is acknowledged before assembling the next. Runtime/network buffering and concurrent requests still consume additional memory; this does not bypass the Worker ingress request-size limit.
 - Empty uploads create an empty file or truncate an existing file. Nonempty uploads report success only after Drive confirms completion. An unexpected offset, incomplete final response, stream error, or upstream failure stops the upload; there is no automatic retry or rollback. An ambiguous failure can follow a committed write, so inspect the destination before retrying.
 
+## TUS and rclone uploads
+
+TUS is a separate resumable-upload protocol, not part of WebDAV. An ordinary WebDAV client sends a PUT for the whole file; a 413 response does not instruct it to retry using TUS. Streaming PUT reduces server memory use but does not remove Cloudflare’s per-request ingress limit.
+
+The server implements TUS 1.0 core and the `creation` extension with a known `Upload-Length`. It does not advertise creation-with-upload, deferred length, concatenation, checksum or termination extensions. `OPTIONS` reports the supported version and extension; unsupported versions return 412. Creation accepts optional UTF-8 `filename` / `filetype` metadata and rclone's Unix-seconds `mtime` metadata. Zero-length uploads create or truncate the destination immediately.
+
+Each upload has its own SQLite Durable Object. PATCH requests for that session are serialized. Small or unaligned client chunks are buffered durably and combined into Google-compatible blocks; no entire upload is buffered. A bounded write-ahead journal holds bytes until Drive confirms them, and recovery uses Drive's actual acknowledged range. The returned offset includes bytes safely held in this journal, not only bytes already in Drive. A failed or interrupted PATCH can have accepted a prefix: query HEAD and resume at its returned offset rather than blindly repeating the old offset. Offset mismatches return 409, and upstream failures never masquerade as offset zero.
+
+Sessions, including completed-upload receipts, expire 24 hours after creation. HEAD remains usable after the final response is lost. The expiry alarm removes session state, not the destination file; incomplete uploads are not automatically rolled back. Sessions belong to the authenticated WebDAV username that created them. Different uploads to the same destination are not a distributed file lock and can still conflict. Ordinary metadata caching remains unchanged.
+
+For rclone, configure its WebDAV remote with `vendor = infinitescale` to select its TUS upload path:
+
+```ini
+[worker]
+type = webdav
+url = https://YOUR-WORKER/dav/
+vendor = infinitescale
+user = YOUR-WEBDAV-USER
+pass = YOUR-RCLONE-OBSCURED-PASSWORD
+```
+
+Use `rclone config` to enter the password, then upload with `rclone copy /path/to/file worker:`. The vendor setting selects the relevant rclone upload behavior; this service does not implement the entire ownCloud Infinite Scale API. The ordinary `other` vendor uses PUT instead. rclone's TUS chunks must each fit the deployment's request limit; splitting a large file across requests avoids that limit, rather than increasing it. In the tested rclone v1.76.0, upload-session resumption is not implemented. Its TUS filename metadata is the source basename, so use `copy` as shown rather than relying on `copyto` to rename during upload; rename separately afterward. See the [rclone TUS implementation](https://github.com/rclone/rclone/blob/v1.76.0/backend/webdav/tus.go).
+
+### Reproducing the local client check
+
+The opt-in test runs an installed rclone executable against a local Worker with SQLite Durable Objects and the Google Drive mock:
+
+```bash
+RCLONE_BIN=/path/to/rclone pnpm exec vitest run --config test/rclone.config.mts
+```
+
+It uses only test credentials, never `.dev.vars` or real Google/Cloudflare resources. Its front-door proxy rejects bodies above 12 MiB, while rclone uploads a file above 25 MiB in multiple TUS requests. It checks the final bytes by SHA-256, records each PATCH size, and separately checks that an oversized PUT gets 413. Verified with rclone v1.76.0: 26,214,523 bytes were sent in PATCH bodies of 10,485,760, 10,485,760 and 5,243,003 bytes, all below the 12,582,912-byte cap. This is a simulated ingress-limit test, not a deployed Cloudflare acceptance test. Default tests do not launch rclone.
+
 ## File downloads
 
 - Ordinary file GET uses Drive's original-content endpoint (`files.get?alt=media`), including for images with a `thumbnailLink`. It does not substitute a preview or fetch the thumbnail CDN. The former image `param` query parameter no longer selects a preview size.
@@ -64,7 +97,7 @@ Property semantics follow [RFC 4918](https://www.rfc-editor.org/rfc/rfc4918.html
 - Fresh Drive metadata is cached in the writing instance for 300 seconds and directory listings for 30 seconds. With KV configured, those writes also use KV TTLs of 300 and 60 seconds respectively; KV's minimum TTL means a listing can remain available there after its local 30-second entry expires.
 - Metadata and listing hits from KV are returned directly, without promotion to instance memory. A hit near KV expiry no longer starts another five-minute local lifetime. Once the local entry is absent or expired, each read consults KV again; this deliberately trades more KV reads for avoiding that lifetime extension. Fresh Drive results still populate both caches.
 - This does not enforce a 30-second end-to-end listing freshness limit or immediate visibility of external Drive changes. KV propagation and edge caching remain eventually consistent. Invalidating one instance cannot synchronously clear other instances' existing memory entries.
-- TUS session caching is unchanged: session writes are awaited in KV, use a one-day TTL, and KV session hits retain the existing five-minute local promotion.
+- TUS upload sessions use Durable Objects separately from these optional metadata caches.
 
 ## Verification and scope
 

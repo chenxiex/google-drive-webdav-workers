@@ -1,3 +1,4 @@
+export { TusUpload } from './tus-upload';
 import { uploadChunks } from './upload-stream';
 import { DOMParser } from '@xmldom/xmldom';
 import { DavProperty, key as propertyKey, parsePatch, parseFind, readDeadProperties, writeDeadProperties, propertyNameXml } from './dav-properties';
@@ -365,16 +366,18 @@ function davProperties(file: any, quota?: { used: number | string; available: nu
 
 class GDrive {
     cache: KVCache;
+    owner: string;
     static fetchingTokenPromise: Promise<string> | null = null;
 
-    constructor(env: Env, ctx: ExecutionContext<unknown>) {
+    constructor(env: Env, ctx: ExecutionContext<unknown>, owner = '') {
+        this.owner = owner;
         this.cache = new KVCache(env, ctx);
     }
 
     async OPTIONS(request: Request): Promise<Response> {
         // Locking (Class 2) is not implemented.
-        let allowed_methods = ['GET', 'HEAD', 'OPTIONS', 'PUT', 'PROPFIND', 'PROPPATCH', 'MKCOL', 'DELETE', 'MOVE', 'COPY'].join(',');
-        return new Response(null, { status: 200, headers: { 'Allow': allowed_methods, 'DAV': '1', 'MS-Author-Via': 'DAV', 'Accept-Ranges': 'bytes' } });
+        let allowed_methods = ['GET', 'HEAD', 'OPTIONS', 'PUT', 'PROPFIND', 'PROPPATCH', 'MKCOL', 'DELETE', 'MOVE', 'COPY', 'POST', 'PATCH'].join(',');
+        return new Response(null, { status: 200, headers: { 'Allow': allowed_methods, 'DAV': '1', 'MS-Author-Via': 'DAV', 'Accept-Ranges': 'bytes', 'Tus-Version': '1.0.0', 'Tus-Extension': 'creation' } });
     }
 
     async PROPFIND(request: Request): Promise<Response> {
@@ -483,118 +486,139 @@ class GDrive {
     }
 
     async POST(request: Request): Promise<Response> {
-        if (request.headers.has('Tus-Resumable')) {
-            let { rpath, fpath } = getUrl(request.url);
-            const totalSize = parseInt(request.headers.get('Upload-Length') || '0', 10);
-            let mimeType = 'application/octet-stream';
-            let targetPath = fpath;
-
-            const metaHeader = request.headers.get('Upload-Metadata');
-            if (metaHeader) {
-                const typeMatch = metaHeader.match(/filetype\s+([A-Za-z0-9+/=]+)/);
-                if (typeMatch) mimeType = atob(typeMatch[1]);
-                const nameMatch = metaHeader.match(/filename\s+([A-Za-z0-9+/=]+)/);
-                if (nameMatch) {
-                    const binString = atob(nameMatch[1]);
-                    const bytes = Uint8Array.from(binString, c => c.charCodeAt(0));
-                    const filename = new TextDecoder().decode(bytes);
-                    targetPath = pathJoin(fpath, filename);
+        const version = this.tusVersion(request);
+        if (version) return version;
+        const rawLength = request.headers.get('Upload-Length');
+        if (!rawLength || !/^\d+$/.test(rawLength) || !Number.isSafeInteger(Number(rawLength))) {
+            return this.tusError('Upload-Length must be a nonnegative integer', 400);
+        }
+        // Only the creation extension is offered. Do not silently discard data.
+        if (request.headers.has('Upload-Defer-Length')) {
+            return this.tusError('Deferred length and creation-with-upload are not supported', 400);
+        }
+        if (request.body) {
+            const reader = request.body.getReader();
+            try {
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    if (value.length) {
+                        await reader.cancel();
+                        return this.tusError('Creation-with-upload is not supported', 400);
+                    }
                 }
+            } finally { reader.releaseLock(); }
+        }
+        const totalSize = Number(rawLength);
+        const { fpath } = getUrl(request.url);
+        const metadata = new Map<string, string>();
+        const header = request.headers.get('Upload-Metadata');
+        if (header) {
+            try {
+                for (const entry of header.split(',')) {
+                    const match = /^([^\s,]+)(?: ([A-Za-z0-9+/]*={0,2}))?$/.exec(entry.trim());
+                    if (!match || metadata.has(match[1])) throw new Error();
+                    const bytes = Uint8Array.from(atob(match[2] || ''), c => c.charCodeAt(0));
+                    metadata.set(match[1], ['filename', 'filetype', 'mtime'].includes(match[1])
+                        ? new TextDecoder('utf-8', { fatal: true, ignoreBOM: false }).decode(bytes) : '');
+                }
+            } catch { return this.tusError('Invalid Upload-Metadata', 400); }
+        }
+        const filename = metadata.get('filename');
+        if (filename !== undefined && (!filename || filename === '.' || filename === '..' || /[\/\\\x00-\x1f\x7f]/.test(filename))) {
+            return this.tusError('Invalid filename', 400);
+        }
+        const mimeType = metadata.get('filetype') || 'application/octet-stream';
+        if (!/^[A-Za-z0-9!#$&^_.+-]+\/[A-Za-z0-9!#$&^_.+-]+(?:;[\x20-\x7e]*)?$/.test(mimeType)) return this.tusError('Invalid filetype', 400);
+        let modifiedTime: string | undefined;
+        const mtime = metadata.get('mtime');
+        if (mtime !== undefined) {
+            const milliseconds = Number(mtime) * 1000;
+            if (!/^-?\d+$/.test(mtime) || !Number.isSafeInteger(milliseconds) || Math.abs(milliseconds) > 8640000000000000) {
+                return this.tusError('Invalid mtime', 400);
             }
-
-            const { name, parent } = splitPath(targetPath);
-            const parentMetadata = await this.ensureDir(parent);
-            if (!parentMetadata) return new Response('Parent folder not found', { status: 404 });
-
-            const metadata = await this.getMetadata(targetPath);
-            const existingFileId = metadata?.id || null;
-
+            modifiedTime = new Date(milliseconds).toISOString();
+        }
+        const targetPath = filename === undefined ? fpath : pathJoin(fpath, filename);
+        const { name, parent } = splitPath(targetPath);
+        if (!name) return this.tusError('A filename is required', 400);
+        const parentMetadata = await this.ensureDir(parent);
+        if (!parentMetadata) return this.tusError('Parent folder not found', 404);
+        const existing = await this.getMetadata(targetPath);
+        if (existing?.mimeType === FOLDER_MIME) return this.tusError('Cannot overwrite a collection', 409);
+        const existingFileId = existing?.id || null;
+        const namespace = this.cache.env.TUS_UPLOADS;
+        if (!namespace) return this.tusError('TUS_UPLOADS Durable Object binding is required', 503);
+        let uploadUrl = '';
+        if (totalSize === 0) {
+            const response = await this.putEmpty(targetPath, name, parentMetadata.id, existingFileId, mimeType, modifiedTime);
+            if (!response.ok) return this.tusError('Drive empty upload failed', response.status);
+        } else {
             const api = 'https://www.googleapis.com/upload/drive/v3/files';
             const initUrl = existingFileId ? `${api}/${existingFileId}?uploadType=resumable` : `${api}?uploadType=resumable`;
-            const initMethod = existingFileId ? 'PATCH' : 'POST';
-            const initBody = existingFileId ? '{}' : JSON.stringify({ name, parents: [parentMetadata.id], mimeType });
-
-            const headers: any = {
-                'Content-Type': 'application/json',
-                'X-Upload-Content-Type': mimeType,
-                Authorization: 'Bearer ' + (await this.getAccessToken())
-            };
-            if (totalSize > 0) headers['X-Upload-Content-Length'] = totalSize.toString();
-
-            const response = await fetch(initUrl, { method: initMethod, headers, body: initBody });
-            const uploadUrl = response.headers.get('Location');
-            if (!uploadUrl) {
-                const errText = await response.text();
-                console.error('GDrive TUS init failed. Status:', response.status, 'Response:', errText);
-                return new Response(`Failed to get GDrive resumable URL`, { status: response.status });
-            }
-
-            const sessionId = crypto.randomUUID();
-            const sessionData = { uploadUrl, totalSize, targetPath, parentId: parentMetadata.id, existingFileId };
-            await this.cache.put(sessionId, sessionData, 'tus_session', 86400000);
-
-            const reqUrl = new URL(request.url);
-            let basePath = config.path.endsWith('/') ? config.path : config.path + '/';
-            const tusLocation = `${reqUrl.origin}${basePath}tus_uploads/${sessionId}`;
-
-            return new Response(null, {
-                status: 201,
+            const response = await fetch(initUrl, {
+                method: existingFileId ? 'PATCH' : 'POST',
                 headers: {
-                    'Tus-Resumable': '1.0.0',
-                    'Location': tusLocation,
-                    'Tus-Extension': 'creation,creation-with-upload',
-                    'Access-Control-Expose-Headers': 'Location, Tus-Resumable, Tus-Extension',
-                }
+                    'Content-Type': 'application/json',
+                    'X-Upload-Content-Type': mimeType,
+                    'X-Upload-Content-Length': String(totalSize),
+                    Authorization: 'Bearer ' + (await this.getAccessToken())
+                },
+                body: JSON.stringify(existingFileId ? { modifiedTime } : { name, parents: [parentMetadata.id], mimeType, modifiedTime })
             });
+            uploadUrl = response.headers.get('Location') || '';
+            if (!response.ok || !uploadUrl) return this.tusError('Drive upload initialization failed', response.ok ? 502 : response.status);
         }
-        return new Response('Method Not Allowed', { status: 405 });
+        const sessionId = crypto.randomUUID();
+        const stub = namespace.get(namespace.idFromName(sessionId));
+        const initialized = await stub.fetch('https://tus.internal/initialize', {
+            method: 'POST', body: JSON.stringify({ uploadUrl, totalSize, targetPath, parentId: parentMetadata.id, owner: this.owner, completed: totalSize === 0 })
+        });
+        if (!initialized.ok) return this.tusError('Upload session could not be persisted', 503);
+        const basePath = config.path.endsWith('/') ? config.path : config.path + '/';
+        return new Response(null, { status: 201, headers: {
+            'Tus-Resumable': '1.0.0',
+            Location: `${new URL(request.url).origin}${basePath}tus_uploads/${sessionId}`,
+        } });
+    }
+
+    private tusError(message: string, status: number): Response {
+        return new Response(message, { status, headers: { 'Tus-Resumable': '1.0.0' } });
+    }
+
+    private tusVersion(request: Request): Response | undefined {
+        if (request.headers.get('Tus-Resumable') !== '1.0.0') {
+            return new Response('Unsupported Tus-Resumable version', { status: 412, headers: { 'Tus-Version': '1.0.0', 'Tus-Resumable': '1.0.0' } });
+        }
+    }
+
+    private async tusRequest(request: Request): Promise<Response> {
+        const version = this.tusVersion(request);
+        if (version) return version;
+        const basePath = config.path.endsWith('/') ? config.path : config.path + '/';
+        const path = new URL(request.url).pathname;
+        const sessionId = path.slice((basePath + 'tus_uploads/').length);
+        if (!path.startsWith(basePath + 'tus_uploads/') || !/^[0-9a-f-]{36}$/.test(sessionId)) return this.tusError('Session not found', 404);
+        const namespace = this.cache.env.TUS_UPLOADS;
+        if (!namespace) return this.tusError('TUS_UPLOADS Durable Object binding is required', 503);
+        const headers = new Headers(request.headers);
+        headers.set('x-tus-owner', this.owner);
+        const response = await namespace.get(namespace.idFromName(sessionId)).fetch(new Request('https://tus.internal/upload', { method: request.method, headers, body: request.body }));
+        if (response.headers.get('x-tus-complete') === '1') {
+            const targetPath = decodeURIComponent(response.headers.get('x-tus-target-path')!);
+            await this.cache.invalidateFileAndParent(targetPath, response.headers.get('x-tus-parent-id')!)
+                .catch(() => console.error('TUS cache invalidation failed'));
+        }
+        const result = new Response(response.body, response);
+        for (const key of [...result.headers.keys()]) if (key.startsWith('x-tus-')) result.headers.delete(key);
+        return result;
     }
 
     async PATCH(request: Request): Promise<Response> {
-        let url = new URL(request.url);
-
-        if (url.pathname.includes('/tus_uploads/')) {
-            const sessionId = url.pathname.split('/').pop()!;
-            const session = await this.cache.get(sessionId, 'tus_session');
-
-            if (!session) return new Response('Session Not Found', { status: 404 });
-
-            const offset = parseInt(request.headers.get('Upload-Offset') || '0', 10);
-            const contentLength = parseInt(request.headers.get('Content-Length') || '0', 10);
-            const end = offset + contentLength - 1;
-            const rangeTotal = session.totalSize > 0 ? session.totalSize.toString() : '*';
-
-            const res = await fetch(session.uploadUrl, {
-                method: 'PUT',
-                headers: {
-                    'Content-Length': `${contentLength}`,
-                    'Content-Range': `bytes ${offset}-${end}/${rangeTotal}`
-                },
-                body: request.body,
-                // @ts-ignore
-                duplex: 'half'
-            });
-
-            if (res.status === 308) {
-                return new Response(null, {
-                    status: 204,
-                    headers: { 'Tus-Resumable': '1.0.0', 'Upload-Offset': (offset + contentLength).toString() }
-                });
-            } else if (res.status === 200 || res.status === 201) {
-                await this.cache.delete(sessionId, 'tus_session');
-                await this.cache.invalidateFileAndParent(session.targetPath, session.parentId);
-
-                return new Response(null, {
-                    status: 204,
-                    headers: { 'Tus-Resumable': '1.0.0', 'Upload-Offset': (offset + contentLength).toString() }
-                });
-            }
-            return new Response(`Chunk upload failed: ${await res.text()}`, { status: 500 });
-        }
-        return new Response('Method Not Allowed', { status: 405 });
+        return this.tusRequest(request);
     }
 
-    private async putEmpty(fpath: string, name: string, parentId: string, existingFileId: string | null, mimeType: string): Promise<Response> {
+    private async putEmpty(fpath: string, name: string, parentId: string, existingFileId: string | null, mimeType: string, modifiedTime?: string): Promise<Response> {
         const api = 'https://www.googleapis.com/upload/drive/v3/files';
         if (existingFileId) {
             // A JSON PATCH with "{}" only touches metadata and would leave the
@@ -605,15 +629,24 @@ class GDrive {
                 body: new Uint8Array(0)
             });
             if (response.ok) {
+                let metadataStatus = 204;
+                if (modifiedTime !== undefined) {
+                    const updated = await fetch(`https://www.googleapis.com/drive/v3/files/${existingFileId}`, {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + (await this.getAccessToken()) },
+                        body: JSON.stringify({ modifiedTime })
+                    });
+                    if (!updated.ok) metadataStatus = updated.status;
+                }
                 await this.cache.invalidateFileAndParent(fpath, parentId);
-                return new Response(null, { status: 204 });
+                return new Response(null, { status: metadataStatus });
             }
             return new Response(null, { status: response.status });
         }
         const response = await fetch('https://www.googleapis.com/drive/v3/files', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json; charset=UTF-8', Authorization: 'Bearer ' + (await this.getAccessToken()) },
-            body: JSON.stringify({ name, parents: [parentId], mimeType })
+            body: JSON.stringify({ name, parents: [parentId], mimeType, modifiedTime })
         });
         if (response.ok) {
             await this.cache.invalidateFileAndParent(fpath, parentId);
@@ -987,40 +1020,8 @@ class GDrive {
 
     async HEAD(request: Request): Promise<Response> {
         let url = new URL(request.url);
-        if (url.pathname.includes('/tus_uploads/')) {
-            const sessionId = url.pathname.split('/').pop()!;
-            const session = await this.cache.get(sessionId, 'tus_session');
-            if (!session) return new Response('Session Not Found', { status: 404 });
-            const rangeTotal = session.totalSize > 0 ? session.totalSize.toString() : '*';
-            const res = await fetch(session.uploadUrl, {
-                method: 'PUT',
-                headers: {
-                    'Content-Length': '0',
-                    'Content-Range': `bytes */${rangeTotal}`
-                }
-            });
-
-            let currentOffset = 0;
-            if (res.status === 308) {
-                const rangeHeader = res.headers.get('Range');
-                if (rangeHeader) {
-                    const parts = rangeHeader.split('-');
-                    currentOffset = parseInt(parts[1], 10) + 1;
-                }
-            } else if (res.status === 200 || res.status === 201) {
-                currentOffset = session.totalSize;
-            }
-
-            return new Response(null, {
-                status: 200,
-                headers: {
-                    'Tus-Resumable': '1.0.0',
-                    'Upload-Offset': currentOffset.toString(),
-                    'Upload-Length': session.totalSize.toString(),
-                    'Cache-Control': 'no-store'
-                }
-            });
-        }
+        const basePath = config.path.endsWith('/') ? config.path : config.path + '/';
+        if (url.pathname.startsWith(basePath + 'tus_uploads/')) return this.tusRequest(request);
 
         let { fpath } = getUrl(request.url);
         const metadata = await this.getMetadata(fpath);
@@ -1402,10 +1403,10 @@ export default {
                 return new Response('Server not configured: missing ' + missing.join(', '), { status: 500 });
             }
 
-            const drive = new GDrive(env, ctx);
+            const drive = new GDrive(env, ctx, auth.user);
 
             // Method Routing
-            if (method === 'PATCH' && !pathname.includes('/tus_uploads/')) {
+            if (method === 'PATCH' && !pathname.startsWith(basePath + 'tus_uploads/')) {
                 method = 'COPY';
             }
 

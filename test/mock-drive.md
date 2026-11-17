@@ -63,15 +63,29 @@ Four isolated live audit runs created five binary/folder fixtures plus two copie
 - `files.copy` inherits description and starred state, **not appProperties**. Passing appProperties explicitly in the copy request preserves them. This matters for WebDAV dead properties.
 - Folder colors are quantized by Drive: `#ff0000` became `#f83a22`; palette colors `#f83a22` and `#8f8f8f` stayed unchanged. A fresh folder uses `#8f8f8f`. An invalid string `nope` also became gray with HTTP 200; `""`/`null` retained the current color. Binary-file color writes return 403 `colorNotSupportedForItem`. The mock recognizes only these measured colors and fails loudly for unverified color quantization.
 
-Unverified property contracts intentionally remain unsupported: writes to My Drive root, native-document specifics, creation-time/mtime/color overrides during file creation, arbitrary folder-color quantization, nested app-property field masks, and other clients' property quotas. No live end-to-end WebDAV acceptance is implied; default tests remain offline.
+Unverified property contracts intentionally remain unsupported: writes to My Drive root, native-document specifics, creation-time/color overrides during file creation, arbitrary folder-color quantization, nested app-property field masks, and other clients' property quotas. No live end-to-end WebDAV acceptance is implied; default tests remain offline.
 
 ## Unknown-length upload contract extension: 2026-11-16
 
 An isolated live audit initiated resumable create and update sessions without `X-Upload-Content-Length`. A 256 KiB chunk with `Content-Range: bytes 0-262143/*` returned 308 and `Range: bytes=0-262143`; the last chunk supplied the final total and returned 200. Downloaded bytes matched for a short tail, an aligned last chunk, a single aligned chunk and replacement of an existing file. Focused mock contracts cover unknown-total creation, replacement and aligned endings without multiplying every combination.
 
-The same audit verified zero-byte create and replacement with `Content-Range: bytes */0`, but this form is not added to the mock: the worker keeps its existing empty-file paths. Empty finalization after previously uploaded unknown-total chunks was not tested. All fixtures were created in a unique audit folder, then moved to Trash with that folder; nothing was permanently deleted. Default tests remain offline.
+The same audit verified zero-byte create and replacement with `Content-Range: bytes */0`, and the TUS audit below adds this form to the mock; ordinary PUT keeps its existing empty-file paths. Empty finalization after previously uploaded unknown-total chunks was not tested. All fixtures were created in a unique audit folder, then moved to Trash with that folder; nothing was permanently deleted. Default tests remain offline.
 
-The [official upload guide](https://developers.google.com/workspace/drive/api/guides/manage-uploads) makes the initial upload length optional, requires non-final chunks to be multiples of 256 KiB, and instructs callers to inspect the response Range rather than assume all sent bytes were accepted. The mock contracts above cover successful complete chunk acknowledgments, not partial acceptance, retries, interruptions or session expiry.
+The [official upload guide](https://developers.google.com/workspace/drive/api/guides/manage-uploads) makes the initial upload length optional, requires non-final chunks to be multiples of 256 KiB, and instructs callers to inspect the response Range rather than assume all sent bytes were accepted. The extension below covers partial aligned acknowledgments and replay. Network interruptions and session expiry are still fault-injection scenarios, not verified live contracts.
+
+## TUS recovery contract extension: 2026-11-16
+
+Two isolated live audits verified the upload forms needed for durable TUS buffering:
+
+- Replaying an already received 256 KiB chunk returns 308 with the existing Range. Different replayed bytes do not replace the accepted prefix.
+- A 512 KiB request overlapping that prefix accepts only the new suffix. Final download was byte-checked to verify that the original prefix survived.
+- A non-final 262145-byte request acknowledges only 262144 bytes; a subsequent status query returns the same Range. The mock now discards the unacknowledged tail instead of assuming the whole request was accepted.
+- Both status queries and replay of the final chunk return 200 after completion.
+- `Content-Range: bytes */0` finalizes an empty session; download is empty, and a later status query returns 200.
+
+A further isolated audit verified explicit `modifiedTime` on metadata-only empty creation, resumable creation and replacement (including downloaded byte checks), and media truncation followed by a timestamp update. Readback retained the exact supplied timestamp in every case. The mock preserves explicit upload timestamps instead of replacing them with upload completion time; this supports rclone's TUS `mtime` metadata. Its fixture folder was also moved to Trash.
+
+Three focused contracts cover aligned acknowledgment, replay/overlap and empty completion, alongside the existing completed-status contract. The audits created only uniquely named fixtures and moved their parent folders to Trash. No resources were permanently deleted. Socket interruption, request loss and expired sessions remain explicitly simulated failures in worker recovery tests; those simulations are not additional claims about live Google behavior.
 
 ## Verification
 
@@ -89,7 +103,7 @@ The original audit had 44 focused mock contract tests and 34 existing/auth/WebDA
 
 ## Deliberate limits
 
-This is a **bounded test double**, not a full Google API emulator. It supports the worker's ordinary binary-file and folder operations and the query/field expressions described above. It fails loudly for unimplemented routes, verbs, query operators, metadata fields, Workspace conversion, media writes to folders/native documents, moves from/into Trash, changes to trash state beneath a trashed ancestor, folder cycles, overlapping/replayed chunks, and selected unverified upload forms. Extend the verified contract before using those features in tests.
+This is a **bounded test double**, not a full Google API emulator. It supports the worker's ordinary binary-file and folder operations and the query/field expressions described above. It fails loudly for unimplemented routes, verbs, query operators, metadata fields, Workspace conversion, media writes to folders/native documents, moves from/into Trash, changes to trash state beneath a trashed ancestor, folder cycles, selected unverified upload forms. Extend the verified contract before using those features in tests.
 
 Other unmodeled dimensions include shared-drive permissions and ownership, concurrent mutations during pagination, real account quota enforcement/unlimited plans, OAuth revocation/expiry/consent, retries/rate limiting, session expiry, Workspace document conversion/export, complex query grammar, and Google's optional metadata fields. The synthetic account, root/file IDs, timestamps, quota and token values are fixture data, not literal live values. Tests must not assert that unsupported or unprobed API combinations conform.
 

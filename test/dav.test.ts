@@ -1039,25 +1039,5 @@ describe('KV cache lifetime', () => {
         expect(get.mock.calls.filter(([name]) => name === key)).toHaveLength(reads + 2);
     });
 
-    it('preserves TUS session promotion and its existing five-minute local lifetime', async () => {
-        const kv = (env as Env).KV!;
-        const sessionId = 'kv-session-lifetime';
-        const key = 'tus_session.' + sessionId;
-        const start = Date.now();
-        let now = start;
-        vi.spyOn(Date, 'now').mockImplementation(() => now);
-        const get = vi.spyOn(kv as { get(key: string, options?: unknown): Promise<unknown> }, 'get').mockResolvedValue({ uploadUrl: 'https://upload.example.test/session', totalSize: 10 });
-        vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 308, headers: { Range: 'bytes=0-4' } })));
-        const read = () => request('/dav/tus_uploads/' + sessionId, { method: 'HEAD' });
-        const first = await read();
-        expect(first.status).toBe(200);
-        expect(first.headers.get('Upload-Offset')).toBe('5');
-        get.mockResolvedValue(null);
-        now = start + 299999;
-        expect((await read()).status).toBe(200);
-        expect(get.mock.calls.filter(([name]) => name === key)).toHaveLength(1);
-        now = start + 300000;
-        expect((await read()).status).toBe(404);
-        expect(get.mock.calls.filter(([name]) => name === key)).toHaveLength(2);
-    });
+
 });

@@ -30,13 +30,14 @@ A Cloudflare Workers script that transforms Google Drive into a fully functional
 
 2. **Deploy to Cloudflare**:
 
-   - Create a new Worker and paste the `dist/worker.js` code.
+   - Install dependencies with `pnpm install --frozen-lockfile` and deploy the repository with `pnpm exec wrangler deploy`. Choose your Worker name in `wrangler.jsonc` first.
+   - Keep the `TUS_UPLOADS` Durable Object binding and SQLite class migration in `wrangler.jsonc`. Upload sessions require durable storage; pasting the built script alone does not create the binding or migrate the class.
    - Set `CLIENT_ID`, `CLIENT_SECRET`, `REFRESH_TOKEN`, and `USERS` before using the Worker. Store sensitive values as Cloudflare encrypted secrets. Do not paste credentials into the source or built file.
 
 3. **(Optional) KV Caching**:
 
    - Create a KV Namespace named `KV`.
-   - Bind it to your Worker in "Settings -> Variables -> KV Namespace Bindings".
+   - Replace the placeholder KV namespace ID in `wrangler.jsonc` with the real ID before deployment, or remove `kv_namespaces` to run without this optional cache. TUS upload storage uses Durable Objects, not KV.
 
 ## Environment Variables (Recommended)
 

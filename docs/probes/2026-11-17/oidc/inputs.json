@@ -1,0 +1,12 @@
+{
+  "theme": {
+    "url": "https://raw.githubusercontent.com/owncloud/client/9525d7331115d04ab0dd7646db3d0c084c7a1599/src/libsync/theme.cpp",
+    "sha256": "a8bc1cf04d0f0aa2dfe226959f08977cbc5eca42848c50e171df3ee7a195cf27",
+    "destination": "theme.cpp",
+    "commit": "9525d7331115d04ab0dd7646db3d0c084c7a1599"
+  },
+  "ocis": {
+    "version": "8.2.3",
+    "sha256": "7a386c4e85ffe629d6ffdfb0a0ea4e60c87ac3620892b9534d0a3ec8b14fc68a"
+  }
+}

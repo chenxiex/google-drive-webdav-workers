@@ -1,0 +1,44 @@
+[
+  {
+    "name": "owncloud-client",
+    "url": "https://raw.githubusercontent.com/owncloud/client/9525d7331115d04ab0dd7646db3d0c084c7a1599/src/libsync/propagateuploadtus.cpp",
+    "sha256": "5cf59d10a36525e2f9213a7cc6257402005b25d3b93d620f2fced446e41744f9",
+    "bytes": 12386
+  },
+  {
+    "name": "owncloud-capabilities",
+    "url": "https://raw.githubusercontent.com/owncloud/client/9525d7331115d04ab0dd7646db3d0c084c7a1599/src/libsync/capabilities.cpp",
+    "sha256": "8c54aec263b557d251d1137410f5733552cbd480594fff61f62fc4fdc39585bd",
+    "bytes": 9186
+  },
+  {
+    "name": "ocis-config",
+    "url": "https://raw.githubusercontent.com/owncloud/ocis/v8.2.3/services/frontend/pkg/config/config.go",
+    "sha256": "f882cbe4da5af0dbc866dda1ca942c5bed7056b7516f14cf4790bf5c99a7a7d9",
+    "bytes": 28574
+  },
+  {
+    "name": "rclone-webdav",
+    "url": "https://raw.githubusercontent.com/rclone/rclone/v1.76.0/backend/webdav/webdav.go",
+    "sha256": "317c3df432216a52d3c936045a5cad66cc16dcc6f236f1b872a581c16c46735d",
+    "bytes": 56179
+  },
+  {
+    "name": "rclone-tus",
+    "url": "https://raw.githubusercontent.com/rclone/rclone/v1.76.0/backend/webdav/tus-uploader.go",
+    "sha256": "ded2b987212f3f94443f1b099851565aec3880d74a7c889f7c59fd2985815d76",
+    "bytes": 3856
+  },
+  {
+    "name": "duck-tus",
+    "url": "https://raw.githubusercontent.com/iterate-ch/cyberduck/7ca434ece1b7502faec04c9f9c1b2bebbf4e5d35/tus/src/main/java/ch/cyberduck/core/tus/TusUploadFeature.java",
+    "sha256": "b3d877c3b547dd9208253b67126690b31eafb72a0785d65694174dbf98b9e293",
+    "bytes": 12406
+  },
+  {
+    "name": "duck-defaults",
+    "url": "https://raw.githubusercontent.com/iterate-ch/cyberduck/7ca434ece1b7502faec04c9f9c1b2bebbf4e5d35/defaults/src/main/resources/default.properties",
+    "sha256": "60a866c4a4f2c2ca8a94b9f27e78dfd5c5dd0c9398add03c50874e023263f189",
+    "bytes": 26721
+  }
+]

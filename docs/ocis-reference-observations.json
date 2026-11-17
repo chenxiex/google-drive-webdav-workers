@@ -1,287 +1,2263 @@
 {
-  "recovery": {
-    "status": "partial reconstruction from explicit retained exec outputs and written findings",
-    "raw_http_results_available": false,
-    "original_full_sanitized_json_available": false,
-    "not_restored": [
-      "complete response headers",
-      "original ETag values and resource IDs",
-      "request/response timing and exact body text not printed",
-      "raw session URLs and credentials (intentionally excluded even before loss)"
-    ],
-    "omitted_field_meaning": "unknown/unrecovered, not absent in actual response",
-    "new_execution": false
-  },
-  "reference": "official oCIS8.2.3 local filesystem backend, not this Worker",
+  "reference": "official oCIS 8.2.3 local filesystem; not Worker",
+  "run_utc": "2026-11-17T03:30:39.100397+00:00",
+  "binary_sha256": "7a386c4e85ffe629d6ffdfb0a0ea4e60c87ac3620892b9534d0a3ec8b14fc68a",
+  "request_header_scope": "Explicit application headers; Python urllib may add default Content-Type for body-bearing requests if not specified. Response headers captured in full.",
+  "sanitization": "Authorization/cookie/lock tokens redacted; UUIDs stable aliases; synthetic fixture bodies only; private server configuration excluded",
   "cases": [
     {
       "case": "unauth",
-      "method": "PROPFIND",
-      "recorded_status": 401,
-      "recorded_body_bytes": 211
+      "request": {
+        "method": "PROPFIND",
+        "url": "https://localhost:9200/remote.php/webdav/",
+        "headers": {
+          "User-Agent": "ocis-reference-probe/1",
+          "Accept-Encoding": "identity",
+          "Host": "localhost:9200",
+          "Depth": "0"
+        },
+        "body": null
+      },
+      "response": {
+        "status": 401,
+        "headers": {
+          "Content-Security-Policy": "child-src 'self'; connect-src 'self' blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; default-src 'none'; font-src 'self' data:; frame-ancestors 'self'; frame-src 'self' blob: https://embed.diagrams.net/; img-src 'self' data: blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; manifest-src 'self'; media-src 'self'; object-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+          "Referrer-Policy": "no-referrer",
+          "Strict-Transport-Security": "max-age=315360000; includeSubDomains; preload",
+          "Www-Authenticate": "Bearer realm=\"localhost:9200\", charset=\"UTF-8\"",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "SAMEORIGIN",
+          "X-Permitted-Cross-Domain-Policies": "none",
+          "X-Request-Id": "f4b262e47c87/hVNK2SyTI1-000020",
+          "X-Robots-Tag": "none",
+          "X-Xss-Protection": "0",
+          "Date": "Tue, 17 Nov 2026 03:30:08 GMT",
+          "Content-Length": "211",
+          "Content-Type": "text/xml; charset=utf-8",
+          "Connection": "close"
+        },
+        "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<d:error xmlns:d=\"DAV\" xmlns:s=\"http://sabredav.org/ns\"><s:Exception>Sabre\\DAV\\Exception\\PermissionDenied</s:Exception><s:Message>Authentication error</s:Message></d:error>",
+        "bytes": 211,
+        "sha256": "21b6e963d2abbc0161f3ff9540ced7a69aa435f28a97d2fc6468069459c2d2aa"
+      },
+      "elapsed_seconds": 0.009
     },
     {
       "case": "status",
-      "method": "GET",
-      "recorded_status": 200,
-      "recorded_body_bytes": 278
+      "request": {
+        "method": "GET",
+        "url": "https://localhost:9200/status.php",
+        "headers": {
+          "User-Agent": "ocis-reference-probe/1",
+          "Accept-Encoding": "identity",
+          "Host": "localhost:9200"
+        },
+        "body": null
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Length": "278",
+          "Content-Security-Policy": "child-src 'self'; connect-src 'self' blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; default-src 'none'; font-src 'self' data:; frame-ancestors 'self'; frame-src 'self' blob: https://embed.diagrams.net/; img-src 'self' data: blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; manifest-src 'self'; media-src 'self'; object-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+          "Content-Type": "application/json",
+          "Date": "Tue, 17 Nov 2026 03:30:09 GMT",
+          "Referrer-Policy": "no-referrer",
+          "Strict-Transport-Security": "max-age=315360000; includeSubDomains; preload",
+          "Vary": "Origin",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "SAMEORIGIN",
+          "X-Permitted-Cross-Domain-Policies": "none",
+          "X-Request-Id": "f4b262e47c87/hVNK2SyTI1-000021",
+          "X-Robots-Tag": "none",
+          "X-Xss-Protection": "0",
+          "Connection": "close"
+        },
+        "body": "{\n    \"installed\": true,\n    \"maintenance\": false,\n    \"needsDbUpgrade\": false,\n    \"version\": \"10.11.0.0\",\n    \"versionstring\": \"10.11.0\",\n    \"edition\": \"Community\",\n    \"productname\": \"Infinite Scale\",\n    \"product\": \"Infinite Scale\",\n    \"productversion\": \"8.2.3+6cd25244\"\n}",
+        "bytes": 278,
+        "sha256": "60de5e1cd6101c28fe8087e516ce1d16ab543f276b321c802c1ec43881b17e0f"
+      },
+      "elapsed_seconds": 0.007
     },
     {
       "case": "discovery",
-      "method": "GET",
-      "recorded_status": 200,
-      "recorded_body_bytes": 1774
+      "request": {
+        "method": "GET",
+        "url": "https://localhost:9200/.well-known/openid-configuration",
+        "headers": {
+          "User-Agent": "ocis-reference-probe/1",
+          "Accept-Encoding": "identity",
+          "Host": "localhost:9200"
+        },
+        "body": null
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Cache-Control": "no-cache, no-store, max-age=0, must-revalidate, value",
+          "Content-Length": "1774",
+          "Content-Security-Policy": "child-src 'self'; connect-src 'self' blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; default-src 'none'; font-src 'self' data:; frame-ancestors 'self'; frame-src 'self' blob: https://embed.diagrams.net/; img-src 'self' data: blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; manifest-src 'self'; media-src 'self'; object-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+          "Content-Type": "application/json; encoding=utf-8",
+          "Date": "Tue, 17 Nov 2026 03:30:09 GMT",
+          "Expires": "Thu, 01 Jan 1970 00:00:00 GMT",
+          "Last-Modified": "Tue, 17 Nov 2026 03:30:09 GMT",
+          "Referrer-Policy": "no-referrer",
+          "Strict-Transport-Security": "max-age=315360000; includeSubDomains; preload",
+          "Vary": "Origin",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "SAMEORIGIN",
+          "X-Idp-Version": "8.2.3+6cd25244",
+          "X-Permitted-Cross-Domain-Policies": "none",
+          "X-Request-Id": "f4b262e47c87/hVNK2SyTI1-000023",
+          "X-Robots-Tag": "none",
+          "X-Xss-Protection": "0",
+          "Connection": "close"
+        },
+        "body": "{\n  \"issuer\": \"https://localhost:9200\",\n  \"authorization_endpoint\": \"https://localhost:9200/signin/v1/identifier/_/authorize\",\n  \"token_endpoint\": \"https://localhost:9200/konnect/v1/token\",\n  \"userinfo_endpoint\": \"https://localhost:9200/konnect/v1/userinfo\",\n  \"end_session_endpoint\": \"https://localhost:9200/signin/v1/identifier/_/endsession\",\n  \"check_session_iframe\": \"https://localhost:9200/konnect/v1/session/check-session.html\",\n  \"jwks_uri\": \"https://localhost:9200/konnect/v1/jwks.json\",\n  \"scopes_supported\": [\n    \"openid\",\n    \"offline_access\",\n    \"LibgreGraph.UUID\",\n    \"LibreGraph.RawSub\",\n    \"profile\",\n    \"email\"\n  ],\n  \"response_types_supported\": [\n    \"id_token token\",\n    \"id_token\",\n    \"code id_token\",\n    \"code id_token token\"\n  ],\n  \"subject_types_supported\": [\n    \"public\"\n  ],\n  \"id_token_signing_alg_values_supported\": [\n    \"PS512\",\n    \"RS256\",\n    \"RS384\",\n    \"RS512\",\n    \"PS256\",\n    \"PS384\"\n  ],\n  \"userinfo_signing_alg_values_supported\": [\n    \"PS512\",\n    \"RS256\",\n    \"RS384\",\n    \"RS512\",\n    \"PS256\",\n    \"PS384\"\n  ],\n  \"request_object_signing_alg_values_supported\": [\n    \"ES256\",\n    \"ES384\",\n    \"ES512\",\n    \"RS256\",\n    \"RS384\",\n    \"RS512\",\n    \"PS256\",\n    \"PS384\",\n    \"PS512\",\n    \"none\",\n    \"EdDSA\"\n  ],\n  \"token_endpoint_auth_methods_supported\": [\n    \"client_secret_basic\",\n    \"none\"\n  ],\n  \"token_endpoint_auth_signing_alg_values_supported\": [\n    \"PS512\",\n    \"RS256\",\n    \"RS384\",\n    \"RS512\",\n    \"PS256\",\n    \"PS384\"\n  ],\n  \"claims_parameter_supported\": true,\n  \"claims_supported\": [\n    \"iss\",\n    \"sub\",\n    \"aud\",\n    \"exp\",\n    \"iat\",\n    \"name\",\n    \"family_name\",\n    \"given_name\",\n    \"email\",\n    \"email_verified\"\n  ],\n  \"request_parameter_supported\": true,\n  \"request_uri_parameter_supported\": false\n}\n",
+        "bytes": 1774,
+        "sha256": "ee682ad9460f760d29cd180c123971c7049b113d8a8a280b95cb1eaa56e206f1"
+      },
+      "elapsed_seconds": 0.009
     },
     {
       "case": "user",
-      "method": "GET",
-      "recorded_status": 200,
-      "recorded_body_bytes": 159
+      "request": {
+        "method": "GET",
+        "url": "https://localhost:9200/ocs/v2.php/cloud/user?format=json",
+        "headers": {
+          "User-Agent": "ocis-reference-probe/1",
+          "Accept-Encoding": "identity",
+          "Host": "localhost:9200",
+          "Authorization": "<redacted>"
+        },
+        "body": null
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Length": "159",
+          "Content-Security-Policy": "child-src 'self'; connect-src 'self' blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; default-src 'none'; font-src 'self' data:; frame-ancestors 'self'; frame-src 'self' blob: https://embed.diagrams.net/; img-src 'self' data: blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; manifest-src 'self'; media-src 'self'; object-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+          "Content-Type": "application/json; charset=utf-8",
+          "Date": "Tue, 17 Nov 2026 03:30:09 GMT",
+          "Ocs-Api-Version": "2",
+          "Referrer-Policy": "no-referrer",
+          "Strict-Transport-Security": "max-age=315360000; includeSubDomains; preload",
+          "Vary": "Origin",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "SAMEORIGIN",
+          "X-Permitted-Cross-Domain-Policies": "none",
+          "X-Request-Id": "f4b262e47c87/hVNK2SyTI1-000025",
+          "X-Robots-Tag": "none",
+          "X-Xss-Protection": "0",
+          "Connection": "close"
+        },
+        "body": "{\"ocs\":{\"meta\":{\"status\":\"ok\",\"statuscode\":200,\"message\":\"OK\"},\"data\":{\"id\":\"admin\",\"display-name\":\"Admin\",\"email\":\"admin@example.org\",\"user-type\":\"primary\"}}}",
+        "bytes": 159,
+        "sha256": "454d7f37fada69f4e117fa5ecae88791b2b737da12869389828029b9240af0db"
+      },
+      "elapsed_seconds": 0.418
     },
     {
       "case": "capabilities",
-      "method": "GET",
-      "recorded_status": 200,
-      "recorded_body_bytes": 3443
+      "request": {
+        "method": "GET",
+        "url": "https://localhost:9200/ocs/v2.php/cloud/capabilities?format=json",
+        "headers": {
+          "User-Agent": "ocis-reference-probe/1",
+          "Accept-Encoding": "identity",
+          "Host": "localhost:9200",
+          "Authorization": "<redacted>"
+        },
+        "body": null
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Security-Policy": "child-src 'self'; connect-src 'self' blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; default-src 'none'; font-src 'self' data:; frame-ancestors 'self'; frame-src 'self' blob: https://embed.diagrams.net/; img-src 'self' data: blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; manifest-src 'self'; media-src 'self'; object-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+          "Content-Type": "application/json; charset=utf-8",
+          "Date": "Tue, 17 Nov 2026 03:30:10 GMT",
+          "Ocs-Api-Version": "2",
+          "Referrer-Policy": "no-referrer",
+          "Strict-Transport-Security": "max-age=315360000; includeSubDomains; preload",
+          "Vary": "Origin",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "SAMEORIGIN",
+          "X-Permitted-Cross-Domain-Policies": "none",
+          "X-Request-Id": "f4b262e47c87/hVNK2SyTI1-000027",
+          "X-Robots-Tag": "none",
+          "X-Xss-Protection": "0",
+          "Connection": "close",
+          "Transfer-Encoding": "chunked"
+        },
+        "body": "{\"ocs\":{\"meta\":{\"status\":\"ok\",\"statuscode\":200,\"message\":\"OK\"},\"data\":{\"capabilities\":{\"core\":{\"pollinterval\":60,\"webdav-root\":\"webdav\",\"status\":{\"installed\":true,\"maintenance\":false,\"needsDbUpgrade\":false,\"version\":\"10.11.0.0\",\"versionstring\":\"10.11.0\",\"edition\":\"Community\",\"productname\":\"Infinite Scale\",\"product\":\"Infinite Scale\",\"productversion\":\"8.2.3+6cd25244\"},\"support-url-signing\":true,\"support-sse\":true},\"checksums\":{\"supportedTypes\":[\"sha1\",\"md5\",\"adler32\"],\"preferredUploadType\":\"sha1\"},\"files\":{\"privateLinks\":true,\"bigfilechunking\":false,\"undelete\":true,\"versioning\":true,\"favorites\":false,\"full_text_search\":false,\"tags\":true,\"blacklisted_files\":[],\"tus_support\":{\"version\":\"1.0.0\",\"resumable\":\"1.0.0\",\"extension\":\"creation,creation-with-upload\",\"max_chunk_size\":10000000,\"http_method_override\":\"\"},\"archivers\":[{\"enabled\":true,\"version\":\"2.0.0\",\"formats\":[\"tar\",\"zip\"],\"archiver_url\":\"/archiver\",\"max_num_files\":\"10000\",\"max_size\":\"1073741824\"}],\"app_providers\":[{\"enabled\":true,\"version\":\"1.1.0\",\"apps_url\":\"/app/list\",\"open_url\":\"/app/open\",\"open_web_url\":\"/app/open-with-web\",\"new_url\":\"/app/new\"}]},\"dav\":{\"chunking\":\"\",\"trashbin\":\"1.0\",\"reports\":[\"search-files\"],\"chunkingParallelUploadDisabled\":false},\"files_sharing\":{\"api_enabled\":true,\"group_sharing\":true,\"sharing_roles\":true,\"deny_access\":false,\"auto_accept_share\":true,\"share_with_group_members_only\":true,\"share_with_membership_groups_only\":true,\"search_min_length\":3,\"default_permissions\":22,\"user_enumeration\":{\"enabled\":true,\"group_members_only\":true},\"federation\":{\"outgoing\":false,\"incoming\":false},\"public\":{\"enabled\":true,\"send_mail\":true,\"social_share\":true,\"upload\":true,\"multiple\":true,\"supports_upload_only\":true,\"password\":{\"enforced_for\":{\"read_only\":true,\"read_write\":true,\"read_write_delete\":true,\"upload_only\":true},\"enforced\":false},\"expire_date\":{\"enabled\":false},\"can_edit\":true,\"alias\":true,\"default_permissions\":1},\"user\":{\"enabled\":true,\"send_mail\":true,\"profile_picture\":false,\"settings\":[{\"enabled\":true,\"version\":\"1.0.0\"}],\"expire_date\":{\"enabled\":true}},\"resharing\":false},\"spaces\":{\"version\":\"1.0.0\",\"enabled\":true,\"projects\":true,\"share_jail\":true,\"max_quota\":0,\"server_managed\":false},\"graph\":{\"personal-data-export\":true,\"users\":{\"read_only_attributes\":[],\"create_disabled\":false,\"delete_disabled\":false,\"change_password_self_disabled\":false},\"tags\":{\"max_tag_length\":100}},\"password_policy\":{\"min_characters\":8,\"max_characters\":72,\"min_lowercase_characters\":1,\"min_uppercase_characters\":1,\"min_digits\":1,\"min_special_characters\":1},\"search\":{\"property\":{\"name\":{\"enabled\":true},\"mtime\":{\"enabled\":true,\"keywords\":[\"today\",\"last 7 days\",\"last 30 days\",\"this year\",\"last year\"]},\"size\":{\"enabled\":false},\"mediatype\":{\"enabled\":true,\"keywords\":[\"document\",\"spreadsheet\",\"presentation\",\"pdf\",\"image\",\"video\",\"audio\",\"folder\",\"archive\"]},\"type\":{\"enabled\":true},\"tag\":{\"enabled\":true},\"tags\":{\"enabled\":true},\"content\":{\"enabled\":false},\"scope\":{\"enabled\":true}}},\"theme\":{\"logo\":{\"permitted_file_types\":{\".gif\":\"image/gif\",\".jpeg\":\"image/jpeg\",\".jpg\":\"image/jpeg\",\".png\":\"image/png\"}}},\"notifications\":{\"ocs-endpoints\":[\"list\",\"get\",\"delete\"],\"configurable\":false},\"auth\":{\"mfa\":{\"levelnames\":[\"advanced\"],\"session_duration\":3600}},\"vault\":{\"enabled\":false,\"vault_storage_provider\":\"\"}},\"version\":{\"major\":10,\"minor\":11,\"micro\":0,\"string\":\"10.11.0\",\"edition\":\"Community\",\"product\":\"Infinite Scale\",\"productversion\":\"8.2.3+6cd25244\"}}}}",
+        "bytes": 3443,
+        "sha256": "316341baf8f717f13b58093ed6dedd3b9c9a0d8a95d106a0df142b5fc2d5b73f"
+      },
+      "elapsed_seconds": 0.052
     },
     {
       "case": "drives",
-      "method": "GET",
-      "recorded_status": 200,
-      "recorded_body_bytes": 1251
+      "request": {
+        "method": "GET",
+        "url": "https://localhost:9200/graph/v1.0/me/drives",
+        "headers": {
+          "User-Agent": "ocis-reference-probe/1",
+          "Accept-Encoding": "identity",
+          "Host": "localhost:9200",
+          "Authorization": "<redacted>"
+        },
+        "body": null
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Length": "1244",
+          "Content-Security-Policy": "child-src 'self'; connect-src 'self' blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; default-src 'none'; font-src 'self' data:; frame-ancestors 'self'; frame-src 'self' blob: https://embed.diagrams.net/; img-src 'self' data: blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; manifest-src 'self'; media-src 'self'; object-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+          "Content-Type": "application/json",
+          "Date": "Tue, 17 Nov 2026 03:30:10 GMT",
+          "Referrer-Policy": "no-referrer",
+          "Strict-Transport-Security": "max-age=315360000; includeSubDomains; preload",
+          "Vary": "Origin",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "SAMEORIGIN",
+          "X-Graph-Version": "8.2.3+6cd25244",
+          "X-Permitted-Cross-Domain-Policies": "none",
+          "X-Request-Id": "f4b262e47c87/hVNK2SyTI1-000029",
+          "X-Robots-Tag": "none",
+          "X-Xss-Protection": "0",
+          "Connection": "close"
+        },
+        "body": "{\"value\":[{\"driveAlias\":\"virtual/shares\",\"driveType\":\"virtual\",\"id\":\"UUID-1$UUID-1\",\"name\":\"Shares\",\"root\":{\"eTag\":\"DECAFC00FEE\",\"id\":\"UUID-1$UUID-1\",\"webDavUrl\":\"https://localhost:9200/dav/spaces/UUID-1$UUID-1\"},\"webUrl\":\"https://localhost:9200/f/UUID-1$UUID-1\"},{\"driveAlias\":\"personal/admin\",\"driveType\":\"personal\",\"id\":\"UUID-2$UUID-3\",\"lastModifiedDateTime\":\"2026-11-16T21:30:09.928712195-06:00\",\"name\":\"Admin\",\"owner\":{\"user\":{\"displayName\":\"\",\"id\":\"UUID-3\"}},\"quota\":{\"remaining\":9223372036854775807,\"state\":\"normal\",\"total\":0,\"used\":0},\"root\":{\"eTag\":\"\\\"55c2fcc97172a50d9eb5f60b796462dc\\\"\",\"id\":\"UUID-2$UUID-3\",\"webDavUrl\":\"https://localhost:9200/dav/spaces/UUID-2$UUID-3\"},\"webUrl\":\"https://localhost:9200/f/UUID-2$UUID-3\"}]}\n",
+        "bytes": 1244,
+        "sha256": "53c6984191de69ad9fd8c2b17090fa53289401581a254a199587104123901671"
+      },
+      "elapsed_seconds": 0.06
+    },
+    {
+      "case": "mkdir",
+      "request": {
+        "method": "MKCOL",
+        "url": "https://localhost:9200/dav/spaces/UUID-2$UUID-3/probe-run",
+        "headers": {
+          "User-Agent": "ocis-reference-probe/1",
+          "Accept-Encoding": "identity",
+          "Host": "localhost:9200",
+          "Authorization": "<redacted>"
+        },
+        "body": null
+      },
+      "response": {
+        "status": 201,
+        "headers": {
+          "Content-Length": "0",
+          "Content-Security-Policy": "child-src 'self'; connect-src 'self' blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; default-src 'none'; font-src 'self' data:; frame-ancestors 'self'; frame-src 'self' blob: https://embed.diagrams.net/; img-src 'self' data: blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; manifest-src 'self'; media-src 'self'; object-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+          "Date": "Tue, 17 Nov 2026 03:30:10 GMT",
+          "Referrer-Policy": "no-referrer",
+          "Strict-Transport-Security": "max-age=315360000; includeSubDomains; preload",
+          "Vary": "Origin",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "SAMEORIGIN",
+          "X-Permitted-Cross-Domain-Policies": "none",
+          "X-Request-Id": "f4b262e47c87/hVNK2SyTI1-000031",
+          "X-Robots-Tag": "none",
+          "X-Xss-Protection": "0",
+          "Connection": "close"
+        },
+        "body": "",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "elapsed_seconds": 0.039
+    },
+    {
+      "case": "fixture-upload",
+      "request": {
+        "method": "PUT",
+        "url": "https://localhost:9200/dav/spaces/UUID-2$UUID-3/probe-run/file.txt",
+        "headers": {
+          "User-Agent": "ocis-reference-probe/1",
+          "Accept-Encoding": "identity",
+          "Host": "localhost:9200",
+          "Authorization": "<redacted>",
+          "Content-Length": "36"
+        },
+        "body": "0123456789abcdefghijklmnopqrstuvwxyz"
+      },
+      "response": {
+        "status": 201,
+        "headers": {
+          "Content-Length": "0",
+          "Content-Security-Policy": "child-src 'self'; connect-src 'self' blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; default-src 'none'; font-src 'self' data:; frame-ancestors 'self'; frame-src 'self' blob: https://embed.diagrams.net/; img-src 'self' data: blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; manifest-src 'self'; media-src 'self'; object-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+          "Date": "Tue, 17 Nov 2026 03:30:10 GMT",
+          "Etag": "\"65578a947347267d60e1251ac89266f8\"",
+          "Last-Modified": "Tue, 17 Nov 2026 03:30:10 +0000",
+          "Oc-Etag": "\"65578a947347267d60e1251ac89266f8\"",
+          "Oc-Fileid": "UUID-2$UUID-3!UUID-4",
+          "Referrer-Policy": "no-referrer",
+          "Strict-Transport-Security": "max-age=315360000; includeSubDomains; preload",
+          "Vary": "Origin",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "SAMEORIGIN",
+          "X-Permitted-Cross-Domain-Policies": "none",
+          "X-Request-Id": "f4b262e47c87/hVNK2SyTI1-000033",
+          "X-Robots-Tag": "none",
+          "X-Xss-Protection": "0",
+          "Connection": "close"
+        },
+        "body": "",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "elapsed_seconds": 0.06
     },
     {
       "case": "properties",
-      "method": "PROPFIND",
-      "recorded_status": 207,
-      "recorded_body_bytes": 5223
+      "request": {
+        "method": "PROPFIND",
+        "url": "https://localhost:9200/dav/spaces/UUID-2$UUID-3/probe-run/",
+        "headers": {
+          "User-Agent": "ocis-reference-probe/1",
+          "Accept-Encoding": "identity",
+          "Host": "localhost:9200",
+          "Depth": "1",
+          "Authorization": "<redacted>"
+        },
+        "body": null
+      },
+      "response": {
+        "status": 207,
+        "headers": {
+          "Access-Control-Expose-Headers": "Tus-Resumable, Tus-Version, Tus-Extension",
+          "Content-Security-Policy": "child-src 'self'; connect-src 'self' blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; default-src 'none'; font-src 'self' data:; frame-ancestors 'self'; frame-src 'self' blob: https://embed.diagrams.net/; img-src 'self' data: blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; manifest-src 'self'; media-src 'self'; object-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+          "Content-Type": "application/xml; charset=utf-8",
+          "Date": "Tue, 17 Nov 2026 03:30:11 GMT",
+          "Dav": "1, 3, extended-mkcol",
+          "Referrer-Policy": "no-referrer",
+          "Strict-Transport-Security": "max-age=315360000; includeSubDomains; preload",
+          "Tus-Extension": "creation, creation-with-upload, checksum, expiration",
+          "Tus-Resumable": "1.0.0",
+          "Tus-Version": "1.0.0",
+          "Vary": "Origin, Prefer",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "SAMEORIGIN",
+          "X-Permitted-Cross-Domain-Policies": "none",
+          "X-Request-Id": "f4b262e47c87/hVNK2SyTI1-000038",
+          "X-Robots-Tag": "none",
+          "X-Xss-Protection": "0",
+          "Connection": "close",
+          "Transfer-Encoding": "chunked"
+        },
+        "body": "<d:multistatus xmlns:s=\"http://sabredav.org/ns\" xmlns:d=\"DAV:\" xmlns:oc=\"http://owncloud.org/ns\"><d:response><d:href>/dav/spaces/UUID-2$UUID-3/probe-run/</d:href><d:propstat><d:prop><oc:id>UUID-2$UUID-3!UUID-5</oc:id><oc:fileid>UUID-2$UUID-3!UUID-5</oc:fileid><oc:spaceid>UUID-2$UUID-3</oc:spaceid><oc:file-parent>UUID-2$UUID-3!UUID-3</oc:file-parent><oc:name>probe-run</oc:name><d:displayname>probe-run</d:displayname><d:getetag>\"07f37d7066e2948abe38ab3c7c9c6d8d\"</d:getetag><oc:permissions>RDNVCKZP</oc:permissions><d:resourcetype><d:collection/></d:resourcetype><oc:size>36</oc:size><d:getlastmodified>Tue, 17 Nov 2026 03:30:10 GMT</d:getlastmodified><oc:tags></oc:tags><oc:favorite>0</oc:favorite></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat><d:propstat><d:prop><oc:audio></oc:audio><oc:location></oc:location><oc:image></oc:image><oc:photo></oc:photo></d:prop><d:status>HTTP/1.1 404 Not Found</d:status></d:propstat></d:response><d:response><d:href>/dav/spaces/UUID-2$UUID-3/probe-run/file.txt</d:href><d:propstat><d:prop><oc:id>UUID-2$UUID-3!UUID-4</oc:id><oc:fileid>UUID-2$UUID-3!UUID-4</oc:fileid><oc:spaceid>UUID-2$UUID-3</oc:spaceid><oc:file-parent>UUID-2$UUID-3!UUID-5</oc:file-parent><oc:name>file.txt</oc:name><d:displayname>file.txt</d:displayname><d:getetag>\"65578a947347267d60e1251ac89266f8\"</d:getetag><oc:permissions>RDNVWZP</oc:permissions><d:resourcetype></d:resourcetype><d:getcontentlength>36</d:getcontentlength><d:getcontenttype>text/plain</d:getcontenttype><d:getlastmodified>Tue, 17 Nov 2026 03:30:10 GMT</d:getlastmodified><oc:checksums><oc:checksum>SHA1:a26704c04fc5f10db5aab58468035531cc542485 MD5:e9b1713db620f1e3a14b6812de523f4b ADLER32:d0d70d2d</oc:checksum></oc:checksums><oc:tags></oc:tags><oc:favorite>0</oc:favorite></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat><d:propstat><d:prop><oc:audio></oc:audio><oc:location></oc:location><oc:image></oc:image><oc:photo></oc:photo></d:prop><d:status>HTTP/1.1 404 Not Found</d:status></d:propstat></d:response></d:multistatus>",
+        "bytes": 2807,
+        "sha256": "01c98633bec412e7c957277597185b188c2364e89b7770eef17aae9ecb011f5f"
+      },
+      "elapsed_seconds": 0.036
+    },
+    {
+      "case": "properties-mixed",
+      "request": {
+        "method": "PROPFIND",
+        "url": "https://localhost:9200/dav/spaces/UUID-2$UUID-3/probe-run/file.txt",
+        "headers": {
+          "User-Agent": "ocis-reference-probe/1",
+          "Accept-Encoding": "identity",
+          "Host": "localhost:9200",
+          "Depth": "0",
+          "Content-Type": "application/xml",
+          "Authorization": "<redacted>",
+          "Content-Length": "122"
+        },
+        "body": "<d:propfind xmlns:d=\"DAV:\" xmlns:x=\"urn:probe\"><d:prop><d:getetag/><d:getcontentlength/><x:unknown/></d:prop></d:propfind>"
+      },
+      "response": {
+        "status": 207,
+        "headers": {
+          "Access-Control-Expose-Headers": "Tus-Resumable, Tus-Version, Tus-Extension",
+          "Content-Length": "559",
+          "Content-Security-Policy": "child-src 'self'; connect-src 'self' blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; default-src 'none'; font-src 'self' data:; frame-ancestors 'self'; frame-src 'self' blob: https://embed.diagrams.net/; img-src 'self' data: blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; manifest-src 'self'; media-src 'self'; object-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+          "Content-Type": "application/xml; charset=utf-8",
+          "Date": "Tue, 17 Nov 2026 03:30:11 GMT",
+          "Dav": "1, 3, extended-mkcol",
+          "Referrer-Policy": "no-referrer",
+          "Strict-Transport-Security": "max-age=315360000; includeSubDomains; preload",
+          "Tus-Extension": "creation, creation-with-upload, checksum, expiration",
+          "Tus-Resumable": "1.0.0",
+          "Tus-Version": "1.0.0",
+          "Vary": "Origin, Prefer",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "SAMEORIGIN",
+          "X-Permitted-Cross-Domain-Policies": "none",
+          "X-Request-Id": "f4b262e47c87/hVNK2SyTI1-000040",
+          "X-Robots-Tag": "none",
+          "X-Xss-Protection": "0",
+          "Connection": "close"
+        },
+        "body": "<d:multistatus xmlns:s=\"http://sabredav.org/ns\" xmlns:d=\"DAV:\" xmlns:oc=\"http://owncloud.org/ns\"><d:response><d:href>/dav/spaces/UUID-2$UUID-3/probe-run/file.txt</d:href><d:propstat><d:prop><d:getetag>\"65578a947347267d60e1251ac89266f8\"</d:getetag><d:getcontentlength>36</d:getcontentlength></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat><d:propstat><d:prop><unknown xmlns=\"urn:probe\"></unknown></d:prop><d:status>HTTP/1.1 404 Not Found</d:status></d:propstat></d:response></d:multistatus>",
+        "bytes": 559,
+        "sha256": "0df4fcc43a1e7ce96f814dae51522917df7b309589fa2a65f2e8be8605fd9759"
+      },
+      "elapsed_seconds": 0.04
     },
     {
       "case": "range",
-      "method": "GET",
-      "recorded_status": 206,
-      "recorded_body_bytes": 10
+      "request": {
+        "method": "GET",
+        "url": "https://localhost:9200/dav/spaces/UUID-2$UUID-3/probe-run/file.txt",
+        "headers": {
+          "User-Agent": "ocis-reference-probe/1",
+          "Accept-Encoding": "identity",
+          "Host": "localhost:9200",
+          "Range": "bytes=10-19",
+          "Authorization": "<redacted>"
+        },
+        "body": null
+      },
+      "response": {
+        "status": 206,
+        "headers": {
+          "Accept-Ranges": "bytes",
+          "Content-Disposition": "attachment; filename*=UTF-8''file.txt; filename=\"file.txt\"",
+          "Content-Length": "10",
+          "Content-Range": "bytes 10-19/36",
+          "Content-Security-Policy": "child-src 'self'; connect-src 'self' blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; default-src 'none'; font-src 'self' data:; frame-ancestors 'self'; frame-src 'self' blob: https://embed.diagrams.net/; img-src 'self' data: blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; manifest-src 'self'; media-src 'self'; object-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+          "Content-Type": "text/plain; charset=UTF-8",
+          "Date": "Tue, 17 Nov 2026 03:30:11 GMT",
+          "Etag": "\"65578a947347267d60e1251ac89266f8\"",
+          "Last-Modified": "Tue, 17 Nov 2026 03:30:10 +0000",
+          "Oc-Checksum": "SHA1:a26704c04fc5f10db5aab58468035531cc542485",
+          "Oc-Etag": "\"65578a947347267d60e1251ac89266f8\"",
+          "Oc-Fileid": "UUID-2$UUID-3!UUID-4",
+          "Referrer-Policy": "no-referrer",
+          "Strict-Transport-Security": "max-age=315360000; includeSubDomains; preload",
+          "Vary": "Origin",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "SAMEORIGIN",
+          "X-Permitted-Cross-Domain-Policies": "none",
+          "X-Request-Id": "f4b262e47c87/hVNK2SyTI1-000042",
+          "X-Robots-Tag": "none",
+          "X-Xss-Protection": "0",
+          "Connection": "close"
+        },
+        "body": "abcdefghij",
+        "bytes": 10,
+        "sha256": "72399361da6a7754fec986dca5b7cbaf1c810a28ded4abaf56b2106d06cb78b0"
+      },
+      "elapsed_seconds": 0.028
     },
     {
       "case": "bad-range",
-      "method": "GET",
-      "recorded_status": 416,
-      "recorded_body_bytes": 0
+      "request": {
+        "method": "GET",
+        "url": "https://localhost:9200/dav/spaces/UUID-2$UUID-3/probe-run/file.txt",
+        "headers": {
+          "User-Agent": "ocis-reference-probe/1",
+          "Accept-Encoding": "identity",
+          "Host": "localhost:9200",
+          "Range": "bytes=10000-20000",
+          "Authorization": "<redacted>"
+        },
+        "body": null
+      },
+      "response": {
+        "status": 416,
+        "headers": {
+          "Content-Length": "0",
+          "Content-Range": "bytes */36",
+          "Content-Security-Policy": "child-src 'self'; connect-src 'self' blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; default-src 'none'; font-src 'self' data:; frame-ancestors 'self'; frame-src 'self' blob: https://embed.diagrams.net/; img-src 'self' data: blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; manifest-src 'self'; media-src 'self'; object-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+          "Date": "Tue, 17 Nov 2026 03:30:11 GMT",
+          "Referrer-Policy": "no-referrer",
+          "Strict-Transport-Security": "max-age=315360000; includeSubDomains; preload",
+          "Vary": "Origin",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "SAMEORIGIN",
+          "X-Permitted-Cross-Domain-Policies": "none",
+          "X-Request-Id": "f4b262e47c87/hVNK2SyTI1-000047",
+          "X-Robots-Tag": "none",
+          "X-Xss-Protection": "0",
+          "Connection": "close"
+        },
+        "body": "",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "elapsed_seconds": 0.032
     },
     {
       "case": "missing",
-      "method": "GET",
-      "recorded_status": 404,
-      "recorded_body_bytes": 0
+      "request": {
+        "method": "GET",
+        "url": "https://localhost:9200/dav/spaces/UUID-2$UUID-3/probe-run/missing",
+        "headers": {
+          "User-Agent": "ocis-reference-probe/1",
+          "Accept-Encoding": "identity",
+          "Host": "localhost:9200",
+          "Authorization": "<redacted>"
+        },
+        "body": null
+      },
+      "response": {
+        "status": 404,
+        "headers": {
+          "Content-Length": "0",
+          "Content-Security-Policy": "child-src 'self'; connect-src 'self' blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; default-src 'none'; font-src 'self' data:; frame-ancestors 'self'; frame-src 'self' blob: https://embed.diagrams.net/; img-src 'self' data: blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; manifest-src 'self'; media-src 'self'; object-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+          "Date": "Tue, 17 Nov 2026 03:30:11 GMT",
+          "Referrer-Policy": "no-referrer",
+          "Strict-Transport-Security": "max-age=315360000; includeSubDomains; preload",
+          "Vary": "Origin",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "SAMEORIGIN",
+          "X-Permitted-Cross-Domain-Policies": "none",
+          "X-Request-Id": "f4b262e47c87/hVNK2SyTI1-000052",
+          "X-Robots-Tag": "none",
+          "X-Xss-Protection": "0",
+          "Connection": "close"
+        },
+        "body": "",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "elapsed_seconds": 0.127
+    },
+    {
+      "case": "overwrite-target",
+      "request": {
+        "method": "PUT",
+        "url": "https://localhost:9200/dav/spaces/UUID-2$UUID-3/probe-run/existing.txt",
+        "headers": {
+          "User-Agent": "ocis-reference-probe/1",
+          "Accept-Encoding": "identity",
+          "Host": "localhost:9200",
+          "Authorization": "<redacted>",
+          "Content-Length": "8"
+        },
+        "body": "existing"
+      },
+      "response": {
+        "status": 201,
+        "headers": {
+          "Content-Length": "0",
+          "Content-Security-Policy": "child-src 'self'; connect-src 'self' blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; default-src 'none'; font-src 'self' data:; frame-ancestors 'self'; frame-src 'self' blob: https://embed.diagrams.net/; img-src 'self' data: blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; manifest-src 'self'; media-src 'self'; object-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+          "Date": "Tue, 17 Nov 2026 03:30:12 GMT",
+          "Etag": "\"294f765215bd6b11df0d07e82d9cc1f9\"",
+          "Last-Modified": "Tue, 17 Nov 2026 03:30:12 +0000",
+          "Oc-Etag": "\"294f765215bd6b11df0d07e82d9cc1f9\"",
+          "Oc-Fileid": "UUID-2$UUID-3!UUID-6",
+          "Referrer-Policy": "no-referrer",
+          "Strict-Transport-Security": "max-age=315360000; includeSubDomains; preload",
+          "Vary": "Origin",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "SAMEORIGIN",
+          "X-Permitted-Cross-Domain-Policies": "none",
+          "X-Request-Id": "f4b262e47c87/hVNK2SyTI1-000054",
+          "X-Robots-Tag": "none",
+          "X-Xss-Protection": "0",
+          "Connection": "close"
+        },
+        "body": "",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "elapsed_seconds": 0.038
     },
     {
       "case": "overwrite-false",
-      "method": "COPY",
-      "recorded_status": 412,
-      "recorded_body_bytes": 266
+      "request": {
+        "method": "COPY",
+        "url": "https://localhost:9200/dav/spaces/UUID-2$UUID-3/probe-run/file.txt",
+        "headers": {
+          "User-Agent": "ocis-reference-probe/1",
+          "Accept-Encoding": "identity",
+          "Host": "localhost:9200",
+          "Destination": "https://localhost:9200/dav/spaces/UUID-2$UUID-3/probe-run/existing.txt",
+          "Overwrite": "F",
+          "Authorization": "<redacted>"
+        },
+        "body": null
+      },
+      "response": {
+        "status": 412,
+        "headers": {
+          "Content-Length": "273",
+          "Content-Security-Policy": "child-src 'self'; connect-src 'self' blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; default-src 'none'; font-src 'self' data:; frame-ancestors 'self'; frame-src 'self' blob: https://embed.diagrams.net/; img-src 'self' data: blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; manifest-src 'self'; media-src 'self'; object-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+          "Content-Type": "text/xml; charset=utf-8",
+          "Date": "Tue, 17 Nov 2026 03:30:12 GMT",
+          "Referrer-Policy": "no-referrer",
+          "Strict-Transport-Security": "max-age=315360000; includeSubDomains; preload",
+          "Vary": "Origin",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "SAMEORIGIN",
+          "X-Permitted-Cross-Domain-Policies": "none",
+          "X-Request-Id": "f4b262e47c87/hVNK2SyTI1-000059",
+          "X-Robots-Tag": "none",
+          "X-Xss-Protection": "0",
+          "Connection": "close"
+        },
+        "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<d:error xmlns:d=\"DAV\" xmlns:s=\"http://sabredav.org/ns\"><s:exception>Sabre\\DAV\\Exception\\PreconditionFailed</s:exception><s:message>Could not overwrite Resource ./probe-run/existing.txt</s:message><s:errorcode></s:errorcode></d:error>",
+        "bytes": 273,
+        "sha256": "36724e27bedd6f1a63a3ce8c1118d6c765d04666b37af19bb9e5c3c5a348d8cf"
+      },
+      "elapsed_seconds": 0.036
+    },
+    {
+      "case": "overwrite-target-unchanged",
+      "request": {
+        "method": "GET",
+        "url": "https://localhost:9200/dav/spaces/UUID-2$UUID-3/probe-run/existing.txt",
+        "headers": {
+          "User-Agent": "ocis-reference-probe/1",
+          "Accept-Encoding": "identity",
+          "Host": "localhost:9200",
+          "Authorization": "<redacted>"
+        },
+        "body": null
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Accept-Ranges": "bytes",
+          "Content-Disposition": "attachment; filename*=UTF-8''existing.txt; filename=\"existing.txt\"",
+          "Content-Length": "8",
+          "Content-Security-Policy": "child-src 'self'; connect-src 'self' blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; default-src 'none'; font-src 'self' data:; frame-ancestors 'self'; frame-src 'self' blob: https://embed.diagrams.net/; img-src 'self' data: blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; manifest-src 'self'; media-src 'self'; object-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+          "Content-Type": "text/plain; charset=UTF-8",
+          "Date": "Tue, 17 Nov 2026 03:30:12 GMT",
+          "Etag": "\"294f765215bd6b11df0d07e82d9cc1f9\"",
+          "Last-Modified": "Tue, 17 Nov 2026 03:30:12 +0000",
+          "Oc-Checksum": "SHA1:637487c884f6dd9a4a638fab826509cfdba90fa9",
+          "Oc-Etag": "\"294f765215bd6b11df0d07e82d9cc1f9\"",
+          "Oc-Fileid": "UUID-2$UUID-3!UUID-6",
+          "Referrer-Policy": "no-referrer",
+          "Strict-Transport-Security": "max-age=315360000; includeSubDomains; preload",
+          "Vary": "Origin",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "SAMEORIGIN",
+          "X-Permitted-Cross-Domain-Policies": "none",
+          "X-Request-Id": "f4b262e47c87/hVNK2SyTI1-000061",
+          "X-Robots-Tag": "none",
+          "X-Xss-Protection": "0",
+          "Connection": "close"
+        },
+        "body": "existing",
+        "bytes": 8,
+        "sha256": "afafb16ac47b9b3da9825787ce354896fce376ae6cb1b5a157fa682a122011a1"
+      },
+      "elapsed_seconds": 0.056
     },
     {
       "case": "bad-if-match",
-      "method": "PUT",
-      "recorded_status": 409,
-      "recorded_body_bytes": 0
+      "request": {
+        "method": "PUT",
+        "url": "https://localhost:9200/dav/spaces/UUID-2$UUID-3/probe-run/file.txt",
+        "headers": {
+          "User-Agent": "ocis-reference-probe/1",
+          "Accept-Encoding": "identity",
+          "Host": "localhost:9200",
+          "If-Match": "\"stale\"",
+          "Authorization": "<redacted>",
+          "Content-Length": "3"
+        },
+        "body": "bad"
+      },
+      "response": {
+        "status": 409,
+        "headers": {
+          "Content-Length": "0",
+          "Content-Security-Policy": "child-src 'self'; connect-src 'self' blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; default-src 'none'; font-src 'self' data:; frame-ancestors 'self'; frame-src 'self' blob: https://embed.diagrams.net/; img-src 'self' data: blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; manifest-src 'self'; media-src 'self'; object-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+          "Date": "Tue, 17 Nov 2026 03:30:12 GMT",
+          "Referrer-Policy": "no-referrer",
+          "Strict-Transport-Security": "max-age=315360000; includeSubDomains; preload",
+          "Vary": "Origin",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "SAMEORIGIN",
+          "X-Permitted-Cross-Domain-Policies": "none",
+          "X-Request-Id": "f4b262e47c87/hVNK2SyTI1-000066",
+          "X-Robots-Tag": "none",
+          "X-Xss-Protection": "0",
+          "Connection": "close"
+        },
+        "body": "",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "elapsed_seconds": 0.034
     },
     {
       "case": "missing-parent",
-      "method": "MKCOL",
-      "recorded_status": 409,
-      "recorded_body_bytes": 273
+      "request": {
+        "method": "MKCOL",
+        "url": "https://localhost:9200/dav/spaces/UUID-2$UUID-3/probe-run/absent/child",
+        "headers": {
+          "User-Agent": "ocis-reference-probe/1",
+          "Accept-Encoding": "identity",
+          "Host": "localhost:9200",
+          "Authorization": "<redacted>"
+        },
+        "body": null
+      },
+      "response": {
+        "status": 409,
+        "headers": {
+          "Content-Length": "272",
+          "Content-Security-Policy": "child-src 'self'; connect-src 'self' blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; default-src 'none'; font-src 'self' data:; frame-ancestors 'self'; frame-src 'self' blob: https://embed.diagrams.net/; img-src 'self' data: blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; manifest-src 'self'; media-src 'self'; object-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+          "Content-Type": "text/xml; charset=utf-8",
+          "Date": "Tue, 17 Nov 2026 03:30:12 GMT",
+          "Referrer-Policy": "no-referrer",
+          "Strict-Transport-Security": "max-age=315360000; includeSubDomains; preload",
+          "Vary": "Origin",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "SAMEORIGIN",
+          "X-Permitted-Cross-Domain-Policies": "none",
+          "X-Request-Id": "f4b262e47c87/hVNK2SyTI1-000068",
+          "X-Robots-Tag": "none",
+          "X-Xss-Protection": "0",
+          "Connection": "close"
+        },
+        "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<d:error xmlns:d=\"DAV\" xmlns:s=\"http://sabredav.org/ns\"><s:exception>Sabre\\DAV\\Exception\\Conflict</s:exception><s:message>create container: error: precondition failed: probe-run/absent</s:message><s:errorcode></s:errorcode></d:error>",
+        "bytes": 272,
+        "sha256": "97c5abb806c4ef3a1ed57d9d8019ffeb9b335652f82b9ad21cd3754c5274293d"
+      },
+      "elapsed_seconds": 0.032
+    },
+    {
+      "case": "copy-success",
+      "request": {
+        "method": "COPY",
+        "url": "https://localhost:9200/dav/spaces/UUID-2$UUID-3/probe-run/file.txt",
+        "headers": {
+          "User-Agent": "ocis-reference-probe/1",
+          "Accept-Encoding": "identity",
+          "Host": "localhost:9200",
+          "Destination": "https://localhost:9200/dav/spaces/UUID-2$UUID-3/probe-run/copy.txt",
+          "Overwrite": "F",
+          "Authorization": "<redacted>"
+        },
+        "body": null
+      },
+      "response": {
+        "status": 201,
+        "headers": {
+          "Content-Length": "0",
+          "Content-Security-Policy": "child-src 'self'; connect-src 'self' blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; default-src 'none'; font-src 'self' data:; frame-ancestors 'self'; frame-src 'self' blob: https://embed.diagrams.net/; img-src 'self' data: blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; manifest-src 'self'; media-src 'self'; object-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+          "Date": "Tue, 17 Nov 2026 03:30:13 GMT",
+          "Oc-Fileid": "UUID-2$UUID-3!UUID-7",
+          "Referrer-Policy": "no-referrer",
+          "Strict-Transport-Security": "max-age=315360000; includeSubDomains; preload",
+          "Vary": "Origin",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "SAMEORIGIN",
+          "X-Permitted-Cross-Domain-Policies": "none",
+          "X-Request-Id": "f4b262e47c87/hVNK2SyTI1-000070",
+          "X-Robots-Tag": "none",
+          "X-Xss-Protection": "0",
+          "Connection": "close"
+        },
+        "body": "",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "elapsed_seconds": 0.046
+    },
+    {
+      "case": "copy-content",
+      "request": {
+        "method": "GET",
+        "url": "https://localhost:9200/dav/spaces/UUID-2$UUID-3/probe-run/copy.txt",
+        "headers": {
+          "User-Agent": "ocis-reference-probe/1",
+          "Accept-Encoding": "identity",
+          "Host": "localhost:9200",
+          "Authorization": "<redacted>"
+        },
+        "body": null
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Accept-Ranges": "bytes",
+          "Content-Disposition": "attachment; filename*=UTF-8''copy.txt; filename=\"copy.txt\"",
+          "Content-Length": "36",
+          "Content-Security-Policy": "child-src 'self'; connect-src 'self' blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; default-src 'none'; font-src 'self' data:; frame-ancestors 'self'; frame-src 'self' blob: https://embed.diagrams.net/; img-src 'self' data: blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; manifest-src 'self'; media-src 'self'; object-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+          "Content-Type": "text/plain; charset=UTF-8",
+          "Date": "Tue, 17 Nov 2026 03:30:13 GMT",
+          "Etag": "\"02ba85bb6329c78b1276959f53b17117\"",
+          "Last-Modified": "Tue, 17 Nov 2026 03:30:13 +0000",
+          "Oc-Checksum": "SHA1:a26704c04fc5f10db5aab58468035531cc542485",
+          "Oc-Etag": "\"02ba85bb6329c78b1276959f53b17117\"",
+          "Oc-Fileid": "UUID-2$UUID-3!UUID-7",
+          "Referrer-Policy": "no-referrer",
+          "Strict-Transport-Security": "max-age=315360000; includeSubDomains; preload",
+          "Vary": "Origin",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "SAMEORIGIN",
+          "X-Permitted-Cross-Domain-Policies": "none",
+          "X-Request-Id": "f4b262e47c87/hVNK2SyTI1-000078",
+          "X-Robots-Tag": "none",
+          "X-Xss-Protection": "0",
+          "Connection": "close"
+        },
+        "body": "0123456789abcdefghijklmnopqrstuvwxyz",
+        "bytes": 36,
+        "sha256": "74e7e5bb9d22d6db26bf76946d40fff3ea9f0346b884fd0694920fccfad15e33"
+      },
+      "elapsed_seconds": 0.032
+    },
+    {
+      "case": "move-success",
+      "request": {
+        "method": "MOVE",
+        "url": "https://localhost:9200/dav/spaces/UUID-2$UUID-3/probe-run/copy.txt",
+        "headers": {
+          "User-Agent": "ocis-reference-probe/1",
+          "Accept-Encoding": "identity",
+          "Host": "localhost:9200",
+          "Destination": "https://localhost:9200/dav/spaces/UUID-2$UUID-3/probe-run/moved.txt",
+          "Overwrite": "F",
+          "Authorization": "<redacted>"
+        },
+        "body": null
+      },
+      "response": {
+        "status": 201,
+        "headers": {
+          "Content-Length": "0",
+          "Content-Security-Policy": "child-src 'self'; connect-src 'self' blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; default-src 'none'; font-src 'self' data:; frame-ancestors 'self'; frame-src 'self' blob: https://embed.diagrams.net/; img-src 'self' data: blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; manifest-src 'self'; media-src 'self'; object-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+          "Content-Type": "text/plain",
+          "Date": "Tue, 17 Nov 2026 03:30:13 GMT",
+          "Etag": "\"02ba85bb6329c78b1276959f53b17117\"",
+          "Oc-Etag": "\"02ba85bb6329c78b1276959f53b17117\"",
+          "Oc-Fileid": "UUID-2$UUID-3!UUID-7",
+          "Referrer-Policy": "no-referrer",
+          "Strict-Transport-Security": "max-age=315360000; includeSubDomains; preload",
+          "Vary": "Origin",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "SAMEORIGIN",
+          "X-Permitted-Cross-Domain-Policies": "none",
+          "X-Request-Id": "f4b262e47c87/hVNK2SyTI1-000083",
+          "X-Robots-Tag": "none",
+          "X-Xss-Protection": "0",
+          "Connection": "close"
+        },
+        "body": "",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "elapsed_seconds": 0.038
+    },
+    {
+      "case": "move-old-missing",
+      "request": {
+        "method": "GET",
+        "url": "https://localhost:9200/dav/spaces/UUID-2$UUID-3/probe-run/copy.txt",
+        "headers": {
+          "User-Agent": "ocis-reference-probe/1",
+          "Accept-Encoding": "identity",
+          "Host": "localhost:9200",
+          "Authorization": "<redacted>"
+        },
+        "body": null
+      },
+      "response": {
+        "status": 404,
+        "headers": {
+          "Content-Length": "0",
+          "Content-Security-Policy": "child-src 'self'; connect-src 'self' blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; default-src 'none'; font-src 'self' data:; frame-ancestors 'self'; frame-src 'self' blob: https://embed.diagrams.net/; img-src 'self' data: blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; manifest-src 'self'; media-src 'self'; object-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+          "Date": "Tue, 17 Nov 2026 03:30:13 GMT",
+          "Referrer-Policy": "no-referrer",
+          "Strict-Transport-Security": "max-age=315360000; includeSubDomains; preload",
+          "Vary": "Origin",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "SAMEORIGIN",
+          "X-Permitted-Cross-Domain-Policies": "none",
+          "X-Request-Id": "f4b262e47c87/hVNK2SyTI1-000085",
+          "X-Robots-Tag": "none",
+          "X-Xss-Protection": "0",
+          "Connection": "close"
+        },
+        "body": "",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "elapsed_seconds": 0.028
+    },
+    {
+      "case": "move-content",
+      "request": {
+        "method": "GET",
+        "url": "https://localhost:9200/dav/spaces/UUID-2$UUID-3/probe-run/moved.txt",
+        "headers": {
+          "User-Agent": "ocis-reference-probe/1",
+          "Accept-Encoding": "identity",
+          "Host": "localhost:9200",
+          "Authorization": "<redacted>"
+        },
+        "body": null
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Accept-Ranges": "bytes",
+          "Content-Disposition": "attachment; filename*=UTF-8''moved.txt; filename=\"moved.txt\"",
+          "Content-Length": "36",
+          "Content-Security-Policy": "child-src 'self'; connect-src 'self' blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; default-src 'none'; font-src 'self' data:; frame-ancestors 'self'; frame-src 'self' blob: https://embed.diagrams.net/; img-src 'self' data: blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; manifest-src 'self'; media-src 'self'; object-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+          "Content-Type": "text/plain; charset=UTF-8",
+          "Date": "Tue, 17 Nov 2026 03:30:14 GMT",
+          "Etag": "\"02ba85bb6329c78b1276959f53b17117\"",
+          "Last-Modified": "Tue, 17 Nov 2026 03:30:13 +0000",
+          "Oc-Checksum": "SHA1:a26704c04fc5f10db5aab58468035531cc542485",
+          "Oc-Etag": "\"02ba85bb6329c78b1276959f53b17117\"",
+          "Oc-Fileid": "UUID-2$UUID-3!UUID-7",
+          "Referrer-Policy": "no-referrer",
+          "Strict-Transport-Security": "max-age=315360000; includeSubDomains; preload",
+          "Vary": "Origin",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "SAMEORIGIN",
+          "X-Permitted-Cross-Domain-Policies": "none",
+          "X-Request-Id": "f4b262e47c87/hVNK2SyTI1-000087",
+          "X-Robots-Tag": "none",
+          "X-Xss-Protection": "0",
+          "Connection": "close"
+        },
+        "body": "0123456789abcdefghijklmnopqrstuvwxyz",
+        "bytes": 36,
+        "sha256": "74e7e5bb9d22d6db26bf76946d40fff3ea9f0346b884fd0694920fccfad15e33"
+      },
+      "elapsed_seconds": 0.084
     },
     {
       "case": "options",
-      "method": "OPTIONS",
-      "recorded_status": 204,
-      "recorded_body_bytes": 0
+      "request": {
+        "method": "OPTIONS",
+        "url": "https://localhost:9200/dav/spaces/UUID-2$UUID-3",
+        "headers": {
+          "User-Agent": "ocis-reference-probe/1",
+          "Accept-Encoding": "identity",
+          "Host": "localhost:9200",
+          "Authorization": "<redacted>"
+        },
+        "body": null
+      },
+      "response": {
+        "status": 204,
+        "headers": {
+          "Access-Control-Allow-Headers": "Tus-Resumable",
+          "Access-Control-Expose-Headers": "Tus-Resumable,Tus-Version,Tus-Extension",
+          "Allow": "OPTIONS, LOCK, GET, HEAD, POST, DELETE, PROPPATCH, COPY, MOVE, UNLOCK, PROPFIND, MKCOL, REPORT, SEARCH, PUT",
+          "Content-Security-Policy": "child-src 'self'; connect-src 'self' blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; default-src 'none'; font-src 'self' data:; frame-ancestors 'self'; frame-src 'self' blob: https://embed.diagrams.net/; img-src 'self' data: blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; manifest-src 'self'; media-src 'self'; object-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+          "Content-Type": "application/xml",
+          "Date": "Tue, 17 Nov 2026 03:30:14 GMT",
+          "Dav": "1, 2",
+          "Ms-Author-Via": "DAV",
+          "Referrer-Policy": "no-referrer",
+          "Strict-Transport-Security": "max-age=315360000; includeSubDomains; preload",
+          "Tus-Checksum-Algorithm": "md5,sha1,crc32",
+          "Tus-Extension": "creation,creation-with-upload,checksum,expiration",
+          "Tus-Resumable": "1.0.0",
+          "Tus-Version": "1.0.0",
+          "Vary": "Origin",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "SAMEORIGIN",
+          "X-Permitted-Cross-Domain-Policies": "none",
+          "X-Request-Id": "f4b262e47c87/hVNK2SyTI1-000092",
+          "X-Robots-Tag": "none",
+          "X-Xss-Protection": "0",
+          "Connection": "close"
+        },
+        "body": "",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "elapsed_seconds": 0.004
     },
     {
       "case": "creation-with-data",
-      "method": "POST",
-      "recorded_status": 201,
-      "recorded_body_bytes": 0
+      "request": {
+        "method": "POST",
+        "url": "https://localhost:9200/dav/spaces/UUID-2$UUID-3",
+        "headers": {
+          "User-Agent": "ocis-reference-probe/1",
+          "Accept-Encoding": "identity",
+          "Host": "localhost:9200",
+          "Tus-Resumable": "1.0.0",
+          "Upload-Length": "6",
+          "Upload-Metadata": "filename cHJvYmUtcnVuL3R1cy50eHQ=,filetype YXBwbGljYXRpb24vb2N0ZXQtc3RyZWFt",
+          "Content-Type": "application/offset+octet-stream",
+          "Authorization": "<redacted>",
+          "Content-Length": "3"
+        },
+        "body": "abc"
+      },
+      "response": {
+        "status": 201,
+        "headers": {
+          "Access-Control-Allow-Headers": "Tus-Resumable, Upload-Length, Upload-Metadata, If-Match",
+          "Access-Control-Expose-Headers": "Tus-Resumable, Upload-Offset, Location",
+          "Content-Length": "0",
+          "Content-Security-Policy": "child-src 'self'; connect-src 'self' blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; default-src 'none'; font-src 'self' data:; frame-ancestors 'self'; frame-src 'self' blob: https://embed.diagrams.net/; img-src 'self' data: blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; manifest-src 'self'; media-src 'self'; object-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+          "Date": "Tue, 17 Nov 2026 03:30:14 GMT",
+          "Location": "https://localhost:9200/data/TOKEN-8",
+          "Referrer-Policy": "no-referrer",
+          "Strict-Transport-Security": "max-age=315360000; includeSubDomains; preload",
+          "Tus-Extension": "creation,creation-with-upload,checksum,expiration",
+          "Tus-Resumable": "1.0.0",
+          "Upload-Expires": "1794972614",
+          "Upload-Offset": "3",
+          "Vary": "Origin",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "SAMEORIGIN",
+          "X-Permitted-Cross-Domain-Policies": "none",
+          "X-Request-Id": "f4b262e47c87/hVNK2SyTI1-000094",
+          "X-Robots-Tag": "none",
+          "X-Xss-Protection": "0",
+          "Connection": "close"
+        },
+        "body": "",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "elapsed_seconds": 0.033
     },
     {
       "case": "head-partial",
-      "method": "HEAD",
-      "recorded_status": 200,
-      "recorded_body_bytes": 0
+      "request": {
+        "method": "HEAD",
+        "url": "https://localhost:9200/data/TOKEN-8",
+        "headers": {
+          "User-Agent": "ocis-reference-probe/1",
+          "Accept-Encoding": "identity",
+          "Host": "localhost:9200",
+          "Tus-Resumable": "1.0.0",
+          "Authorization": "<redacted>"
+        },
+        "body": null
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Length": "6",
+          "Content-Security-Policy": "child-src 'self'; connect-src 'self' blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; default-src 'none'; font-src 'self' data:; frame-ancestors 'self'; frame-src 'self' blob: https://embed.diagrams.net/; img-src 'self' data: blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; manifest-src 'self'; media-src 'self'; object-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+          "Date": "Tue, 17 Nov 2026 03:30:14 GMT",
+          "Referrer-Policy": "no-referrer",
+          "Strict-Transport-Security": "max-age=315360000; includeSubDomains; preload",
+          "Tus-Resumable": "1.0.0",
+          "Upload-Length": "6",
+          "Upload-Metadata": "dir L3Byb2JlLXJ1bg==,expires MTc5NDk3MjYxNA==,filename dHVzLnR4dA==,initiatorid ,lockid ,mtime MTc5NDg4NjIxNC40Mjc3MTE5MzM=,providerID NjY4MmYyNTItNTlhMS00MmE0LTkxNzktM2I2NGRiNDU1MjIy",
+          "Upload-Offset": "3",
+          "Vary": "Origin",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "SAMEORIGIN",
+          "X-Permitted-Cross-Domain-Policies": "none",
+          "X-Request-Id": "f4b262e47c87/hVNK2SyTI1-000099",
+          "X-Robots-Tag": "none",
+          "X-Xss-Protection": "0",
+          "Connection": "close"
+        },
+        "body": "",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "elapsed_seconds": 0.005
     },
     {
       "case": "offset-conflict",
-      "method": "PATCH",
-      "recorded_status": 409,
-      "recorded_body_bytes": 0
+      "request": {
+        "method": "PATCH",
+        "url": "https://localhost:9200/data/TOKEN-8",
+        "headers": {
+          "User-Agent": "ocis-reference-probe/1",
+          "Accept-Encoding": "identity",
+          "Host": "localhost:9200",
+          "Tus-Resumable": "1.0.0",
+          "Upload-Offset": "0",
+          "Content-Type": "application/offset+octet-stream",
+          "Authorization": "<redacted>",
+          "Content-Length": "2"
+        },
+        "body": "xx"
+      },
+      "response": {
+        "status": 409,
+        "headers": {
+          "Content-Length": "0",
+          "Content-Security-Policy": "child-src 'self'; connect-src 'self' blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; default-src 'none'; font-src 'self' data:; frame-ancestors 'self'; frame-src 'self' blob: https://embed.diagrams.net/; img-src 'self' data: blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; manifest-src 'self'; media-src 'self'; object-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+          "Content-Type": "text/plain; charset=utf-8",
+          "Date": "Tue, 17 Nov 2026 03:30:14 GMT",
+          "Oc-Fileid": "UUID-2$UUID-3!UUID-9",
+          "Referrer-Policy": "no-referrer",
+          "Strict-Transport-Security": "max-age=315360000; includeSubDomains; preload",
+          "Tus-Resumable": "1.0.0",
+          "Upload-Expires": "1794972614",
+          "Vary": "Origin",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "SAMEORIGIN",
+          "X-Permitted-Cross-Domain-Policies": "none",
+          "X-Request-Id": "f4b262e47c87/hVNK2SyTI1-000102",
+          "X-Robots-Tag": "none",
+          "X-Xss-Protection": "0",
+          "Connection": "close"
+        },
+        "body": "",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "elapsed_seconds": 0.005
     },
     {
       "case": "complete",
-      "method": "PATCH",
-      "recorded_status": 204,
-      "recorded_body_bytes": 0
+      "request": {
+        "method": "PATCH",
+        "url": "https://localhost:9200/data/TOKEN-8",
+        "headers": {
+          "User-Agent": "ocis-reference-probe/1",
+          "Accept-Encoding": "identity",
+          "Host": "localhost:9200",
+          "Tus-Resumable": "1.0.0",
+          "Upload-Offset": "3",
+          "Content-Type": "application/offset+octet-stream",
+          "Authorization": "<redacted>",
+          "Content-Length": "3"
+        },
+        "body": "def"
+      },
+      "response": {
+        "status": 204,
+        "headers": {
+          "Content-Security-Policy": "child-src 'self'; connect-src 'self' blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; default-src 'none'; font-src 'self' data:; frame-ancestors 'self'; frame-src 'self' blob: https://embed.diagrams.net/; img-src 'self' data: blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; manifest-src 'self'; media-src 'self'; object-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+          "Date": "Tue, 17 Nov 2026 03:30:14 GMT",
+          "Oc-Fileid": "UUID-2$UUID-3!UUID-9",
+          "Referrer-Policy": "no-referrer",
+          "Strict-Transport-Security": "max-age=315360000; includeSubDomains; preload",
+          "Tus-Resumable": "1.0.0",
+          "Upload-Expires": "1794972614",
+          "Upload-Offset": "6",
+          "Vary": "Origin",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "SAMEORIGIN",
+          "X-Permitted-Cross-Domain-Policies": "none",
+          "X-Request-Id": "f4b262e47c87/hVNK2SyTI1-000105",
+          "X-Robots-Tag": "none",
+          "X-Xss-Protection": "0",
+          "Connection": "close"
+        },
+        "body": "",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "elapsed_seconds": 0.01
     },
     {
       "case": "head-complete",
-      "method": "HEAD",
-      "recorded_status": 404,
-      "recorded_body_bytes": 0
+      "request": {
+        "method": "HEAD",
+        "url": "https://localhost:9200/data/TOKEN-8",
+        "headers": {
+          "User-Agent": "ocis-reference-probe/1",
+          "Accept-Encoding": "identity",
+          "Host": "localhost:9200",
+          "Tus-Resumable": "1.0.0",
+          "Authorization": "<redacted>"
+        },
+        "body": null
+      },
+      "response": {
+        "status": 404,
+        "headers": {
+          "Content-Length": "0",
+          "Content-Security-Policy": "child-src 'self'; connect-src 'self' blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; default-src 'none'; font-src 'self' data:; frame-ancestors 'self'; frame-src 'self' blob: https://embed.diagrams.net/; img-src 'self' data: blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; manifest-src 'self'; media-src 'self'; object-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+          "Content-Type": "text/plain; charset=utf-8",
+          "Date": "Tue, 17 Nov 2026 03:30:15 GMT",
+          "Referrer-Policy": "no-referrer",
+          "Strict-Transport-Security": "max-age=315360000; includeSubDomains; preload",
+          "Tus-Resumable": "1.0.0",
+          "Vary": "Origin",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "SAMEORIGIN",
+          "X-Permitted-Cross-Domain-Policies": "none",
+          "X-Request-Id": "f4b262e47c87/hVNK2SyTI1-000108",
+          "X-Robots-Tag": "none",
+          "X-Xss-Protection": "0",
+          "Connection": "close"
+        },
+        "body": "",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "elapsed_seconds": 0.005
     },
     {
       "case": "created-content",
-      "method": "GET",
-      "recorded_status": 200,
-      "recorded_body_bytes": 6
+      "request": {
+        "method": "GET",
+        "url": "https://localhost:9200/dav/spaces/UUID-2$UUID-3/probe-run/tus.txt",
+        "headers": {
+          "User-Agent": "ocis-reference-probe/1",
+          "Accept-Encoding": "identity",
+          "Host": "localhost:9200",
+          "Authorization": "<redacted>"
+        },
+        "body": null
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Accept-Ranges": "bytes",
+          "Content-Disposition": "attachment; filename*=UTF-8''tus.txt; filename=\"tus.txt\"",
+          "Content-Length": "6",
+          "Content-Security-Policy": "child-src 'self'; connect-src 'self' blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; default-src 'none'; font-src 'self' data:; frame-ancestors 'self'; frame-src 'self' blob: https://embed.diagrams.net/; img-src 'self' data: blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; manifest-src 'self'; media-src 'self'; object-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+          "Content-Type": "text/plain; charset=UTF-8",
+          "Date": "Tue, 17 Nov 2026 03:30:15 GMT",
+          "Etag": "\"e2e66691537e4b95964807d981ded860\"",
+          "Last-Modified": "Tue, 17 Nov 2026 03:30:14 +0000",
+          "Oc-Checksum": "SHA1:1f8ac10f23c5b5bc1167bda84b833e5c057a77d2",
+          "Oc-Etag": "\"e2e66691537e4b95964807d981ded860\"",
+          "Oc-Fileid": "UUID-2$UUID-3!UUID-9",
+          "Referrer-Policy": "no-referrer",
+          "Strict-Transport-Security": "max-age=315360000; includeSubDomains; preload",
+          "Vary": "Origin",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "SAMEORIGIN",
+          "X-Permitted-Cross-Domain-Policies": "none",
+          "X-Request-Id": "f4b262e47c87/hVNK2SyTI1-000111",
+          "X-Robots-Tag": "none",
+          "X-Xss-Protection": "0",
+          "Connection": "close"
+        },
+        "body": "abcdef",
+        "bytes": 6,
+        "sha256": "bef57ec7f53a6d40beb640a780a639c83bc29ac8a9816f1fc6c5c6dcd93c4721"
+      },
+      "elapsed_seconds": 0.033
     },
     {
       "case": "empty-post",
-      "method": "POST",
-      "recorded_status": 201,
-      "recorded_body_bytes": 0
+      "request": {
+        "method": "POST",
+        "url": "https://localhost:9200/dav/spaces/UUID-2$UUID-3",
+        "headers": {
+          "User-Agent": "ocis-reference-probe/1",
+          "Accept-Encoding": "identity",
+          "Host": "localhost:9200",
+          "Tus-Resumable": "1.0.0",
+          "Upload-Length": "0",
+          "Upload-Metadata": "filename cHJvYmUtcnVuL2VtcHR5LXBvc3Q=,filetype YXBwbGljYXRpb24vb2N0ZXQtc3RyZWFt",
+          "Content-Type": "application/offset+octet-stream",
+          "Authorization": "<redacted>",
+          "Content-Length": "0"
+        },
+        "body": ""
+      },
+      "response": {
+        "status": 201,
+        "headers": {
+          "Access-Control-Allow-Headers": "Tus-Resumable, Upload-Length, Upload-Metadata, If-Match",
+          "Access-Control-Expose-Headers": "Tus-Resumable, Upload-Offset, Location",
+          "Content-Length": "0",
+          "Content-Security-Policy": "child-src 'self'; connect-src 'self' blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; default-src 'none'; font-src 'self' data:; frame-ancestors 'self'; frame-src 'self' blob: https://embed.diagrams.net/; img-src 'self' data: blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; manifest-src 'self'; media-src 'self'; object-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+          "Date": "Tue, 17 Nov 2026 03:30:15 GMT",
+          "Location": "",
+          "Referrer-Policy": "no-referrer",
+          "Strict-Transport-Security": "max-age=315360000; includeSubDomains; preload",
+          "Tus-Extension": "creation,creation-with-upload,checksum,expiration",
+          "Tus-Resumable": "1.0.0",
+          "Vary": "Origin",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "SAMEORIGIN",
+          "X-Permitted-Cross-Domain-Policies": "none",
+          "X-Request-Id": "f4b262e47c87/hVNK2SyTI1-000116",
+          "X-Robots-Tag": "none",
+          "X-Xss-Protection": "0",
+          "Connection": "close"
+        },
+        "body": "",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "elapsed_seconds": 0.03
     },
     {
       "case": "path-metadata",
-      "method": "POST",
-      "recorded_status": 201,
-      "recorded_body_bytes": 0
+      "request": {
+        "method": "POST",
+        "url": "https://localhost:9200/dav/spaces/UUID-2$UUID-3",
+        "headers": {
+          "User-Agent": "ocis-reference-probe/1",
+          "Accept-Encoding": "identity",
+          "Host": "localhost:9200",
+          "Tus-Resumable": "1.0.0",
+          "Upload-Length": "4",
+          "Upload-Metadata": "filename cHJvYmUtcnVuL3BhdGg=,filetype YXBwbGljYXRpb24vb2N0ZXQtc3RyZWFt",
+          "Content-Type": "application/offset+octet-stream",
+          "Authorization": "<redacted>",
+          "Content-Length": "4"
+        },
+        "body": "path"
+      },
+      "response": {
+        "status": 201,
+        "headers": {
+          "Access-Control-Allow-Headers": "Tus-Resumable, Upload-Length, Upload-Metadata, If-Match",
+          "Access-Control-Expose-Headers": "Tus-Resumable, Upload-Offset, Location",
+          "Content-Length": "0",
+          "Content-Security-Policy": "child-src 'self'; connect-src 'self' blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; default-src 'none'; font-src 'self' data:; frame-ancestors 'self'; frame-src 'self' blob: https://embed.diagrams.net/; img-src 'self' data: blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; manifest-src 'self'; media-src 'self'; object-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+          "Content-Type": "application/octet-stream",
+          "Date": "Tue, 17 Nov 2026 03:30:15 GMT",
+          "Etag": "\"5be9c2c80b0c38f11de3fd4ad4daed0f\"",
+          "Last-Modified": "Tue, 17 Nov 2026 03:30:15 +0000",
+          "Location": "https://localhost:9200/data/TOKEN-10",
+          "Oc-Etag": "\"5be9c2c80b0c38f11de3fd4ad4daed0f\"",
+          "Oc-Fileid": "UUID-2$UUID-3!UUID-11",
+          "Oc-Perm": "RDNVWZP",
+          "Referrer-Policy": "no-referrer",
+          "Strict-Transport-Security": "max-age=315360000; includeSubDomains; preload",
+          "Tus-Extension": "creation,creation-with-upload,checksum,expiration",
+          "Tus-Resumable": "1.0.0",
+          "Upload-Expires": "1794972615",
+          "Upload-Offset": "4",
+          "Vary": "Origin",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "SAMEORIGIN",
+          "X-Permitted-Cross-Domain-Policies": "none",
+          "X-Request-Id": "f4b262e47c87/hVNK2SyTI1-000118",
+          "X-Robots-Tag": "none",
+          "X-Xss-Protection": "0",
+          "Connection": "close"
+        },
+        "body": "",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "elapsed_seconds": 0.033
     },
     {
       "case": "path-get",
-      "method": "GET",
-      "recorded_status": 200,
-      "recorded_body_bytes": 4
+      "request": {
+        "method": "GET",
+        "url": "https://localhost:9200/dav/spaces/UUID-2$UUID-3/probe-run/path",
+        "headers": {
+          "User-Agent": "ocis-reference-probe/1",
+          "Accept-Encoding": "identity",
+          "Host": "localhost:9200",
+          "Authorization": "<redacted>"
+        },
+        "body": null
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Accept-Ranges": "bytes",
+          "Content-Disposition": "attachment; filename*=UTF-8''path; filename=\"path\"",
+          "Content-Length": "4",
+          "Content-Security-Policy": "child-src 'self'; connect-src 'self' blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; default-src 'none'; font-src 'self' data:; frame-ancestors 'self'; frame-src 'self' blob: https://embed.diagrams.net/; img-src 'self' data: blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; manifest-src 'self'; media-src 'self'; object-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+          "Content-Type": "application/octet-stream; charset=UTF-8",
+          "Date": "Tue, 17 Nov 2026 03:30:15 GMT",
+          "Etag": "\"5be9c2c80b0c38f11de3fd4ad4daed0f\"",
+          "Last-Modified": "Tue, 17 Nov 2026 03:30:15 +0000",
+          "Oc-Checksum": "SHA1:3150ecd5e0294534a81ae047ddac559de481d774",
+          "Oc-Etag": "\"5be9c2c80b0c38f11de3fd4ad4daed0f\"",
+          "Oc-Fileid": "UUID-2$UUID-3!UUID-11",
+          "Referrer-Policy": "no-referrer",
+          "Strict-Transport-Security": "max-age=315360000; includeSubDomains; preload",
+          "Vary": "Origin",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "SAMEORIGIN",
+          "X-Permitted-Cross-Domain-Policies": "none",
+          "X-Request-Id": "f4b262e47c87/hVNK2SyTI1-000123",
+          "X-Robots-Tag": "none",
+          "X-Xss-Protection": "0",
+          "Connection": "close"
+        },
+        "body": "path",
+        "bytes": 4,
+        "sha256": "a0af9f865bf637e6736817f4ce552e4cdf7b8c36ea75bc254c1d1f0af744b5bf"
+      },
+      "elapsed_seconds": 0.032
+    },
+    {
+      "case": "preview-text",
+      "request": {
+        "method": "GET",
+        "url": "https://localhost:9200/dav/spaces/UUID-2$UUID-3/probe-run/file.txt?preview=1&x=32&y=32",
+        "headers": {
+          "User-Agent": "ocis-reference-probe/1",
+          "Accept-Encoding": "identity",
+          "Host": "localhost:9200",
+          "Authorization": "<redacted>"
+        },
+        "body": null
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Cache-Control": "no-cache, no-store, max-age=0, must-revalidate, value",
+          "Content-Security-Policy": "child-src 'self'; connect-src 'self' blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; default-src 'none'; font-src 'self' data:; frame-ancestors 'self'; frame-src 'self' blob: https://embed.diagrams.net/; img-src 'self' data: blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; manifest-src 'self'; media-src 'self'; object-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+          "Content-Type": "image/jpeg",
+          "Date": "Tue, 17 Nov 2026 03:30:16 GMT",
+          "Expires": "Thu, 01 Jan 1970 00:00:00 GMT",
+          "Last-Modified": "Tue, 17 Nov 2026 03:30:16 GMT",
+          "Referrer-Policy": "no-referrer",
+          "Strict-Transport-Security": "max-age=315360000; includeSubDomains; preload",
+          "Vary": "Origin",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "SAMEORIGIN",
+          "X-Permitted-Cross-Domain-Policies": "none",
+          "X-Request-Id": "f4b262e47c87/hVNK2SyTI1-000128",
+          "X-Robots-Tag": "none",
+          "X-Webdav-Version": "8.2.3+6cd25244",
+          "X-Xss-Protection": "0",
+          "Connection": "close",
+          "Transfer-Encoding": "chunked"
+        },
+        "body": {
+          "bytes": 626,
+          "sha256": "67a8ffdc7514a17c68aa11e0ca591aa4a7aac62acecb3ad4631bc589122d441e"
+        },
+        "bytes": 626,
+        "sha256": "67a8ffdc7514a17c68aa11e0ca591aa4a7aac62acecb3ad4631bc589122d441e"
+      },
+      "elapsed_seconds": 0.042
+    },
+    {
+      "case": "opaque-upload",
+      "request": {
+        "method": "PUT",
+        "url": "https://localhost:9200/dav/spaces/UUID-2$UUID-3/probe-run/opaque.bin",
+        "headers": {
+          "User-Agent": "ocis-reference-probe/1",
+          "Accept-Encoding": "identity",
+          "Host": "localhost:9200",
+          "Content-Type": "application/octet-stream",
+          "Authorization": "<redacted>",
+          "Content-Length": "4"
+        },
+        "body": {
+          "bytes": 4,
+          "sha256": "edc81f7e4ee358fb91e94bd9bd74079c3dcba36f40f2c8a36e7ae0567afecc8f"
+        }
+      },
+      "response": {
+        "status": 201,
+        "headers": {
+          "Content-Length": "0",
+          "Content-Security-Policy": "child-src 'self'; connect-src 'self' blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; default-src 'none'; font-src 'self' data:; frame-ancestors 'self'; frame-src 'self' blob: https://embed.diagrams.net/; img-src 'self' data: blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; manifest-src 'self'; media-src 'self'; object-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+          "Date": "Tue, 17 Nov 2026 03:30:16 GMT",
+          "Etag": "\"b2b1942a481c4a619db37f21273772aa\"",
+          "Last-Modified": "Tue, 17 Nov 2026 03:30:16 +0000",
+          "Oc-Etag": "\"b2b1942a481c4a619db37f21273772aa\"",
+          "Oc-Fileid": "UUID-2$UUID-3!UUID-12",
+          "Referrer-Policy": "no-referrer",
+          "Strict-Transport-Security": "max-age=315360000; includeSubDomains; preload",
+          "Vary": "Origin",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "SAMEORIGIN",
+          "X-Permitted-Cross-Domain-Policies": "none",
+          "X-Request-Id": "f4b262e47c87/hVNK2SyTI1-000134",
+          "X-Robots-Tag": "none",
+          "X-Xss-Protection": "0",
+          "Connection": "close"
+        },
+        "body": "",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "elapsed_seconds": 0.038
     },
     {
       "case": "preview-nonimage",
-      "method": "GET",
-      "recorded_status": 404,
-      "recorded_body_bytes": 228
+      "request": {
+        "method": "GET",
+        "url": "https://localhost:9200/dav/spaces/UUID-2$UUID-3/probe-run/opaque.bin?preview=1&x=32&y=32",
+        "headers": {
+          "User-Agent": "ocis-reference-probe/1",
+          "Accept-Encoding": "identity",
+          "Host": "localhost:9200",
+          "Authorization": "<redacted>"
+        },
+        "body": null
+      },
+      "response": {
+        "status": 404,
+        "headers": {
+          "Cache-Control": "no-cache, no-store, max-age=0, must-revalidate, value",
+          "Content-Length": "229",
+          "Content-Security-Policy": "child-src 'self'; connect-src 'self' blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; default-src 'none'; font-src 'self' data:; frame-ancestors 'self'; frame-src 'self' blob: https://embed.diagrams.net/; img-src 'self' data: blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; manifest-src 'self'; media-src 'self'; object-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+          "Content-Type": "application/xml; charset=utf-8",
+          "Date": "Tue, 17 Nov 2026 03:30:16 GMT",
+          "Expires": "Thu, 01 Jan 1970 00:00:00 GMT",
+          "Last-Modified": "Tue, 17 Nov 2026 03:30:16 GMT",
+          "Referrer-Policy": "no-referrer",
+          "Strict-Transport-Security": "max-age=315360000; includeSubDomains; preload",
+          "Vary": "Origin",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "SAMEORIGIN",
+          "X-Permitted-Cross-Domain-Policies": "none",
+          "X-Request-Id": "f4b262e47c87/hVNK2SyTI1-000139",
+          "X-Robots-Tag": "none",
+          "X-Webdav-Version": "8.2.3+6cd25244",
+          "X-Xss-Protection": "0",
+          "Connection": "close"
+        },
+        "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<d:error xmlns:d=\"DAV\" xmlns:s=\"http://sabredav.org/ns\"><s:exception>Sabre\\DAV\\Exception\\NotFound</s:exception><s:message>File with name opaque.bin could not be located</s:message></d:error>",
+        "bytes": 229,
+        "sha256": "8ed39ef369963e322bfa3cfaa0bb9c5fe27c178125a4a5b867acb949667826ea"
+      },
+      "elapsed_seconds": 0.028
+    },
+    {
+      "case": "initial-lock",
+      "request": {
+        "method": "LOCK",
+        "url": "https://localhost:9200/dav/spaces/UUID-2$UUID-3/probe-run/file.txt",
+        "headers": {
+          "User-Agent": "ocis-reference-probe/1",
+          "Accept-Encoding": "identity",
+          "Host": "localhost:9200",
+          "Content-Type": "application/xml",
+          "Timeout": "Second-60",
+          "Authorization": "<redacted>",
+          "Content-Length": "146"
+        },
+        "body": "<d:lockinfo xmlns:d=\"DAV:\"><d:lockscope><d:exclusive/></d:lockscope><d:locktype><d:write/></d:locktype><d:owner>local-probe</d:owner></d:lockinfo>"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Length": "599",
+          "Content-Security-Policy": "child-src 'self'; connect-src 'self' blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; default-src 'none'; font-src 'self' data:; frame-ancestors 'self'; frame-src 'self' blob: https://embed.diagrams.net/; img-src 'self' data: blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; manifest-src 'self'; media-src 'self'; object-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+          "Content-Type": "application/xml; charset=utf-8",
+          "Date": "Tue, 17 Nov 2026 03:30:16 GMT",
+          "Lock-Token": "<redacted>",
+          "Referrer-Policy": "no-referrer",
+          "Strict-Transport-Security": "max-age=315360000; includeSubDomains; preload",
+          "Vary": "Origin",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "SAMEORIGIN",
+          "X-Permitted-Cross-Domain-Policies": "none",
+          "X-Request-Id": "f4b262e47c87/hVNK2SyTI1-000141",
+          "X-Robots-Tag": "none",
+          "X-Xss-Protection": "0",
+          "Connection": "close"
+        },
+        "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<d:prop xmlns:d=\"DAV:\" xmlns:oc=\"http://owncloud.org/ns\"><d:lockdiscovery><d:activelock>\n  <d:locktype><d:write/></d:locktype>\n  <d:lockscope><d:exclusive/></d:lockscope>\n  <d:depth>infinity</d:depth>\n  <d:owner>local-probe</d:owner>\n  <d:timeout>Second-60</d:timeout>\n  <d:locktoken><d:href>urn:uuid:UUID-13</d:href></d:locktoken>\n  <d:lockroot><d:href>./probe-run/file.txt</d:href></d:lockroot>\n  <oc:ownername>Admin</oc:ownername>\n  <oc:locktime>2026-11-16T21:30:16-06:00</oc:locktime>\n</d:activelock></d:lockdiscovery></d:prop>",
+        "bytes": 599,
+        "sha256": "29129a4a353910f56ad074c8110086ba64b276fcfdd3dd4279cfcf881bee377e"
+      },
+      "elapsed_seconds": 0.032
     },
     {
       "case": "repeat-lock",
-      "method": "LOCK",
-      "recorded_status": 423,
-      "recorded_body_bytes": 222
+      "request": {
+        "method": "LOCK",
+        "url": "https://localhost:9200/dav/spaces/UUID-2$UUID-3/probe-run/file.txt",
+        "headers": {
+          "User-Agent": "ocis-reference-probe/1",
+          "Accept-Encoding": "identity",
+          "Host": "localhost:9200",
+          "Content-Type": "application/xml",
+          "Timeout": "Second-60",
+          "Authorization": "<redacted>",
+          "Content-Length": "146"
+        },
+        "body": "<d:lockinfo xmlns:d=\"DAV:\"><d:lockscope><d:exclusive/></d:lockscope><d:locktype><d:write/></d:locktype><d:owner>local-probe</d:owner></d:lockinfo>"
+      },
+      "response": {
+        "status": 423,
+        "headers": {
+          "Content-Length": "222",
+          "Content-Security-Policy": "child-src 'self'; connect-src 'self' blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; default-src 'none'; font-src 'self' data:; frame-ancestors 'self'; frame-src 'self' blob: https://embed.diagrams.net/; img-src 'self' data: blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; manifest-src 'self'; media-src 'self'; object-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+          "Content-Type": "text/xml; charset=utf-8",
+          "Date": "Tue, 17 Nov 2026 03:30:16 GMT",
+          "Referrer-Policy": "no-referrer",
+          "Strict-Transport-Security": "max-age=315360000; includeSubDomains; preload",
+          "Vary": "Origin",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "SAMEORIGIN",
+          "X-Permitted-Cross-Domain-Policies": "none",
+          "X-Request-Id": "f4b262e47c87/hVNK2SyTI1-000143",
+          "X-Robots-Tag": "none",
+          "X-Xss-Protection": "0",
+          "Connection": "close"
+        },
+        "body": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<d:error xmlns:d=\"DAV\" xmlns:s=\"http://sabredav.org/ns\"><s:exception>Sabre\\DAV\\Exception\\Locked</s:exception><s:message>webdav: locked</s:message><s:errorcode></s:errorcode></d:error>",
+        "bytes": 222,
+        "sha256": "1ce7af0b2ef6fa4dafbd84dd270facf993c9efb056e74e9731bcc79f1e0f3c7f"
+      },
+      "elapsed_seconds": 0.027
     },
     {
       "case": "drives-before-image",
-      "method": "GET",
-      "recorded_status": 200,
-      "recorded_body_bytes": 1251
+      "request": {
+        "method": "GET",
+        "url": "https://localhost:9200/graph/v1.0/me/drives",
+        "headers": {
+          "User-Agent": "ocis-reference-probe/1",
+          "Accept-Encoding": "identity",
+          "Host": "localhost:9200",
+          "Authorization": "<redacted>"
+        },
+        "body": null
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Length": "1245",
+          "Content-Security-Policy": "child-src 'self'; connect-src 'self' blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; default-src 'none'; font-src 'self' data:; frame-ancestors 'self'; frame-src 'self' blob: https://embed.diagrams.net/; img-src 'self' data: blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; manifest-src 'self'; media-src 'self'; object-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+          "Content-Type": "application/json",
+          "Date": "Tue, 17 Nov 2026 03:30:17 GMT",
+          "Referrer-Policy": "no-referrer",
+          "Strict-Transport-Security": "max-age=315360000; includeSubDomains; preload",
+          "Vary": "Origin",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "SAMEORIGIN",
+          "X-Graph-Version": "8.2.3+6cd25244",
+          "X-Permitted-Cross-Domain-Policies": "none",
+          "X-Request-Id": "f4b262e47c87/hVNK2SyTI1-000145",
+          "X-Robots-Tag": "none",
+          "X-Xss-Protection": "0",
+          "Connection": "close"
+        },
+        "body": "{\"value\":[{\"driveAlias\":\"virtual/shares\",\"driveType\":\"virtual\",\"id\":\"UUID-1$UUID-1\",\"name\":\"Shares\",\"root\":{\"eTag\":\"DECAFC00FEE\",\"id\":\"UUID-1$UUID-1\",\"webDavUrl\":\"https://localhost:9200/dav/spaces/UUID-1$UUID-1\"},\"webUrl\":\"https://localhost:9200/f/UUID-1$UUID-1\"},{\"driveAlias\":\"personal/admin\",\"driveType\":\"personal\",\"id\":\"UUID-2$UUID-3\",\"lastModifiedDateTime\":\"2026-11-16T21:30:16.325692581-06:00\",\"name\":\"Admin\",\"owner\":{\"user\":{\"displayName\":\"\",\"id\":\"UUID-3\"}},\"quota\":{\"remaining\":9223372036854775807,\"state\":\"normal\",\"total\":0,\"used\":94},\"root\":{\"eTag\":\"\\\"bb3f13bac6d5f3f1e744f5df49217b0d\\\"\",\"id\":\"UUID-2$UUID-3\",\"webDavUrl\":\"https://localhost:9200/dav/spaces/UUID-2$UUID-3\"},\"webUrl\":\"https://localhost:9200/f/UUID-2$UUID-3\"}]}\n",
+        "bytes": 1245,
+        "sha256": "d62c5ce7abefdc47a4264b98195249ec6b4c261f7c0a062555b076931741516b"
+      },
+      "elapsed_seconds": 0.038
     },
     {
       "case": "new-empty-PUT",
-      "method": "PUT",
-      "recorded_status": 201,
-      "recorded_body_bytes": 0
+      "request": {
+        "method": "PUT",
+        "url": "https://localhost:9200/dav/spaces/UUID-2$UUID-3/probe-run/empty-put",
+        "headers": {
+          "User-Agent": "ocis-reference-probe/1",
+          "Accept-Encoding": "identity",
+          "Host": "localhost:9200",
+          "Authorization": "<redacted>",
+          "Content-Length": "0"
+        },
+        "body": ""
+      },
+      "response": {
+        "status": 201,
+        "headers": {
+          "Content-Length": "0",
+          "Content-Security-Policy": "child-src 'self'; connect-src 'self' blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; default-src 'none'; font-src 'self' data:; frame-ancestors 'self'; frame-src 'self' blob: https://embed.diagrams.net/; img-src 'self' data: blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; manifest-src 'self'; media-src 'self'; object-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+          "Date": "Tue, 17 Nov 2026 03:30:17 GMT",
+          "Etag": "\"249f48f98c6dbbb0ca97214287dd0715\"",
+          "Last-Modified": "Tue, 17 Nov 2026 03:30:17 +0000",
+          "Oc-Etag": "\"249f48f98c6dbbb0ca97214287dd0715\"",
+          "Oc-Fileid": "UUID-2$UUID-3!UUID-14",
+          "Referrer-Policy": "no-referrer",
+          "Strict-Transport-Security": "max-age=315360000; includeSubDomains; preload",
+          "Vary": "Origin",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "SAMEORIGIN",
+          "X-Permitted-Cross-Domain-Policies": "none",
+          "X-Request-Id": "f4b262e47c87/hVNK2SyTI1-000147",
+          "X-Robots-Tag": "none",
+          "X-Xss-Protection": "0",
+          "Connection": "close"
+        },
+        "body": "",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "elapsed_seconds": 0.028
+    },
+    {
+      "case": "stale-fixture",
+      "request": {
+        "method": "PUT",
+        "url": "https://localhost:9200/dav/spaces/UUID-2$UUID-3/probe-run/stale.txt",
+        "headers": {
+          "User-Agent": "ocis-reference-probe/1",
+          "Accept-Encoding": "identity",
+          "Host": "localhost:9200",
+          "Authorization": "<redacted>",
+          "Content-Length": "7"
+        },
+        "body": "content"
+      },
+      "response": {
+        "status": 201,
+        "headers": {
+          "Content-Length": "0",
+          "Content-Security-Policy": "child-src 'self'; connect-src 'self' blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; default-src 'none'; font-src 'self' data:; frame-ancestors 'self'; frame-src 'self' blob: https://embed.diagrams.net/; img-src 'self' data: blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; manifest-src 'self'; media-src 'self'; object-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+          "Date": "Tue, 17 Nov 2026 03:30:17 GMT",
+          "Etag": "\"6f03a33872416926669fa9a0016d0214\"",
+          "Last-Modified": "Tue, 17 Nov 2026 03:30:17 +0000",
+          "Oc-Etag": "\"6f03a33872416926669fa9a0016d0214\"",
+          "Oc-Fileid": "UUID-2$UUID-3!UUID-15",
+          "Referrer-Policy": "no-referrer",
+          "Strict-Transport-Security": "max-age=315360000; includeSubDomains; preload",
+          "Vary": "Origin",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "SAMEORIGIN",
+          "X-Permitted-Cross-Domain-Policies": "none",
+          "X-Request-Id": "f4b262e47c87/hVNK2SyTI1-000149",
+          "X-Robots-Tag": "none",
+          "X-Xss-Protection": "0",
+          "Connection": "close"
+        },
+        "body": "",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "elapsed_seconds": 0.033
     },
     {
       "case": "stale-if-match",
-      "method": "PUT",
-      "recorded_status": 409,
-      "recorded_body_bytes": 0
+      "request": {
+        "method": "PUT",
+        "url": "https://localhost:9200/dav/spaces/UUID-2$UUID-3/probe-run/stale.txt",
+        "headers": {
+          "User-Agent": "ocis-reference-probe/1",
+          "Accept-Encoding": "identity",
+          "Host": "localhost:9200",
+          "If-Match": "\"stale\"",
+          "Authorization": "<redacted>",
+          "Content-Length": "7"
+        },
+        "body": "changed"
+      },
+      "response": {
+        "status": 409,
+        "headers": {
+          "Content-Length": "0",
+          "Content-Security-Policy": "child-src 'self'; connect-src 'self' blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; default-src 'none'; font-src 'self' data:; frame-ancestors 'self'; frame-src 'self' blob: https://embed.diagrams.net/; img-src 'self' data: blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; manifest-src 'self'; media-src 'self'; object-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+          "Date": "Tue, 17 Nov 2026 03:30:17 GMT",
+          "Referrer-Policy": "no-referrer",
+          "Strict-Transport-Security": "max-age=315360000; includeSubDomains; preload",
+          "Vary": "Origin",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "SAMEORIGIN",
+          "X-Permitted-Cross-Domain-Policies": "none",
+          "X-Request-Id": "f4b262e47c87/hVNK2SyTI1-000154",
+          "X-Robots-Tag": "none",
+          "X-Xss-Protection": "0",
+          "Connection": "close"
+        },
+        "body": "",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "elapsed_seconds": 0.026
     },
     {
       "case": "content-after-stale",
-      "method": "GET",
-      "recorded_status": 200,
-      "recorded_body_bytes": 7
+      "request": {
+        "method": "GET",
+        "url": "https://localhost:9200/dav/spaces/UUID-2$UUID-3/probe-run/stale.txt",
+        "headers": {
+          "User-Agent": "ocis-reference-probe/1",
+          "Accept-Encoding": "identity",
+          "Host": "localhost:9200",
+          "Authorization": "<redacted>"
+        },
+        "body": null
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Accept-Ranges": "bytes",
+          "Content-Disposition": "attachment; filename*=UTF-8''stale.txt; filename=\"stale.txt\"",
+          "Content-Length": "7",
+          "Content-Security-Policy": "child-src 'self'; connect-src 'self' blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; default-src 'none'; font-src 'self' data:; frame-ancestors 'self'; frame-src 'self' blob: https://embed.diagrams.net/; img-src 'self' data: blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; manifest-src 'self'; media-src 'self'; object-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+          "Content-Type": "text/plain; charset=UTF-8",
+          "Date": "Tue, 17 Nov 2026 03:30:17 GMT",
+          "Etag": "\"6f03a33872416926669fa9a0016d0214\"",
+          "Last-Modified": "Tue, 17 Nov 2026 03:30:17 +0000",
+          "Oc-Checksum": "SHA1:040f06fd774092478d450774f5ba30c5da78acc8",
+          "Oc-Etag": "\"6f03a33872416926669fa9a0016d0214\"",
+          "Oc-Fileid": "UUID-2$UUID-3!UUID-15",
+          "Referrer-Policy": "no-referrer",
+          "Strict-Transport-Security": "max-age=315360000; includeSubDomains; preload",
+          "Vary": "Origin",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "SAMEORIGIN",
+          "X-Permitted-Cross-Domain-Policies": "none",
+          "X-Request-Id": "f4b262e47c87/hVNK2SyTI1-000156",
+          "X-Robots-Tag": "none",
+          "X-Xss-Protection": "0",
+          "Connection": "close"
+        },
+        "body": "content",
+        "bytes": 7,
+        "sha256": "ed7002b439e9ac845f22357d822bac1444730fbdb6016d3ec9432297b9ec9f73"
+      },
+      "elapsed_seconds": 0.032
     },
     {
       "case": "empty-post-visible",
-      "method": "GET",
-      "recorded_status": 200,
-      "recorded_body_bytes": 0
+      "request": {
+        "method": "GET",
+        "url": "https://localhost:9200/dav/spaces/UUID-2$UUID-3/probe-run/empty-post",
+        "headers": {
+          "User-Agent": "ocis-reference-probe/1",
+          "Accept-Encoding": "identity",
+          "Host": "localhost:9200",
+          "Authorization": "<redacted>"
+        },
+        "body": null
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Disposition": "attachment; filename*=UTF-8''empty-post; filename=\"empty-post\"",
+          "Content-Length": "0",
+          "Content-Security-Policy": "child-src 'self'; connect-src 'self' blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; default-src 'none'; font-src 'self' data:; frame-ancestors 'self'; frame-src 'self' blob: https://embed.diagrams.net/; img-src 'self' data: blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; manifest-src 'self'; media-src 'self'; object-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+          "Content-Type": "application/octet-stream; charset=UTF-8",
+          "Date": "Tue, 17 Nov 2026 03:30:18 GMT",
+          "Etag": "\"baf81f0d4d72b973e5107b5aa5016eda\"",
+          "Last-Modified": "Tue, 17 Nov 2026 03:30:15 +0000",
+          "Oc-Etag": "\"baf81f0d4d72b973e5107b5aa5016eda\"",
+          "Oc-Fileid": "UUID-2$UUID-3!UUID-16",
+          "Referrer-Policy": "no-referrer",
+          "Strict-Transport-Security": "max-age=315360000; includeSubDomains; preload",
+          "Vary": "Origin",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "SAMEORIGIN",
+          "X-Permitted-Cross-Domain-Policies": "none",
+          "X-Request-Id": "f4b262e47c87/hVNK2SyTI1-000161",
+          "X-Robots-Tag": "none",
+          "X-Xss-Protection": "0",
+          "Connection": "close"
+        },
+        "body": "",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "elapsed_seconds": 0.03
     },
     {
       "case": "image-upload",
-      "method": "PUT",
-      "recorded_status": 201,
-      "recorded_body_bytes": 0
+      "request": {
+        "method": "PUT",
+        "url": "https://localhost:9200/dav/spaces/UUID-2$UUID-3/probe-run/image.png",
+        "headers": {
+          "User-Agent": "ocis-reference-probe/1",
+          "Accept-Encoding": "identity",
+          "Host": "localhost:9200",
+          "Content-Type": "image/png",
+          "Authorization": "<redacted>",
+          "Content-Length": "244"
+        },
+        "body": {
+          "bytes": 244,
+          "sha256": "02307169fdb67e12a11b2a7c4f28ae7659c854eb1b5b40c161d4ce29cf45540d",
+          "png_dimensions": [
+            96,
+            64
+          ]
+        }
+      },
+      "response": {
+        "status": 201,
+        "headers": {
+          "Content-Length": "0",
+          "Content-Security-Policy": "child-src 'self'; connect-src 'self' blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; default-src 'none'; font-src 'self' data:; frame-ancestors 'self'; frame-src 'self' blob: https://embed.diagrams.net/; img-src 'self' data: blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; manifest-src 'self'; media-src 'self'; object-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+          "Date": "Tue, 17 Nov 2026 03:30:18 GMT",
+          "Etag": "\"f15148c60ac2e3ed323359d974e71cfa\"",
+          "Last-Modified": "Tue, 17 Nov 2026 03:30:18 +0000",
+          "Oc-Etag": "\"f15148c60ac2e3ed323359d974e71cfa\"",
+          "Oc-Fileid": "UUID-2$UUID-3!UUID-17",
+          "Referrer-Policy": "no-referrer",
+          "Strict-Transport-Security": "max-age=315360000; includeSubDomains; preload",
+          "Vary": "Origin",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "SAMEORIGIN",
+          "X-Permitted-Cross-Domain-Policies": "none",
+          "X-Request-Id": "f4b262e47c87/hVNK2SyTI1-000166",
+          "X-Robots-Tag": "none",
+          "X-Xss-Protection": "0",
+          "Connection": "close"
+        },
+        "body": "",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "elapsed_seconds": 0.035
     },
     {
       "case": "drives-after-image",
-      "method": "GET",
-      "recorded_status": 200,
-      "recorded_body_bytes": 1250
+      "request": {
+        "method": "GET",
+        "url": "https://localhost:9200/graph/v1.0/me/drives",
+        "headers": {
+          "User-Agent": "ocis-reference-probe/1",
+          "Accept-Encoding": "identity",
+          "Host": "localhost:9200",
+          "Authorization": "<redacted>"
+        },
+        "body": null
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Length": "1245",
+          "Content-Security-Policy": "child-src 'self'; connect-src 'self' blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; default-src 'none'; font-src 'self' data:; frame-ancestors 'self'; frame-src 'self' blob: https://embed.diagrams.net/; img-src 'self' data: blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; manifest-src 'self'; media-src 'self'; object-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+          "Content-Type": "application/json",
+          "Date": "Tue, 17 Nov 2026 03:30:18 GMT",
+          "Referrer-Policy": "no-referrer",
+          "Strict-Transport-Security": "max-age=315360000; includeSubDomains; preload",
+          "Vary": "Origin",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "SAMEORIGIN",
+          "X-Graph-Version": "8.2.3+6cd25244",
+          "X-Permitted-Cross-Domain-Policies": "none",
+          "X-Request-Id": "f4b262e47c87/hVNK2SyTI1-000171",
+          "X-Robots-Tag": "none",
+          "X-Xss-Protection": "0",
+          "Connection": "close"
+        },
+        "body": "{\"value\":[{\"driveAlias\":\"personal/admin\",\"driveType\":\"personal\",\"id\":\"UUID-2$UUID-3\",\"lastModifiedDateTime\":\"2026-11-16T21:30:18.31784675-06:00\",\"name\":\"Admin\",\"owner\":{\"user\":{\"displayName\":\"\",\"id\":\"UUID-3\"}},\"quota\":{\"remaining\":9223372036854775807,\"state\":\"normal\",\"total\":0,\"used\":345},\"root\":{\"eTag\":\"\\\"9084c4e464ea96a089f9da156a17dc88\\\"\",\"id\":\"UUID-2$UUID-3\",\"webDavUrl\":\"https://localhost:9200/dav/spaces/UUID-2$UUID-3\"},\"webUrl\":\"https://localhost:9200/f/UUID-2$UUID-3\"},{\"driveAlias\":\"virtual/shares\",\"driveType\":\"virtual\",\"id\":\"UUID-1$UUID-1\",\"name\":\"Shares\",\"root\":{\"eTag\":\"DECAFC00FEE\",\"id\":\"UUID-1$UUID-1\",\"webDavUrl\":\"https://localhost:9200/dav/spaces/UUID-1$UUID-1\"},\"webUrl\":\"https://localhost:9200/f/UUID-1$UUID-1\"}]}\n",
+        "bytes": 1245,
+        "sha256": "7f19f3e6a9303a52e3671f7760a888681895bc722a61b93bb4d062b85fa708d7"
+      },
+      "elapsed_seconds": 0.034
     },
     {
       "case": "image-preview",
-      "method": "GET",
-      "recorded_status": 200,
-      "recorded_body_bytes": 103
+      "request": {
+        "method": "GET",
+        "url": "https://localhost:9200/dav/spaces/UUID-2$UUID-3/probe-run/image.png?preview=1&x=32&y=32&c=",
+        "headers": {
+          "User-Agent": "ocis-reference-probe/1",
+          "Accept-Encoding": "identity",
+          "Host": "localhost:9200",
+          "Authorization": "<redacted>"
+        },
+        "body": null
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Cache-Control": "no-cache, no-store, max-age=0, must-revalidate, value",
+          "Content-Length": "103",
+          "Content-Security-Policy": "child-src 'self'; connect-src 'self' blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; default-src 'none'; font-src 'self' data:; frame-ancestors 'self'; frame-src 'self' blob: https://embed.diagrams.net/; img-src 'self' data: blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; manifest-src 'self'; media-src 'self'; object-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+          "Content-Type": "image/png",
+          "Date": "Tue, 17 Nov 2026 03:30:18 GMT",
+          "Expires": "Thu, 01 Jan 1970 00:00:00 GMT",
+          "Last-Modified": "Tue, 17 Nov 2026 03:30:18 GMT",
+          "Referrer-Policy": "no-referrer",
+          "Strict-Transport-Security": "max-age=315360000; includeSubDomains; preload",
+          "Vary": "Origin",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "SAMEORIGIN",
+          "X-Permitted-Cross-Domain-Policies": "none",
+          "X-Request-Id": "f4b262e47c87/hVNK2SyTI1-000173",
+          "X-Robots-Tag": "none",
+          "X-Webdav-Version": "8.2.3+6cd25244",
+          "X-Xss-Protection": "0",
+          "Connection": "close"
+        },
+        "body": {
+          "bytes": 103,
+          "sha256": "531ee2be3b248c59fc9eca32d258304ac71b4a213b0f7474799703fa26d3b840",
+          "png_dimensions": [
+            32,
+            32
+          ]
+        },
+        "bytes": 103,
+        "sha256": "531ee2be3b248c59fc9eca32d258304ac71b4a213b0f7474799703fa26d3b840"
+      },
+      "elapsed_seconds": 0.038
     },
     {
       "case": "original-image",
-      "method": "GET",
-      "recorded_status": 200,
-      "recorded_body_bytes": 207
+      "request": {
+        "method": "GET",
+        "url": "https://localhost:9200/dav/spaces/UUID-2$UUID-3/probe-run/image.png",
+        "headers": {
+          "User-Agent": "ocis-reference-probe/1",
+          "Accept-Encoding": "identity",
+          "Host": "localhost:9200",
+          "Authorization": "<redacted>"
+        },
+        "body": null
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Accept-Ranges": "bytes",
+          "Content-Disposition": "attachment; filename*=UTF-8''image.png; filename=\"image.png\"",
+          "Content-Length": "244",
+          "Content-Security-Policy": "child-src 'self'; connect-src 'self' blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; default-src 'none'; font-src 'self' data:; frame-ancestors 'self'; frame-src 'self' blob: https://embed.diagrams.net/; img-src 'self' data: blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; manifest-src 'self'; media-src 'self'; object-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+          "Content-Type": "image/png; charset=UTF-8",
+          "Date": "Tue, 17 Nov 2026 03:30:18 GMT",
+          "Etag": "\"f15148c60ac2e3ed323359d974e71cfa\"",
+          "Last-Modified": "Tue, 17 Nov 2026 03:30:18 +0000",
+          "Oc-Checksum": "SHA1:4dc812fbc698c9f669153b5d39520cf146a68270",
+          "Oc-Etag": "\"f15148c60ac2e3ed323359d974e71cfa\"",
+          "Oc-Fileid": "UUID-2$UUID-3!UUID-17",
+          "Referrer-Policy": "no-referrer",
+          "Strict-Transport-Security": "max-age=315360000; includeSubDomains; preload",
+          "Vary": "Origin",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "SAMEORIGIN",
+          "X-Permitted-Cross-Domain-Policies": "none",
+          "X-Request-Id": "f4b262e47c87/hVNK2SyTI1-000179",
+          "X-Robots-Tag": "none",
+          "X-Xss-Protection": "0",
+          "Connection": "close"
+        },
+        "body": {
+          "bytes": 244,
+          "sha256": "02307169fdb67e12a11b2a7c4f28ae7659c854eb1b5b40c161d4ce29cf45540d",
+          "png_dimensions": [
+            96,
+            64
+          ]
+        },
+        "bytes": 244,
+        "sha256": "02307169fdb67e12a11b2a7c4f28ae7659c854eb1b5b40c161d4ce29cf45540d"
+      },
+      "elapsed_seconds": 0.03
     },
     {
       "case": "delete-image",
-      "method": "DELETE",
-      "recorded_status": 204,
-      "recorded_body_bytes": 0
+      "request": {
+        "method": "DELETE",
+        "url": "https://localhost:9200/dav/spaces/UUID-2$UUID-3/probe-run/image.png",
+        "headers": {
+          "User-Agent": "ocis-reference-probe/1",
+          "Accept-Encoding": "identity",
+          "Host": "localhost:9200",
+          "Authorization": "<redacted>"
+        },
+        "body": null
+      },
+      "response": {
+        "status": 204,
+        "headers": {
+          "Content-Security-Policy": "child-src 'self'; connect-src 'self' blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; default-src 'none'; font-src 'self' data:; frame-ancestors 'self'; frame-src 'self' blob: https://embed.diagrams.net/; img-src 'self' data: blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; manifest-src 'self'; media-src 'self'; object-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+          "Date": "Tue, 17 Nov 2026 03:30:19 GMT",
+          "Referrer-Policy": "no-referrer",
+          "Strict-Transport-Security": "max-age=315360000; includeSubDomains; preload",
+          "Vary": "Origin",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "SAMEORIGIN",
+          "X-Permitted-Cross-Domain-Policies": "none",
+          "X-Request-Id": "f4b262e47c87/hVNK2SyTI1-000184",
+          "X-Robots-Tag": "none",
+          "X-Xss-Protection": "0",
+          "Connection": "close"
+        },
+        "body": "",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "elapsed_seconds": 0.031
     },
     {
       "case": "deleted-image",
-      "method": "GET",
-      "recorded_status": 404,
-      "recorded_body_bytes": 0
+      "request": {
+        "method": "GET",
+        "url": "https://localhost:9200/dav/spaces/UUID-2$UUID-3/probe-run/image.png",
+        "headers": {
+          "User-Agent": "ocis-reference-probe/1",
+          "Accept-Encoding": "identity",
+          "Host": "localhost:9200",
+          "Authorization": "<redacted>"
+        },
+        "body": null
+      },
+      "response": {
+        "status": 404,
+        "headers": {
+          "Content-Length": "0",
+          "Content-Security-Policy": "child-src 'self'; connect-src 'self' blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; default-src 'none'; font-src 'self' data:; frame-ancestors 'self'; frame-src 'self' blob: https://embed.diagrams.net/; img-src 'self' data: blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; manifest-src 'self'; media-src 'self'; object-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+          "Date": "Tue, 17 Nov 2026 03:30:19 GMT",
+          "Referrer-Policy": "no-referrer",
+          "Strict-Transport-Security": "max-age=315360000; includeSubDomains; preload",
+          "Vary": "Origin",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "SAMEORIGIN",
+          "X-Permitted-Cross-Domain-Policies": "none",
+          "X-Request-Id": "f4b262e47c87/hVNK2SyTI1-000186",
+          "X-Robots-Tag": "none",
+          "X-Xss-Protection": "0",
+          "Connection": "close"
+        },
+        "body": "",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "elapsed_seconds": 0.026
     },
     {
       "case": "restart-create",
-      "method": "POST",
-      "recorded_status": 201,
-      "recorded_body_bytes": 0
+      "request": {
+        "method": "POST",
+        "url": "https://localhost:9200/dav/spaces/UUID-2$UUID-3",
+        "headers": {
+          "User-Agent": "ocis-reference-probe/1",
+          "Accept-Encoding": "identity",
+          "Host": "localhost:9200",
+          "Tus-Resumable": "1.0.0",
+          "Upload-Length": "6",
+          "Upload-Metadata": "filename cHJvYmUtcnVuL3Jlc3RhcnQ=,filetype YXBwbGljYXRpb24vb2N0ZXQtc3RyZWFt",
+          "Content-Type": "application/offset+octet-stream",
+          "Authorization": "<redacted>",
+          "Content-Length": "3"
+        },
+        "body": "abc"
+      },
+      "response": {
+        "status": 201,
+        "headers": {
+          "Access-Control-Allow-Headers": "Tus-Resumable, Upload-Length, Upload-Metadata, If-Match",
+          "Access-Control-Expose-Headers": "Tus-Resumable, Upload-Offset, Location",
+          "Content-Length": "0",
+          "Content-Security-Policy": "child-src 'self'; connect-src 'self' blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; default-src 'none'; font-src 'self' data:; frame-ancestors 'self'; frame-src 'self' blob: https://embed.diagrams.net/; img-src 'self' data: blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; manifest-src 'self'; media-src 'self'; object-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+          "Date": "Tue, 17 Nov 2026 03:30:19 GMT",
+          "Location": "https://localhost:9200/data/TOKEN-18",
+          "Referrer-Policy": "no-referrer",
+          "Strict-Transport-Security": "max-age=315360000; includeSubDomains; preload",
+          "Tus-Extension": "creation,creation-with-upload,checksum,expiration",
+          "Tus-Resumable": "1.0.0",
+          "Upload-Expires": "1794972619",
+          "Upload-Offset": "3",
+          "Vary": "Origin",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "SAMEORIGIN",
+          "X-Permitted-Cross-Domain-Policies": "none",
+          "X-Request-Id": "f4b262e47c87/hVNK2SyTI1-000188",
+          "X-Robots-Tag": "none",
+          "X-Xss-Protection": "0",
+          "Connection": "close"
+        },
+        "body": "",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "elapsed_seconds": 0.033
     },
     {
       "case": "restart-head",
-      "method": "HEAD",
-      "recorded_status": 200,
-      "recorded_body_bytes": 0
+      "request": {
+        "method": "HEAD",
+        "url": "https://localhost:9200/data/TOKEN-18",
+        "headers": {
+          "User-Agent": "ocis-reference-probe/1",
+          "Accept-Encoding": "identity",
+          "Host": "localhost:9200",
+          "Tus-Resumable": "1.0.0",
+          "Authorization": "<redacted>"
+        },
+        "body": null
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Cache-Control": "no-store",
+          "Content-Length": "6",
+          "Content-Security-Policy": "child-src 'self'; connect-src 'self' blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; default-src 'none'; font-src 'self' data:; frame-ancestors 'self'; frame-src 'self' blob: https://embed.diagrams.net/; img-src 'self' data: blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; manifest-src 'self'; media-src 'self'; object-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+          "Date": "Tue, 17 Nov 2026 03:30:37 GMT",
+          "Referrer-Policy": "no-referrer",
+          "Strict-Transport-Security": "max-age=315360000; includeSubDomains; preload",
+          "Tus-Resumable": "1.0.0",
+          "Upload-Length": "6",
+          "Upload-Metadata": "dir L3Byb2JlLXJ1bg==,expires MTc5NDk3MjYxOQ==,filename cmVzdGFydA==,initiatorid ,lockid ,mtime MTc5NDg4NjIxOS40Nzc0NzM1MzM=,providerID NjY4MmYyNTItNTlhMS00MmE0LTkxNzktM2I2NGRiNDU1MjIy",
+          "Upload-Offset": "3",
+          "Vary": "Origin",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "SAMEORIGIN",
+          "X-Permitted-Cross-Domain-Policies": "none",
+          "X-Request-Id": "f4b262e47c87/AIM4KoPV88-000020",
+          "X-Robots-Tag": "none",
+          "X-Xss-Protection": "0",
+          "Connection": "close"
+        },
+        "body": "",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "elapsed_seconds": 0.007
     },
     {
       "case": "restart-finish",
-      "method": "PATCH",
-      "recorded_status": 204,
-      "recorded_body_bytes": 0
+      "request": {
+        "method": "PATCH",
+        "url": "https://localhost:9200/data/TOKEN-18",
+        "headers": {
+          "User-Agent": "ocis-reference-probe/1",
+          "Accept-Encoding": "identity",
+          "Host": "localhost:9200",
+          "Tus-Resumable": "1.0.0",
+          "Upload-Offset": "3",
+          "Content-Type": "application/offset+octet-stream",
+          "Authorization": "<redacted>",
+          "Content-Length": "3"
+        },
+        "body": "def"
+      },
+      "response": {
+        "status": 204,
+        "headers": {
+          "Content-Security-Policy": "child-src 'self'; connect-src 'self' blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; default-src 'none'; font-src 'self' data:; frame-ancestors 'self'; frame-src 'self' blob: https://embed.diagrams.net/; img-src 'self' data: blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; manifest-src 'self'; media-src 'self'; object-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+          "Date": "Tue, 17 Nov 2026 03:30:38 GMT",
+          "Oc-Fileid": "UUID-2$UUID-3!UUID-19",
+          "Referrer-Policy": "no-referrer",
+          "Strict-Transport-Security": "max-age=315360000; includeSubDomains; preload",
+          "Tus-Resumable": "1.0.0",
+          "Upload-Expires": "1794972619",
+          "Upload-Offset": "6",
+          "Vary": "Origin",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "SAMEORIGIN",
+          "X-Permitted-Cross-Domain-Policies": "none",
+          "X-Request-Id": "f4b262e47c87/AIM4KoPV88-000023",
+          "X-Robots-Tag": "none",
+          "X-Xss-Protection": "0",
+          "Connection": "close"
+        },
+        "body": "",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "elapsed_seconds": 0.009
     },
     {
       "case": "restart-get",
-      "method": "GET",
-      "recorded_status": 200,
-      "recorded_body_bytes": 6
+      "request": {
+        "method": "GET",
+        "url": "https://localhost:9200/dav/spaces/UUID-2$UUID-3/probe-run/restart",
+        "headers": {
+          "User-Agent": "ocis-reference-probe/1",
+          "Accept-Encoding": "identity",
+          "Host": "localhost:9200",
+          "Authorization": "<redacted>"
+        },
+        "body": null
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Accept-Ranges": "bytes",
+          "Content-Disposition": "attachment; filename*=UTF-8''restart; filename=\"restart\"",
+          "Content-Length": "6",
+          "Content-Security-Policy": "child-src 'self'; connect-src 'self' blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; default-src 'none'; font-src 'self' data:; frame-ancestors 'self'; frame-src 'self' blob: https://embed.diagrams.net/; img-src 'self' data: blob: https://raw.githubusercontent.com/owncloud/awesome-ocis/; manifest-src 'self'; media-src 'self'; object-src 'self' blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
+          "Content-Type": "application/octet-stream; charset=UTF-8",
+          "Date": "Tue, 17 Nov 2026 03:30:38 GMT",
+          "Etag": "\"dc82bf196c4316ed1f73785cec9d3404\"",
+          "Last-Modified": "Tue, 17 Nov 2026 03:30:19 +0000",
+          "Oc-Checksum": "SHA1:1f8ac10f23c5b5bc1167bda84b833e5c057a77d2",
+          "Oc-Etag": "\"dc82bf196c4316ed1f73785cec9d3404\"",
+          "Oc-Fileid": "UUID-2$UUID-3!UUID-19",
+          "Referrer-Policy": "no-referrer",
+          "Strict-Transport-Security": "max-age=315360000; includeSubDomains; preload",
+          "Vary": "Origin",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "SAMEORIGIN",
+          "X-Permitted-Cross-Domain-Policies": "none",
+          "X-Request-Id": "f4b262e47c87/AIM4KoPV88-000026",
+          "X-Robots-Tag": "none",
+          "X-Xss-Protection": "0",
+          "Connection": "close"
+        },
+        "body": "abcdef",
+        "bytes": 6,
+        "sha256": "bef57ec7f53a6d40beb640a780a639c83bc29ac8a9816f1fc6c5c6dcd93c4721"
+      },
+      "elapsed_seconds": 0.401
     }
-  ],
-  "additional_recorded_facts": {
-    "initial_lock": {
-      "status": 200,
-      "body_bytes": 563
-    },
-    "descendant_root_etag_changed": true,
-    "image_preview_dimensions": [
-      32,
-      32
-    ],
-    "image_source_dimensions": [
-      96,
-      64
-    ],
-    "creation_upload_offset": 3,
-    "head_partial_offset": 3,
-    "completion_upload_offset": 6,
-    "completion_fileid_present": true,
-    "completion_etag_and_oc_perm_absent": true,
-    "restart_head_offset": 3,
-    "restart_final_content": "abcdef",
-    "range_requested": "bytes=10-19",
-    "unauth_challenge": "Bearer realm=\"localhost:9200\", charset=\"UTF-8\"",
-    "early_startup_transient_502": [
-      "user",
-      "capabilities",
-      "range"
-    ]
-  }
+  ]
 }

@@ -6,12 +6,12 @@ official CLI and rclone/Cyberduck execution**. It is not full multi-platform cer
 The proposed [profile](ocis-compatibility.md) separates normative goals from unresolved
 implementation/acceptance gates.
 
-**Recovery provenance:** the environment later reverted to an older snapshot. This
-report is reconstructed from recorded writing commands, tool results and agent reports.
-Raw runtime logs and original Git objects are not present in the restored snapshot.
-No tests were rerun merely by reconstructing this report. Historical results below are
-retained as recorded, not represented as fresh verification. The HTTP observations file
-is explicitly partial; unrecorded response headers/ETags were not recreated.
+**Evidence provenance:** the original 2026-11-16 raw logs were lost in a snapshot
+rollback. The narrative was first reconstructed honestly; on 2026-11-17 the missing
+reference HTTP and OAuth flows were **executed again**. The canonical HTTP JSON now
+contains new complete response-header captures and small bodies, not reconstructed
+old values. Credentials/session URLs remain deliberately redacted. Old and new runs
+are distinguished below; remaining client/platform/Worker acceptance gates still apply.
 
 ## Reproducible versions
 
@@ -108,8 +108,8 @@ platform/interruption tests. Close these bounded gaps rather than repeat broad r
 
 The historical independent TUS commit `fef204e` was recorded as passing 305 tests in
 14 files, both TypeScript checks, dry-run build and diff check. It was not included in
-the dev documentation commits. Its Git object is missing from the restored snapshot;
-recovery/recommit must be verified separately. The probes did not mutate real Drive,
+the dev documentation commits. Its old Git object was lost; the independently recovered TUS branch was pushed as
+`c45b349`. The new reference probes below do not rerun its production test suite. The probes did not mutate real Drive,
 deploy a Worker, or push branches.
 
 ## Follow-up: reference server and real-client execution
@@ -153,16 +153,19 @@ Direct HTTP reference probes (not client certification) additionally verified:
 - Zero-length POST created a readable empty file. filename `probe-run/path-file.txt`
   submitted at Space root resolved to that nested path.
 - A 96x64 PNG preview x=32/y=32 returned a 32x32 PNG; original GET remained the 207-byte
-  source, distinct from the 103-byte preview. Non-image preview returned 404.
+  source, distinct from the 103-byte preview. The opaque binary preview returned 404. A fresh text-file probe below demonstrates
+  that this must not be generalized to all non-image inputs.
 - Descendant upload changed Graph personal-root eTag. This verifies the reference
   requirement, not a working Drive-backed generation implementation.
 - Reference LOCK succeeded (200); a repeat conflicting lock returned 423. The intentionally
   lock-free profile must still test client behavior with locks disabled.
 
-[ocis-reference-observations.json](ocis-reference-observations.json) now contains only
-fields recoverable from retained outputs. Its original full header observations were
-lost. Missing headers are not an assertion they were absent from the response. Session
-URLs, credentials and bearer material are excluded.
+The earlier partial recovery has been superseded by a fresh run in
+[ocis-reference-observations.json](ocis-reference-observations.json). These are new
+values with all response-header keys, small synthetic JSON/XML bodies and binary
+hashes. Request headers are the explicitly supplied headers (urllib may add defaults).
+Session URLs, credentials and bearer material are redacted; stable UUID aliases preserve
+correlations. This is not a claim that the lost old response values were recovered.
 
 ### Reproduction outline
 
@@ -297,3 +300,54 @@ rclone/Cyberduck full chunks and aligning to 40 × 256 KiB. 8/12 MiB experiments
 historical evidence, not the selected default. This is not the hard ceiling, does not
 promise all clients follow it, and does not remove tail buffering/recovery tests.
 No new runtime measurement or production setting change is implied by this decision.
+
+## Fresh verification after snapshot loss (2026-11-17)
+
+The official oCIS 8.2.3 binary was downloaded again and matched its vendor SHA256:
+`7a386c4e85ffe629d6ffdfb0a0ea4e60c87ac3620892b9534d0a3ec8b14fc68a`.
+Seven fixed-version primary source files were retrieved and hashed again. Reproducible
+scripts, validators, evidence boundaries and manifests are in
+[the new probe bundle](probes/2026-11-17/README.md).
+
+### Reference HTTP contract
+
+A fresh isolated server completed **54 requests with 66 passing assertions**. The
+[HTTP reproduction instructions](probes/2026-11-17/http/README.md) and
+[validation results](probes/2026-11-17/http/validation.json) cover all cases retained
+in the partial recovery, plus explicit mixed 200/404 property results and successful
+COPY/MOVE with content checks. Failed overwrite uses two distinct existing files,
+not a same-path shortcut; the target remained unchanged.
+
+The fresh fixtures are not identical to the old fixtures, so body sizes/hashes and
+ETags can differ without implying a behavior change. The tests verify exact bytes,
+Range, stale-write preservation, TUS offsets and final bytes, empty-file visibility,
+paths, root ETag changes, and a real server stop/restart/resume. Completed TUS HEAD
+still returns 404; completion includes OC-FileID without ETag/OC-Perm; stale PUT
+If-Match still yields 409 in this reference version.
+
+**Preview correction:** a plain text file receives a generated JPEG preview (200),
+while an unsupported opaque binary gets 404. Therefore "non-image preview always
+returns 404" is incorrect. The PNG test confirms a 32×32 preview while the original
+96×64 image still downloads byte-for-byte unchanged. The adapter must use actual Drive
+preview availability, not infer it solely from an image/non-image MIME distinction.
+
+All response headers are captured with security-sensitive values redacted. Small
+synthetic XML/JSON bodies are retained; binary bodies have length/hash/dimensions.
+The scripts clean up temporary server configuration, keys and data. Do not interpret
+this reference contract as a Worker/Drive acceptance result or as support for every
+possible file preview type.
+
+### Reference authentication
+
+The updated assertion-bearing [OIDC script](probes/2026-11-17/oidc/probe.py) ran two
+fresh instances and finished with `complete=true`, `passed=true` in
+[its results](probes/2026-11-17/oidc/results.json). Nineteen response records cover
+real login/consent, code+S256 exchange, Bearer Graph access and refresh, code replay,
+wrong password, wrong Bearer and wrong verifier followed by reuse of that consumed
+code. Token field names and error codes are retained, never token values.
+
+This is still an HTTP sequence against the official identity provider, not current
+native GUI/Android login or a validation of our future reduced provider. Expiry,
+revocation, logout and the full redirect/client-binding security matrix remain outside
+this run. Partial-run files cannot claim pass: the scripts mark completion only after
+their explicit assertions succeed.

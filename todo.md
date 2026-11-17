@@ -164,7 +164,7 @@
 ### OC-02 动态探测补充
 
 - [x] 官方oCIS8.2.3本地运行，原版CLI6.0.3完成大文件分块上传、下载hash、改名/覆盖/删除；rclone1.76完成独立CRUD/空文件/Unicode/TUS。
-- [x] HTTP首块POST/HEAD/错误offset/最终完成、Range、预览、路径metadata、后代变更root ETag实测，差异在报告；原始完整observations已丢失，恢复JSON只含明确留存字段。
+- [x] HTTP首块POST/HEAD/错误offset/最终完成、Range、预览、路径metadata、后代变更root ETag实测，差异在报告；旧原始observations已丢失；2026-11-17已重新执行54请求/66断言，当前JSON是新完整脱敏响应记录，不是补造旧值。
 - [ ] rclone默认块10MiB不遵循10,000,000-byte capability。区分推荐块大小与实际接收上限，回归两类客户端。
 - [ ] CLI6是旧版Basic路径，不替代7.1 GUI OAuth、Android/Windows或精简capabilities验收；OC-02不因部分突破全部勾选。
 - [ ] OC-06补Cyberduck9.6可选filetype明文与尾逗号兼容，容忍/忽略可选hint但不放宽filename/path/checksum。
@@ -184,3 +184,10 @@
 - [x] 用户选定默认公告 **10MiB（10,485,760 bytes，40×256KiB）**，统一已测客户端默认完整块大小。
 - [ ] OC-04实现该公告；不是请求硬上限，也不保证其它客户端、末块/续传块遵循。独立接收上限，保留有界tail/journal及不规则块/恢复验收。
 - [x] Cyberduck CLI独立`env tus.chunk.size=...`8MiB/12MiB/256KiB实测生效，下载hash相同；这是本地配置非服务器协商，不泛化为GUI设置验收。
+
+### 2026-11-17 丢失证据重新探测
+
+- [x] 官方oCIS8.2.3重新下载校验；HTTP54请求/66断言通过，补齐完整响应头、小XML/JSON、二进制hash和可复现脚本，替代partial observations。
+- [x] 真实OIDC HTTP两实例重跑完成，token/refresh/Bearer与重放/错误verifier等19条响应记录通过断言，脱敏结果与脚本已保存；非GUI验收。
+- [x] 修正预览说法：文本可生成JPEG200，opaque binary404；PNG预览32×32与原图字节均验证。不把所有非图片视为无预览。
+- [ ] 原有Worker→Drive、GUI/Android/Windows、精简capabilities与部署验收仍按OC-02/OC-06/OC-09/OC-10推进；参考服务端重跑不替代这些门槛。

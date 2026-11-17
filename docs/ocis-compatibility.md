@@ -10,6 +10,8 @@ Implementation progress: [todo](../todo.md#ocis-兼容层实施计划).
 Recovery note: reconstructed from the original writing commands and subsequent recorded
 edits after the environment reverted to an older snapshot. Meaning and recorded decisions
 are preserved; this is not asserted to be byte-identical to the lost Git blob.
+Fresh 2026-11-17 reference HTTP/OIDC evidence now supersedes the partial response
+recovery, as documented in the probe report; this does not implement the adapter.
 
 ## 1. Goal and boundary
 
@@ -283,7 +285,10 @@ because the client boundary changes, unless the required upstream behavior is un
 Support authenticated DAV file GET with preview=1 and x/y/c parameters consumed by
 Android. c is a cache validator hint, not authentication. Fetch Drive thumbnailLink
 server-side, never redirect clients to a Google URL or expose credentials. Return actual
-image Content-Type and bounded bytes. Validate dimensions; do not promise exact resize
+image Content-Type and bounded bytes. Do not treat every non-image source as lacking
+a preview: the reference server can render text to JPEG, while an opaque binary lacks
+a preview. This adapter follows actual Drive thumbnail availability, not oCIS rendering
+coverage or an image-only heuristic. Validate dimensions; do not promise exact resize
 semantics absent an implementation. Missing preview produces a real not-found/unsupported
 response and has-preview=false where known, not the original file masquerading as a
 thumbnail. Cache by identity and version, enforce the same user/root authorization.

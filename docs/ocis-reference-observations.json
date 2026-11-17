@@ -1,0 +1,287 @@
+{
+  "recovery": {
+    "status": "partial reconstruction from explicit retained exec outputs and written findings",
+    "raw_http_results_available": false,
+    "original_full_sanitized_json_available": false,
+    "not_restored": [
+      "complete response headers",
+      "original ETag values and resource IDs",
+      "request/response timing and exact body text not printed",
+      "raw session URLs and credentials (intentionally excluded even before loss)"
+    ],
+    "omitted_field_meaning": "unknown/unrecovered, not absent in actual response",
+    "new_execution": false
+  },
+  "reference": "official oCIS8.2.3 local filesystem backend, not this Worker",
+  "cases": [
+    {
+      "case": "unauth",
+      "method": "PROPFIND",
+      "recorded_status": 401,
+      "recorded_body_bytes": 211
+    },
+    {
+      "case": "status",
+      "method": "GET",
+      "recorded_status": 200,
+      "recorded_body_bytes": 278
+    },
+    {
+      "case": "discovery",
+      "method": "GET",
+      "recorded_status": 200,
+      "recorded_body_bytes": 1774
+    },
+    {
+      "case": "user",
+      "method": "GET",
+      "recorded_status": 200,
+      "recorded_body_bytes": 159
+    },
+    {
+      "case": "capabilities",
+      "method": "GET",
+      "recorded_status": 200,
+      "recorded_body_bytes": 3443
+    },
+    {
+      "case": "drives",
+      "method": "GET",
+      "recorded_status": 200,
+      "recorded_body_bytes": 1251
+    },
+    {
+      "case": "properties",
+      "method": "PROPFIND",
+      "recorded_status": 207,
+      "recorded_body_bytes": 5223
+    },
+    {
+      "case": "range",
+      "method": "GET",
+      "recorded_status": 206,
+      "recorded_body_bytes": 10
+    },
+    {
+      "case": "bad-range",
+      "method": "GET",
+      "recorded_status": 416,
+      "recorded_body_bytes": 0
+    },
+    {
+      "case": "missing",
+      "method": "GET",
+      "recorded_status": 404,
+      "recorded_body_bytes": 0
+    },
+    {
+      "case": "overwrite-false",
+      "method": "COPY",
+      "recorded_status": 412,
+      "recorded_body_bytes": 266
+    },
+    {
+      "case": "bad-if-match",
+      "method": "PUT",
+      "recorded_status": 409,
+      "recorded_body_bytes": 0
+    },
+    {
+      "case": "missing-parent",
+      "method": "MKCOL",
+      "recorded_status": 409,
+      "recorded_body_bytes": 273
+    },
+    {
+      "case": "options",
+      "method": "OPTIONS",
+      "recorded_status": 204,
+      "recorded_body_bytes": 0
+    },
+    {
+      "case": "creation-with-data",
+      "method": "POST",
+      "recorded_status": 201,
+      "recorded_body_bytes": 0
+    },
+    {
+      "case": "head-partial",
+      "method": "HEAD",
+      "recorded_status": 200,
+      "recorded_body_bytes": 0
+    },
+    {
+      "case": "offset-conflict",
+      "method": "PATCH",
+      "recorded_status": 409,
+      "recorded_body_bytes": 0
+    },
+    {
+      "case": "complete",
+      "method": "PATCH",
+      "recorded_status": 204,
+      "recorded_body_bytes": 0
+    },
+    {
+      "case": "head-complete",
+      "method": "HEAD",
+      "recorded_status": 404,
+      "recorded_body_bytes": 0
+    },
+    {
+      "case": "created-content",
+      "method": "GET",
+      "recorded_status": 200,
+      "recorded_body_bytes": 6
+    },
+    {
+      "case": "empty-post",
+      "method": "POST",
+      "recorded_status": 201,
+      "recorded_body_bytes": 0
+    },
+    {
+      "case": "path-metadata",
+      "method": "POST",
+      "recorded_status": 201,
+      "recorded_body_bytes": 0
+    },
+    {
+      "case": "path-get",
+      "method": "GET",
+      "recorded_status": 200,
+      "recorded_body_bytes": 4
+    },
+    {
+      "case": "preview-nonimage",
+      "method": "GET",
+      "recorded_status": 404,
+      "recorded_body_bytes": 228
+    },
+    {
+      "case": "repeat-lock",
+      "method": "LOCK",
+      "recorded_status": 423,
+      "recorded_body_bytes": 222
+    },
+    {
+      "case": "drives-before-image",
+      "method": "GET",
+      "recorded_status": 200,
+      "recorded_body_bytes": 1251
+    },
+    {
+      "case": "new-empty-PUT",
+      "method": "PUT",
+      "recorded_status": 201,
+      "recorded_body_bytes": 0
+    },
+    {
+      "case": "stale-if-match",
+      "method": "PUT",
+      "recorded_status": 409,
+      "recorded_body_bytes": 0
+    },
+    {
+      "case": "content-after-stale",
+      "method": "GET",
+      "recorded_status": 200,
+      "recorded_body_bytes": 7
+    },
+    {
+      "case": "empty-post-visible",
+      "method": "GET",
+      "recorded_status": 200,
+      "recorded_body_bytes": 0
+    },
+    {
+      "case": "image-upload",
+      "method": "PUT",
+      "recorded_status": 201,
+      "recorded_body_bytes": 0
+    },
+    {
+      "case": "drives-after-image",
+      "method": "GET",
+      "recorded_status": 200,
+      "recorded_body_bytes": 1250
+    },
+    {
+      "case": "image-preview",
+      "method": "GET",
+      "recorded_status": 200,
+      "recorded_body_bytes": 103
+    },
+    {
+      "case": "original-image",
+      "method": "GET",
+      "recorded_status": 200,
+      "recorded_body_bytes": 207
+    },
+    {
+      "case": "delete-image",
+      "method": "DELETE",
+      "recorded_status": 204,
+      "recorded_body_bytes": 0
+    },
+    {
+      "case": "deleted-image",
+      "method": "GET",
+      "recorded_status": 404,
+      "recorded_body_bytes": 0
+    },
+    {
+      "case": "restart-create",
+      "method": "POST",
+      "recorded_status": 201,
+      "recorded_body_bytes": 0
+    },
+    {
+      "case": "restart-head",
+      "method": "HEAD",
+      "recorded_status": 200,
+      "recorded_body_bytes": 0
+    },
+    {
+      "case": "restart-finish",
+      "method": "PATCH",
+      "recorded_status": 204,
+      "recorded_body_bytes": 0
+    },
+    {
+      "case": "restart-get",
+      "method": "GET",
+      "recorded_status": 200,
+      "recorded_body_bytes": 6
+    }
+  ],
+  "additional_recorded_facts": {
+    "initial_lock": {
+      "status": 200,
+      "body_bytes": 563
+    },
+    "descendant_root_etag_changed": true,
+    "image_preview_dimensions": [
+      32,
+      32
+    ],
+    "image_source_dimensions": [
+      96,
+      64
+    ],
+    "creation_upload_offset": 3,
+    "head_partial_offset": 3,
+    "completion_upload_offset": 6,
+    "completion_fileid_present": true,
+    "completion_etag_and_oc_perm_absent": true,
+    "restart_head_offset": 3,
+    "restart_final_content": "abcdef",
+    "range_requested": "bytes=10-19",
+    "unauth_challenge": "Bearer realm=\"localhost:9200\", charset=\"UTF-8\"",
+    "early_startup_transient_502": [
+      "user",
+      "capabilities",
+      "range"
+    ]
+  }
+}

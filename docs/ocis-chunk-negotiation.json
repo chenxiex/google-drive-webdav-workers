@@ -1,0 +1,397 @@
+{
+  "recovery": {
+    "status": "reconstructed from retained tool outputs; not a fresh run",
+    "raw_logs_available": false,
+    "original_git_blob_available": false
+  },
+  "server": "official oCIS 8.2.3",
+  "file_bytes": 26214403,
+  "source_sha256": "7be259d71245aebcf1073acdc3c2262f8910873766ce02358df010cbdf2c68a3",
+  "changed_server_setting": "FRONTEND_UPLOAD_MAX_CHUNK_SIZE",
+  "clients": [
+    "ownCloud CLI 6.0.3.18040",
+    "rclone 1.76.0 vendor=infinitescale",
+    "Cyberduck CLI 9.6.0 owncloud profile"
+  ],
+  "runs": [
+    {
+      "advertised_max_chunk_size": 10000000,
+      "client": "cli",
+      "client_chunk_override": null,
+      "requests": [
+        {
+          "method": "POST",
+          "bytes": 10000000
+        },
+        {
+          "method": "PATCH",
+          "bytes": 10000000
+        },
+        {
+          "method": "PATCH",
+          "bytes": 6214403
+        }
+      ],
+      "recorded_exit": 0,
+      "recorded_download_byte_equal": true
+    },
+    {
+      "advertised_max_chunk_size": 10000000,
+      "client": "rclone",
+      "client_chunk_override": null,
+      "requests": [
+        {
+          "method": "POST",
+          "bytes": 0
+        },
+        {
+          "method": "PATCH",
+          "bytes": 10485760
+        },
+        {
+          "method": "PATCH",
+          "bytes": 10485760
+        },
+        {
+          "method": "PATCH",
+          "bytes": 5242883
+        }
+      ],
+      "recorded_exit": 0,
+      "recorded_download_byte_equal": true
+    },
+    {
+      "advertised_max_chunk_size": 10000000,
+      "client": "duck",
+      "client_chunk_override": null,
+      "requests": [
+        {
+          "method": "POST",
+          "bytes": 0
+        },
+        {
+          "method": "PATCH",
+          "bytes": 10485760
+        },
+        {
+          "method": "PATCH",
+          "bytes": 10485760
+        },
+        {
+          "method": "PATCH",
+          "bytes": 5242883
+        }
+      ],
+      "recorded_exit": 0,
+      "recorded_download_byte_equal": true
+    },
+    {
+      "advertised_max_chunk_size": 8388608,
+      "client": "cli",
+      "client_chunk_override": null,
+      "requests": [
+        {
+          "method": "POST",
+          "bytes": 8388608
+        },
+        {
+          "method": "PATCH",
+          "bytes": 8388608
+        },
+        {
+          "method": "PATCH",
+          "bytes": 8388608
+        },
+        {
+          "method": "PATCH",
+          "bytes": 1048579
+        }
+      ],
+      "recorded_exit": 0,
+      "recorded_download_byte_equal": true
+    },
+    {
+      "advertised_max_chunk_size": 8388608,
+      "client": "rclone",
+      "client_chunk_override": null,
+      "requests": [
+        {
+          "method": "POST",
+          "bytes": 0
+        },
+        {
+          "method": "PATCH",
+          "bytes": 10485760
+        },
+        {
+          "method": "PATCH",
+          "bytes": 10485760
+        },
+        {
+          "method": "PATCH",
+          "bytes": 5242883
+        }
+      ],
+      "recorded_exit": 0,
+      "recorded_download_byte_equal": true
+    },
+    {
+      "advertised_max_chunk_size": 8388608,
+      "client": "duck",
+      "client_chunk_override": null,
+      "requests": [
+        {
+          "method": "POST",
+          "bytes": 0
+        },
+        {
+          "method": "PATCH",
+          "bytes": 10485760
+        },
+        {
+          "method": "PATCH",
+          "bytes": 10485760
+        },
+        {
+          "method": "PATCH",
+          "bytes": 5242883
+        }
+      ],
+      "recorded_exit": 0,
+      "recorded_download_byte_equal": true
+    },
+    {
+      "advertised_max_chunk_size": 12582912,
+      "client": "cli",
+      "client_chunk_override": null,
+      "requests": [
+        {
+          "method": "POST",
+          "bytes": 12582912
+        },
+        {
+          "method": "PATCH",
+          "bytes": 12582912
+        },
+        {
+          "method": "PATCH",
+          "bytes": 1048579
+        }
+      ],
+      "recorded_exit": 0,
+      "recorded_download_byte_equal": true
+    },
+    {
+      "advertised_max_chunk_size": 12582912,
+      "client": "rclone",
+      "client_chunk_override": null,
+      "requests": [
+        {
+          "method": "POST",
+          "bytes": 0
+        },
+        {
+          "method": "PATCH",
+          "bytes": 10485760
+        },
+        {
+          "method": "PATCH",
+          "bytes": 10485760
+        },
+        {
+          "method": "PATCH",
+          "bytes": 5242883
+        }
+      ],
+      "recorded_exit": 0,
+      "recorded_download_byte_equal": true
+    },
+    {
+      "advertised_max_chunk_size": 12582912,
+      "client": "duck",
+      "client_chunk_override": null,
+      "requests": [
+        {
+          "method": "POST",
+          "bytes": 0
+        },
+        {
+          "method": "PATCH",
+          "bytes": 10485760
+        },
+        {
+          "method": "PATCH",
+          "bytes": 10485760
+        },
+        {
+          "method": "PATCH",
+          "bytes": 5242883
+        }
+      ],
+      "recorded_exit": 0,
+      "recorded_download_byte_equal": true
+    }
+  ],
+  "rclone_local_flag_cases": [
+    {
+      "flag": "8Mi",
+      "recorded_exit": 0,
+      "advertised_max_chunk_size": 8388608,
+      "post_bytes": 0,
+      "patch_bytes": [
+        10485760,
+        10485760,
+        5242883
+      ]
+    },
+    {
+      "flag": "12Mi",
+      "recorded_exit": 0,
+      "advertised_max_chunk_size": 8388608,
+      "post_bytes": 0,
+      "patch_bytes": [
+        10485760,
+        10485760,
+        5242883
+      ]
+    }
+  ],
+  "cyberduck_local_preference_cases": {
+    "setting": "process environment tus.chunk.size; not server capability",
+    "server": "official oCIS8.2.3 default frontend settings",
+    "file_bytes": 26214403,
+    "recorded_download_sha256": "336a4326216ee23f825a2e6c9ccf2492c73c67d424df857973db0b46fc2e8bae",
+    "recorded_all_download_hashes_equal_source": true,
+    "cases": {
+      "8388608": {
+        "patch_lengths": [
+          8388608,
+          8388608,
+          8388608,
+          1048579
+        ],
+        "post_length": [
+          0
+        ]
+      },
+      "12582912": {
+        "patch_lengths": [
+          12582912,
+          12582912,
+          1048579
+        ],
+        "post_length": [
+          0
+        ]
+      },
+      "262144": {
+        "patch_lengths": [
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          262144,
+          3
+        ],
+        "post_length": [
+          0
+        ]
+      }
+    }
+  }
+}

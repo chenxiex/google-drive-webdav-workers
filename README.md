@@ -63,3 +63,9 @@ There are no built-in OAuth defaults. Missing or whitespace-only OAuth bindings 
 ## Authentication
 
 - **WebDAV**: Access requires the username and password defined in your `USERS` environment variable or the `config.users` object.
+
+## Design and implementation tracking
+
+- [oCIS compatibility profile (design)](docs/ocis-compatibility.md)
+- [Client probe evidence and remaining gates](docs/ocis-probe-report.md)
+- [Implementation todo](todo.md)

@@ -280,9 +280,9 @@ Use `env 'tus.chunk.size=8388608' duck ...`; shell `export tus.chunk.size=...` i
 This is a CLI override, not server negotiation or a tested GUI-setting workflow.
 Do not test zero/negative sizes: the inspected loop lacks useful validation for them.
 
-Reconstructed credential-free sizes: [ocis-chunk-negotiation.json](ocis-chunk-negotiation.json).
-Every request size is preserved from the recorded matrix; its provenance distinguishes
-historical results from a new run.
+The historical matrix above is retained as history. The canonical
+[ocis-chunk-negotiation.json](ocis-chunk-negotiation.json) now contains the freshly
+validated 2026-11-17 matrix and override tests described below, not a reconstruction.
 
 ### Consequence for the adapter
 
@@ -351,3 +351,59 @@ native GUI/Android login or a validation of our future reduced provider. Expiry,
 revocation, logout and the full redirect/client-binding security matrix remain outside
 this run. Partial-run files cannot claim pass: the scripts mark completion only after
 their explicit assertions succeed.
+
+### Fresh actual-client matrix and file operations
+
+[Client evidence and reproduction](probes/2026-11-17/clients/README.md) now contain
+new runs with official ownCloud CLI 6.0.3.18040, rclone 1.76.0 and Cyberduck CLI
+9.6.0.46406. Their pinned artifact URLs and checksums are retained. Four server
+announcements (**10,000,000; 8 MiB; 12 MiB; and the selected 10 MiB default**) × three
+clients give **12 passing upload/download comparisons**, independently checked from
+recorded exit logs, OCS capability values and request methods/statuses/byte lengths.
+All used 26,214,403 bytes with source/download SHA256
+`7be259d71245aebcf1073acdc3c2262f8910873766ce02358df010cbdf2c68a3`.
+
+The old three-value result reproduced. At the newly tested **10 MiB** announcement:
+
+| Client | Initial POST | Subsequent PATCH bodies |
+| --- | ---: | --- |
+| ownCloud CLI 6.0.3 | 10,485,760 | 10,485,760; 5,242,883 |
+| rclone 1.76.0 | 0 | 10,485,760; 10,485,760; 5,242,883 |
+| Cyberduck CLI 9.6.0 | 0 | 10,485,760; 10,485,760; 5,242,883 |
+
+Five independent local-setting tests also passed again: Cyberduck 8 MiB/12 MiB/256 KiB
+preferences changed its request sizes, while rclone's Nextcloud 8Mi/12Mi options still
+did not change infinitescale's 10 MiB chunks. All five download hashes matched.
+
+A separate **21-command file-operation run** covered mkdir, Unicode/space names,
+empty files, copy, move, overwrite, download and delete across the clients. All client
+commands returned zero, and actual ownCloud CLI/rclone downloads matched the source
+hash. Cyberduck uploaded and downloaded **110,000,000 bytes**, matching SHA256
+`d04c2e7d8c8e01027ddd2ba299705657a43306d395aeceeb8f008fa7abd69bf3`.
+That large fixture differs from the old zero-filled fixture, so the different hash is
+expected. Its creation POST was empty, followed by ten 10,485,760-byte PATCHes and a
+5,142,400-byte final PATCH. Individual CRUD exit codes are not assertions of every
+possible semantic/race condition; response traces remain available for inspection.
+Cyberduck's copy still uses download/upload rather than server-side COPY.
+
+A loopback HTTPS recording proxy terminated a disposable local certificate and forwarded
+unchanged methods, paths and bodies to the unmodified official server on HTTP loopback.
+It did not invent capabilities or rewrite protocol responses. The trace also captures
+oCIS's own Go-client forwarding of data-bearing POSTs; those internal PATCHes are
+explicitly excluded from the client chunk totals, not silently counted twice. This
+buffering recorder is test infrastructure, not a production streaming/memory model.
+
+The independent [validator](probes/2026-11-17/clients/validate.py) requires every matrix
+capability value, exit code, hash and chunk sequence, plus all five overrides. It cannot
+quietly skip missing override files. The public runner uses random temporary credentials;
+the parameterized runner itself was additionally smoke-tested on the 10,000,000-byte
+three-client case. Fresh traces, immutable input manifests and SHA256SUMS are included.
+
+### Current evidence boundary
+
+The missing reference HTTP/client/auth evidence has now been replaced by new,
+reproducible, sanitized executions. This does not turn the design into an implemented
+Worker adapter. Current 7.1.1 GUI, Android and Windows, minimal disabled capabilities,
+Drive-backed change discovery, actual Worker-to-Drive arbitrary-boundary recovery,
+complete authentication hardening and real deployed ingress still have their explicit
+TODO gates. No real Drive changes or deployment were needed for this re-probe.

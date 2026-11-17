@@ -191,3 +191,8 @@
 - [x] 真实OIDC HTTP两实例重跑完成，token/refresh/Bearer与重放/错误verifier等19条响应记录通过断言，脱敏结果与脚本已保存；非GUI验收。
 - [x] 修正预览说法：文本可生成JPEG200，opaque binary404；PNG预览32×32与原图字节均验证。不把所有非图片视为无预览。
 - [ ] 原有Worker→Drive、GUI/Android/Windows、精简capabilities与部署验收仍按OC-02/OC-06/OC-09/OC-10推进；参考服务端重跑不替代这些门槛。
+
+- [x] 客户端证据重新运行：四种公告（10,000,000/8MiB/12MiB/最终10MiB）×三原版客户端共12组，完整文件下载hash一致；独立validator校验capability/退出码/首POST和每PATCH/末块。
+- [x] 5个本地配置覆盖重跑：Cyberduck8MiB/12MiB/256KiB生效，rclone Nextcloud8Mi/12Mi仍10MiB；下载hash均相同。
+- [x] 三客户端21次CRUD命令全部成功，CLI/rclone实际下载hash一致，Cyberduck110,000,000B实际下载hash一致。保留脱敏wire与复现脚本；不把命令退出码当全语义/并发验收。
+- [x] 参考证据分层保存：HTTP54请求/66断言、OIDC19响应、客户端12矩阵+21CRUD+5覆盖、固定官方来源hash，均无私有凭据。未增加默认生产测试的外部依赖或真实Drive访问。

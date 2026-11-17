@@ -1,0 +1,18 @@
+2026/11/16 21:31:20 ERROR failed to set GOMEMLIMIT package=github.com/KimMachineGun/automemlimit/memlimit error="failed to set GOMEMLIMIT: process is not in cgroup"
+dav https://localhost:9200/dav/spaces/410b20c2-4e89-4c1a-8cbf-2feec3930b4f$149d2512-5cc6-416b-aac3-13ef8183cb12
+10485760-rclone 0
+10485760-cli 0
+10485760-duck 0
+rclone 26214403 7be259d71245aebcf1073acdc3c2262f8910873766ce02358df010cbdf2c68a3 True
+cli 26214403 7be259d71245aebcf1073acdc3c2262f8910873766ce02358df010cbdf2c68a3 True
+duck 26214403 7be259d71245aebcf1073acdc3c2262f8910873766ce02358df010cbdf2c68a3 True
+duck-override-8388608 0
+duck-override-8388608 download_hash 7be259d71245aebcf1073acdc3c2262f8910873766ce02358df010cbdf2c68a3
+duck-override-12582912 0
+duck-override-12582912 download_hash 7be259d71245aebcf1073acdc3c2262f8910873766ce02358df010cbdf2c68a3
+duck-override-262144 0
+duck-override-262144 download_hash 7be259d71245aebcf1073acdc3c2262f8910873766ce02358df010cbdf2c68a3
+rclone-override-8Mi 0
+rclone-override-8Mi download_hash 7be259d71245aebcf1073acdc3c2262f8910873766ce02358df010cbdf2c68a3
+rclone-override-12Mi 0
+rclone-override-12Mi download_hash 7be259d71245aebcf1073acdc3c2262f8910873766ce02358df010cbdf2c68a3

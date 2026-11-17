@@ -1,0 +1,8 @@
+2026/11/16 21:29:56 ERROR failed to set GOMEMLIMIT package=github.com/KimMachineGun/automemlimit/memlimit error="failed to set GOMEMLIMIT: process is not in cgroup"
+dav https://localhost:9200/dav/spaces/025a9987-a60f-4fcb-832e-d6c69e5c9808$367f3185-be1e-4f82-877b-b15ef32a0c72
+12582912-rclone 0
+12582912-cli 0
+12582912-duck 0
+rclone 26214403 7be259d71245aebcf1073acdc3c2262f8910873766ce02358df010cbdf2c68a3 True
+cli 26214403 7be259d71245aebcf1073acdc3c2262f8910873766ce02358df010cbdf2c68a3 True
+duck 26214403 7be259d71245aebcf1073acdc3c2262f8910873766ce02358df010cbdf2c68a3 True

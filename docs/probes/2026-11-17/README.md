@@ -16,3 +16,17 @@ The probe scripts require official binaries and an isolated local-only environme
 self-signed TLS bypass is restricted to those temporary reference servers.
 
 See the main probe report for coverage, run results, and remaining acceptance gates.
+
+## Validated suites
+
+- [HTTP](http/README.md): 54 new requests, 66 assertions; complete response headers,
+  small synthetic bodies and binary hashes in [the canonical observations](../../ocis-reference-observations.json).
+- [OIDC](oidc/README.md): two fresh instances, 19 response records; assertion-bearing
+  runner reports complete/pass, with secret values omitted.
+- [Clients](clients/README.md): 12 actual-client chunk-matrix runs, 21 CRUD commands,
+  five local-setting cases, and matching downloads including Cyberduck 110 MB.
+
+The client's recording proxy sees both original client requests and oCIS internal
+forwarding. Validators separate them by the observed User-Agent; do not sum all PATCHes
+in the wire log as if they originated from the client. Every suite states its transport,
+fixture and assertion limits. The default project test suite was not changed.

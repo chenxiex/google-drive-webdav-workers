@@ -1,397 +1,596 @@
 {
-  "recovery": {
-    "status": "reconstructed from retained tool outputs; not a fresh run",
-    "raw_logs_available": false,
-    "original_git_blob_available": false
-  },
+  "validation": "passed independent assertions against retained logs and wire",
   "server": "official oCIS 8.2.3",
-  "file_bytes": 26214403,
-  "source_sha256": "7be259d71245aebcf1073acdc3c2262f8910873766ce02358df010cbdf2c68a3",
-  "changed_server_setting": "FRONTEND_UPLOAD_MAX_CHUNK_SIZE",
-  "clients": [
-    "ownCloud CLI 6.0.3.18040",
-    "rclone 1.76.0 vendor=infinitescale",
-    "Cyberduck CLI 9.6.0 owncloud profile"
-  ],
-  "runs": [
+  "clients": {
+    "cli": "official owncloudcmd 6.0.3.18040, not GUI 7.1.1",
+    "rclone": "1.76.0 vendor=infinitescale",
+    "duck": "Cyberduck CLI 9.6.0.46406 owncloud profile"
+  },
+  "matrix": [
     {
-      "advertised_max_chunk_size": 10000000,
-      "client": "cli",
-      "client_chunk_override": null,
-      "requests": [
-        {
-          "method": "POST",
-          "bytes": 10000000
-        },
-        {
-          "method": "PATCH",
-          "bytes": 10000000
-        },
-        {
-          "method": "PATCH",
-          "bytes": 6214403
-        }
-      ],
-      "recorded_exit": 0,
-      "recorded_download_byte_equal": true
-    },
-    {
-      "advertised_max_chunk_size": 10000000,
+      "advertised_chunk_size": 10000000,
       "client": "rclone",
-      "client_chunk_override": null,
+      "exit_code": 0,
+      "source_and_download_sha256": "7be259d71245aebcf1073acdc3c2262f8910873766ce02358df010cbdf2c68a3",
+      "file_bytes": 26214403,
       "requests": [
         {
           "method": "POST",
-          "bytes": 0
+          "bytes": 0,
+          "status": 201
         },
         {
           "method": "PATCH",
-          "bytes": 10485760
+          "bytes": 10485760,
+          "status": 204
         },
         {
           "method": "PATCH",
-          "bytes": 10485760
+          "bytes": 10485760,
+          "status": 204
         },
         {
           "method": "PATCH",
-          "bytes": 5242883
+          "bytes": 5242883,
+          "status": 204
         }
-      ],
-      "recorded_exit": 0,
-      "recorded_download_byte_equal": true
-    },
-    {
-      "advertised_max_chunk_size": 10000000,
-      "client": "duck",
-      "client_chunk_override": null,
-      "requests": [
-        {
-          "method": "POST",
-          "bytes": 0
-        },
-        {
-          "method": "PATCH",
-          "bytes": 10485760
-        },
-        {
-          "method": "PATCH",
-          "bytes": 10485760
-        },
-        {
-          "method": "PATCH",
-          "bytes": 5242883
-        }
-      ],
-      "recorded_exit": 0,
-      "recorded_download_byte_equal": true
-    },
-    {
-      "advertised_max_chunk_size": 8388608,
-      "client": "cli",
-      "client_chunk_override": null,
-      "requests": [
-        {
-          "method": "POST",
-          "bytes": 8388608
-        },
-        {
-          "method": "PATCH",
-          "bytes": 8388608
-        },
-        {
-          "method": "PATCH",
-          "bytes": 8388608
-        },
-        {
-          "method": "PATCH",
-          "bytes": 1048579
-        }
-      ],
-      "recorded_exit": 0,
-      "recorded_download_byte_equal": true
-    },
-    {
-      "advertised_max_chunk_size": 8388608,
-      "client": "rclone",
-      "client_chunk_override": null,
-      "requests": [
-        {
-          "method": "POST",
-          "bytes": 0
-        },
-        {
-          "method": "PATCH",
-          "bytes": 10485760
-        },
-        {
-          "method": "PATCH",
-          "bytes": 10485760
-        },
-        {
-          "method": "PATCH",
-          "bytes": 5242883
-        }
-      ],
-      "recorded_exit": 0,
-      "recorded_download_byte_equal": true
-    },
-    {
-      "advertised_max_chunk_size": 8388608,
-      "client": "duck",
-      "client_chunk_override": null,
-      "requests": [
-        {
-          "method": "POST",
-          "bytes": 0
-        },
-        {
-          "method": "PATCH",
-          "bytes": 10485760
-        },
-        {
-          "method": "PATCH",
-          "bytes": 10485760
-        },
-        {
-          "method": "PATCH",
-          "bytes": 5242883
-        }
-      ],
-      "recorded_exit": 0,
-      "recorded_download_byte_equal": true
-    },
-    {
-      "advertised_max_chunk_size": 12582912,
-      "client": "cli",
-      "client_chunk_override": null,
-      "requests": [
-        {
-          "method": "POST",
-          "bytes": 12582912
-        },
-        {
-          "method": "PATCH",
-          "bytes": 12582912
-        },
-        {
-          "method": "PATCH",
-          "bytes": 1048579
-        }
-      ],
-      "recorded_exit": 0,
-      "recorded_download_byte_equal": true
-    },
-    {
-      "advertised_max_chunk_size": 12582912,
-      "client": "rclone",
-      "client_chunk_override": null,
-      "requests": [
-        {
-          "method": "POST",
-          "bytes": 0
-        },
-        {
-          "method": "PATCH",
-          "bytes": 10485760
-        },
-        {
-          "method": "PATCH",
-          "bytes": 10485760
-        },
-        {
-          "method": "PATCH",
-          "bytes": 5242883
-        }
-      ],
-      "recorded_exit": 0,
-      "recorded_download_byte_equal": true
-    },
-    {
-      "advertised_max_chunk_size": 12582912,
-      "client": "duck",
-      "client_chunk_override": null,
-      "requests": [
-        {
-          "method": "POST",
-          "bytes": 0
-        },
-        {
-          "method": "PATCH",
-          "bytes": 10485760
-        },
-        {
-          "method": "PATCH",
-          "bytes": 10485760
-        },
-        {
-          "method": "PATCH",
-          "bytes": 5242883
-        }
-      ],
-      "recorded_exit": 0,
-      "recorded_download_byte_equal": true
-    }
-  ],
-  "rclone_local_flag_cases": [
-    {
-      "flag": "8Mi",
-      "recorded_exit": 0,
-      "advertised_max_chunk_size": 8388608,
-      "post_bytes": 0,
-      "patch_bytes": [
-        10485760,
-        10485760,
-        5242883
       ]
     },
     {
-      "flag": "12Mi",
-      "recorded_exit": 0,
-      "advertised_max_chunk_size": 8388608,
-      "post_bytes": 0,
-      "patch_bytes": [
-        10485760,
-        10485760,
-        5242883
+      "advertised_chunk_size": 10000000,
+      "client": "cli",
+      "exit_code": 0,
+      "source_and_download_sha256": "7be259d71245aebcf1073acdc3c2262f8910873766ce02358df010cbdf2c68a3",
+      "file_bytes": 26214403,
+      "requests": [
+        {
+          "method": "POST",
+          "bytes": 10000000,
+          "status": 201
+        },
+        {
+          "method": "PATCH",
+          "bytes": 10000000,
+          "status": 204
+        },
+        {
+          "method": "PATCH",
+          "bytes": 6214403,
+          "status": 204
+        }
+      ]
+    },
+    {
+      "advertised_chunk_size": 10000000,
+      "client": "duck",
+      "exit_code": 0,
+      "source_and_download_sha256": "7be259d71245aebcf1073acdc3c2262f8910873766ce02358df010cbdf2c68a3",
+      "file_bytes": 26214403,
+      "requests": [
+        {
+          "method": "POST",
+          "bytes": 0,
+          "status": 201
+        },
+        {
+          "method": "PATCH",
+          "bytes": 10485760,
+          "status": 204
+        },
+        {
+          "method": "PATCH",
+          "bytes": 10485760,
+          "status": 204
+        },
+        {
+          "method": "PATCH",
+          "bytes": 5242883,
+          "status": 204
+        }
+      ]
+    },
+    {
+      "advertised_chunk_size": 8388608,
+      "client": "rclone",
+      "exit_code": 0,
+      "source_and_download_sha256": "7be259d71245aebcf1073acdc3c2262f8910873766ce02358df010cbdf2c68a3",
+      "file_bytes": 26214403,
+      "requests": [
+        {
+          "method": "POST",
+          "bytes": 0,
+          "status": 201
+        },
+        {
+          "method": "PATCH",
+          "bytes": 10485760,
+          "status": 204
+        },
+        {
+          "method": "PATCH",
+          "bytes": 10485760,
+          "status": 204
+        },
+        {
+          "method": "PATCH",
+          "bytes": 5242883,
+          "status": 204
+        }
+      ]
+    },
+    {
+      "advertised_chunk_size": 8388608,
+      "client": "cli",
+      "exit_code": 0,
+      "source_and_download_sha256": "7be259d71245aebcf1073acdc3c2262f8910873766ce02358df010cbdf2c68a3",
+      "file_bytes": 26214403,
+      "requests": [
+        {
+          "method": "POST",
+          "bytes": 8388608,
+          "status": 201
+        },
+        {
+          "method": "PATCH",
+          "bytes": 8388608,
+          "status": 204
+        },
+        {
+          "method": "PATCH",
+          "bytes": 8388608,
+          "status": 204
+        },
+        {
+          "method": "PATCH",
+          "bytes": 1048579,
+          "status": 204
+        }
+      ]
+    },
+    {
+      "advertised_chunk_size": 8388608,
+      "client": "duck",
+      "exit_code": 0,
+      "source_and_download_sha256": "7be259d71245aebcf1073acdc3c2262f8910873766ce02358df010cbdf2c68a3",
+      "file_bytes": 26214403,
+      "requests": [
+        {
+          "method": "POST",
+          "bytes": 0,
+          "status": 201
+        },
+        {
+          "method": "PATCH",
+          "bytes": 10485760,
+          "status": 204
+        },
+        {
+          "method": "PATCH",
+          "bytes": 10485760,
+          "status": 204
+        },
+        {
+          "method": "PATCH",
+          "bytes": 5242883,
+          "status": 204
+        }
+      ]
+    },
+    {
+      "advertised_chunk_size": 12582912,
+      "client": "rclone",
+      "exit_code": 0,
+      "source_and_download_sha256": "7be259d71245aebcf1073acdc3c2262f8910873766ce02358df010cbdf2c68a3",
+      "file_bytes": 26214403,
+      "requests": [
+        {
+          "method": "POST",
+          "bytes": 0,
+          "status": 201
+        },
+        {
+          "method": "PATCH",
+          "bytes": 10485760,
+          "status": 204
+        },
+        {
+          "method": "PATCH",
+          "bytes": 10485760,
+          "status": 204
+        },
+        {
+          "method": "PATCH",
+          "bytes": 5242883,
+          "status": 204
+        }
+      ]
+    },
+    {
+      "advertised_chunk_size": 12582912,
+      "client": "cli",
+      "exit_code": 0,
+      "source_and_download_sha256": "7be259d71245aebcf1073acdc3c2262f8910873766ce02358df010cbdf2c68a3",
+      "file_bytes": 26214403,
+      "requests": [
+        {
+          "method": "POST",
+          "bytes": 12582912,
+          "status": 201
+        },
+        {
+          "method": "PATCH",
+          "bytes": 12582912,
+          "status": 204
+        },
+        {
+          "method": "PATCH",
+          "bytes": 1048579,
+          "status": 204
+        }
+      ]
+    },
+    {
+      "advertised_chunk_size": 12582912,
+      "client": "duck",
+      "exit_code": 0,
+      "source_and_download_sha256": "7be259d71245aebcf1073acdc3c2262f8910873766ce02358df010cbdf2c68a3",
+      "file_bytes": 26214403,
+      "requests": [
+        {
+          "method": "POST",
+          "bytes": 0,
+          "status": 201
+        },
+        {
+          "method": "PATCH",
+          "bytes": 10485760,
+          "status": 204
+        },
+        {
+          "method": "PATCH",
+          "bytes": 10485760,
+          "status": 204
+        },
+        {
+          "method": "PATCH",
+          "bytes": 5242883,
+          "status": 204
+        }
+      ]
+    },
+    {
+      "advertised_chunk_size": 10485760,
+      "client": "rclone",
+      "exit_code": 0,
+      "source_and_download_sha256": "7be259d71245aebcf1073acdc3c2262f8910873766ce02358df010cbdf2c68a3",
+      "file_bytes": 26214403,
+      "requests": [
+        {
+          "method": "POST",
+          "bytes": 0,
+          "status": 201
+        },
+        {
+          "method": "PATCH",
+          "bytes": 10485760,
+          "status": 204
+        },
+        {
+          "method": "PATCH",
+          "bytes": 10485760,
+          "status": 204
+        },
+        {
+          "method": "PATCH",
+          "bytes": 5242883,
+          "status": 204
+        }
+      ]
+    },
+    {
+      "advertised_chunk_size": 10485760,
+      "client": "cli",
+      "exit_code": 0,
+      "source_and_download_sha256": "7be259d71245aebcf1073acdc3c2262f8910873766ce02358df010cbdf2c68a3",
+      "file_bytes": 26214403,
+      "requests": [
+        {
+          "method": "POST",
+          "bytes": 10485760,
+          "status": 201
+        },
+        {
+          "method": "PATCH",
+          "bytes": 10485760,
+          "status": 204
+        },
+        {
+          "method": "PATCH",
+          "bytes": 5242883,
+          "status": 204
+        }
+      ]
+    },
+    {
+      "advertised_chunk_size": 10485760,
+      "client": "duck",
+      "exit_code": 0,
+      "source_and_download_sha256": "7be259d71245aebcf1073acdc3c2262f8910873766ce02358df010cbdf2c68a3",
+      "file_bytes": 26214403,
+      "requests": [
+        {
+          "method": "POST",
+          "bytes": 0,
+          "status": 201
+        },
+        {
+          "method": "PATCH",
+          "bytes": 10485760,
+          "status": 204
+        },
+        {
+          "method": "PATCH",
+          "bytes": 10485760,
+          "status": 204
+        },
+        {
+          "method": "PATCH",
+          "bytes": 5242883,
+          "status": 204
+        }
       ]
     }
   ],
-  "cyberduck_local_preference_cases": {
-    "setting": "process environment tus.chunk.size; not server capability",
-    "server": "official oCIS8.2.3 default frontend settings",
-    "file_bytes": 26214403,
-    "recorded_download_sha256": "336a4326216ee23f825a2e6c9ccf2492c73c67d424df857973db0b46fc2e8bae",
-    "recorded_all_download_hashes_equal_source": true,
-    "cases": {
-      "8388608": {
-        "patch_lengths": [
-          8388608,
-          8388608,
-          8388608,
-          1048579
-        ],
-        "post_length": [
-          0
-        ]
+  "crud_client_exit_codes": {
+    "rclone-mkdir": 0,
+    "rclone-unicode": 0,
+    "rclone-empty": 0,
+    "rclone-copy": 0,
+    "rclone-move": 0,
+    "rclone-overwrite": 0,
+    "rclone-download": 0,
+    "rclone-delete": 0,
+    "cli-crud-create": 0,
+    "cli-crud-move-overwrite": 0,
+    "cli-download": 0,
+    "cli-delete": 0,
+    "duck-mkdir": 0,
+    "duck-unicode": 0,
+    "duck-empty": 0,
+    "duck-copy": 0,
+    "duck-move": 0,
+    "duck-overwrite": 0,
+    "duck-large": 0,
+    "duck-download": 0,
+    "duck-delete": 0
+  },
+  "large_duck": {
+    "bytes": 110000000,
+    "source_download_sha256": "d04c2e7d8c8e01027ddd2ba299705657a43306d395aeceeb8f008fa7abd69bf3",
+    "requests": [
+      {
+        "method": "POST",
+        "bytes": 0,
+        "status": 201
       },
-      "12582912": {
-        "patch_lengths": [
-          12582912,
-          12582912,
-          1048579
-        ],
-        "post_length": [
-          0
-        ]
+      {
+        "method": "PATCH",
+        "bytes": 10485760,
+        "status": 204
       },
-      "262144": {
-        "patch_lengths": [
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          262144,
-          3
-        ],
-        "post_length": [
-          0
-        ]
+      {
+        "method": "PATCH",
+        "bytes": 10485760,
+        "status": 204
+      },
+      {
+        "method": "PATCH",
+        "bytes": 10485760,
+        "status": 204
+      },
+      {
+        "method": "PATCH",
+        "bytes": 10485760,
+        "status": 204
+      },
+      {
+        "method": "PATCH",
+        "bytes": 10485760,
+        "status": 204
+      },
+      {
+        "method": "PATCH",
+        "bytes": 10485760,
+        "status": 204
+      },
+      {
+        "method": "PATCH",
+        "bytes": 10485760,
+        "status": 204
+      },
+      {
+        "method": "PATCH",
+        "bytes": 10485760,
+        "status": 204
+      },
+      {
+        "method": "PATCH",
+        "bytes": 10485760,
+        "status": 204
+      },
+      {
+        "method": "PATCH",
+        "bytes": 10485760,
+        "status": 204
+      },
+      {
+        "method": "PATCH",
+        "bytes": 5142400,
+        "status": 204
       }
+    ]
+  },
+  "notes": [
+    "Loopback TLS-terminating recording proxy forwards original request method/path/body to unmodified official oCIS on HTTP loopback; no capability/response semantic rewriting. Self-signed local test certificate accepted by clients.",
+    "Go-http-client/1.1 first-POST delegated PATCH retained in wire but excluded from client matrix.",
+    "Matrix hashes use authenticated HTTP downloads. CRUD includes actual CLI/rclone/duck client downloads with hash comparison.",
+    "Exit codes alone are not full content assertions for every individual CRUD step. Wire statuses and methods retained for review.",
+    "No GUI7.1.1, Android, Windows or deployed Worker run."
+  ],
+  "overrides": [
+    {
+      "client": "duck",
+      "setting": "8388608",
+      "actual_chunks": [
+        0,
+        8388608,
+        8388608,
+        8388608,
+        1048579
+      ],
+      "source_download_sha256": "7be259d71245aebcf1073acdc3c2262f8910873766ce02358df010cbdf2c68a3"
+    },
+    {
+      "client": "duck",
+      "setting": "12582912",
+      "actual_chunks": [
+        0,
+        12582912,
+        12582912,
+        1048579
+      ],
+      "source_download_sha256": "7be259d71245aebcf1073acdc3c2262f8910873766ce02358df010cbdf2c68a3"
+    },
+    {
+      "client": "duck",
+      "setting": "262144",
+      "actual_chunks": [
+        0,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        262144,
+        3
+      ],
+      "source_download_sha256": "7be259d71245aebcf1073acdc3c2262f8910873766ce02358df010cbdf2c68a3"
+    },
+    {
+      "client": "rclone",
+      "setting": "8Mi",
+      "actual_chunks": [
+        0,
+        10485760,
+        10485760,
+        5242883
+      ],
+      "source_download_sha256": "7be259d71245aebcf1073acdc3c2262f8910873766ce02358df010cbdf2c68a3"
+    },
+    {
+      "client": "rclone",
+      "setting": "12Mi",
+      "actual_chunks": [
+        0,
+        10485760,
+        10485760,
+        5242883
+      ],
+      "source_download_sha256": "7be259d71245aebcf1073acdc3c2262f8910873766ce02358df010cbdf2c68a3"
     }
-  }
+  ]
 }

@@ -41,7 +41,7 @@ The extension verifies repeated trash/restore PATCH requests with `fields=id`, p
 
 Overwrite acceptance covers file and collection targets, folder MOVE, successful replacement, rejected publication and restoration, ambiguous committed writes, no permanent cleanup, and descendant-cache invalidation. Network failures, malformed responses, rate limits and permission failures are **fault injection**, not claims that Google necessarily emits these responses or that every 4xx response is mutation-free. The existing invalid-fields contract still demonstrates a committed write can return 400; production transfer uses a fixed valid `fields=id` mask.
 
-This is acceptance of the current MOVE/COPY implementation against these bounded contracts, not exhaustive Drive or distributed-consistency certification. No extra live WebDAV acceptance pass was needed or run. Shared-drive permissions, concurrent changes, trash propagation latency and cross-region KV visibility remain outside this mock's guarantees.
+This is acceptance of the current MOVE/COPY implementation against these bounded contracts, not exhaustive Drive or distributed-consistency certification. No extra live WebDAV acceptance pass was needed or run. Shared-drive permissions, concurrent changes, trash propagation latency and cross-instance cache visibility remain outside this mock's guarantees.
 
 ## Media-download contract extension: 2026-11-16
 

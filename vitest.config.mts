@@ -3,7 +3,6 @@ import { cloudflareTest } from '@cloudflare/vitest-pool-workers';
 
 const compat = {
 	compatibilityDate: '2026-04-15',
-	kvNamespaces: ['KV'],
     durableObjects: { TUS_UPLOADS: { className: 'TusUpload', useSQLite: true } },
 };
 

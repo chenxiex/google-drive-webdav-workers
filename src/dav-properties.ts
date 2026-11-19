@@ -158,7 +158,7 @@ export function parseFind(text: string): { mode: 'allprop' | 'propname' | 'prop'
 }
 
 // appProperties is one atomically patched Drive field. Keep a versioned XML
-// payload in bounded chunks, rather than separate sidecar files or KV writes.
+// payload in bounded chunks, rather than separate sidecar files or separate database writes.
 const storageKey = (index: number): string => 'wdp' + String(index).padStart(2, '0');
 const reserved = (name: string): boolean => /^wdp(?:[01][0-9]|2[0-9])$/.test(name);
 const corrupt = (): never => { throw new PropertyError('Stored WebDAV properties are corrupt; refusing to overwrite them', 500); };

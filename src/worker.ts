@@ -126,107 +126,55 @@ function basicAuthentication(request: Request): { user: string; pass: string } |
     return { user: decoded.substring(0, index), pass: decoded.substring(index + 1) };
 }
 
-// Order a requested synchronous eviction after this instance's already-started
-// writes. This is not a distributed cache lock or a freshness bypass.
-const pendingKvWrites = new Map<string, Promise<void>>();
+// Shared only within this isolate. Entries expire and are capped per namespace;
+// large listings are fetched normally rather than retained in memory.
+const CACHE_ENTRIES = 128;
+const CACHE_ENTRY_BYTES = 64 * 1024;
 
-class KVCache {
-    env: Env;
-    ctx: ExecutionContext;
-
-    constructor(env: Env, ctx: ExecutionContext) {
-        this.env = env;
-        this.ctx = ctx;
-    }
-
+class MemoryCache {
     async get(k: string, ns: string): Promise<any> {
-        const now = Date.now();
-        if (config.cache[ns] && config.cache[ns]![k]) {
-            if (config.cache[ns]![k].expire > now) {
-                return config.cache[ns]![k].data;
-            }
-        }
-        if (this.env && this.env.KV) {
-            const v = await this.env.KV.get(ns + '.' + k, { type: 'json' });
-            if (v) {
-                // KV does not expose the remaining TTL here. Promoting metadata
-                // or listings would restart their lifetime on every cold instance.
-                // Keep the existing session caching behavior for TUS uploads.
-                if (ns !== 'meta' && ns !== 'objects') {
-                    if (!config.cache[ns]) config.cache[ns] = {};
-                    config.cache[ns]![k] = { data: v, expire: now + 300000 };
-                }
-                return v;
-            }
-        }
+        const entries = config.cache[ns];
+        const entry = entries?.[k];
+        if (entry && entry.expire > Date.now()) return entry.data;
+        if (entries) delete entries[k];
         return null;
     }
 
-    async put(k: string, v: any, ns: string, customTtl?: number): Promise<void> {
-        if (v) {
-            if (!config.cache[ns]) config.cache[ns] = {};
-            const ttl = customTtl || 300000;
-            config.cache[ns]![k] = { data: v, expire: Date.now() + ttl };
-            if (this.env && this.env.KV && this.ctx) {
-                const key = ns + '.' + k;
-                const kvPromise = this.env.KV.put(key, JSON.stringify(v), { expirationTtl: Math.max(60, Math.floor(ttl / 1000)) });
-                pendingKvWrites.set(key, kvPromise);
-                const forget = () => { if (pendingKvWrites.get(key) === kvPromise) pendingKvWrites.delete(key); };
-                void kvPromise.then(forget, forget);
-                if (ns === 'tus_session') {
-                    await kvPromise;
-                } else {
-                    this.ctx.waitUntil(kvPromise);
-                }
-            }
+    async put(k: string, v: any, ns: string, ttl = 300000): Promise<void> {
+        const entries = config.cache[ns] ??= {};
+        const now = Date.now();
+        for (const key of Object.keys(entries)) {
+            if (entries[key].expire <= now) delete entries[key];
         }
+        delete entries[k];
+        if (!v || new TextEncoder().encode(k + JSON.stringify(v)).byteLength > CACHE_ENTRY_BYTES) return;
+        const keys = Object.keys(entries).filter(key => !(ns === 'meta' && key === '/'));
+        if (keys.length >= CACHE_ENTRIES) delete entries[keys[0]];
+        entries[k] = { data: v, expire: now + ttl };
     }
 
-    async delete(k: string, ns: string, wait = false): Promise<void> {
+    async delete(k: string, ns: string): Promise<void> {
         if (ns === 'meta' && !k.endsWith('/')) k += '/';
         if (ns === 'meta' && k === '/') return;
-        if (config.cache[ns] && config.cache[ns]![k]) {
-            delete config.cache[ns]![k];
-        }
-        if (this.env && this.env.KV && this.ctx) {
-            if (wait) await pendingKvWrites.get(ns + '.' + k)?.catch(() => {});
-            const deletion = this.env.KV.delete(ns + '.' + k);
-            if (wait) await deletion;
-            else this.ctx.waitUntil(deletion);
-        }
+        if (config.cache[ns]) delete config.cache[ns]![k];
     }
 
-    // Drops the path -> id mapping for the written entry, the parent's own
-    // mapping, and the parent's child listing. The last one is what PROPFIND
-    // and GET read, so skipping it on an overwrite left stale entries in the
-    // directory listing for up to five minutes.
-    async invalidateFileAndParent(fpath: string, parentId?: string | null, wait = false): Promise<void> {
+    async invalidateFileAndParent(fpath: string, parentId?: string | null): Promise<void> {
         const { parent } = splitPath(fpath);
-        await this.delete(fpath, 'meta', wait);
-        if (parent !== fpath) await this.delete(parent, 'meta', wait);
-        if (parentId) await this.delete(parentId, 'objects', wait);
+        await this.delete(fpath, 'meta');
+        if (parent !== fpath) await this.delete(parent, 'meta');
+        if (parentId) await this.delete(parentId, 'objects');
     }
 
     async invalidateTransferPath(path: string, parentId?: string, tree = false): Promise<void> {
         const prefix = path.replace(/\/+$/, '') + '/';
-        // Directory moves/replacements/deletions invalidate descendant path mappings,
-        // including entries only present in KV. KV remains eventually consistent.
         if (tree) {
             for (const key of Object.keys(config.cache.meta)) {
                 if (key.startsWith(prefix)) delete config.cache.meta[key];
             }
         }
         await this.invalidateFileAndParent(path, parentId);
-        if (tree && this.env?.KV) {
-            let cursor: string | undefined;
-            do {
-                const page = await this.env.KV.list({ prefix: 'meta.' + prefix, cursor });
-                await Promise.all(page.keys.map(key => this.env.KV!.delete(key.name)));
-                cursor = page.list_complete ? undefined : page.cursor;
-            } while (cursor);
-        }
     }
-
 }
 
 class StatusError extends Error {
@@ -245,8 +193,7 @@ class TransferError extends StatusError {
     }
 }
 
-// The OAuth access token is deliberately kept out of `config.cache`, which is
-// persisted to KV: a bearer token does not belong on durable shared storage.
+// The OAuth access token has its own short-lived isolate-local cache.
 let tokenCache: { access_token: string; expires: number } | null = null;
 
 async function readPropertyBody(request: Request): Promise<string> {
@@ -365,13 +312,15 @@ function davProperties(file: any, quota?: { used: number | string; available: nu
 }
 
 class GDrive {
-    cache: KVCache;
+    cache: MemoryCache;
+    env: Env;
     owner: string;
     static fetchingTokenPromise: Promise<string> | null = null;
 
     constructor(env: Env, ctx: ExecutionContext<unknown>, owner = '') {
         this.owner = owner;
-        this.cache = new KVCache(env, ctx);
+        this.env = env;
+        this.cache = new MemoryCache();
     }
 
     async OPTIONS(request: Request): Promise<Response> {
@@ -547,7 +496,7 @@ class GDrive {
         const existing = await this.getMetadata(targetPath);
         if (existing?.mimeType === FOLDER_MIME) return this.tusError('Cannot overwrite a collection', 409);
         const existingFileId = existing?.id || null;
-        const namespace = this.cache.env.TUS_UPLOADS;
+        const namespace = this.env.TUS_UPLOADS;
         if (!namespace) return this.tusError('TUS_UPLOADS Durable Object binding is required', 503);
         let uploadUrl = '';
         if (totalSize === 0) {
@@ -599,7 +548,7 @@ class GDrive {
         const path = new URL(request.url).pathname;
         const sessionId = path.slice((basePath + 'tus_uploads/').length);
         if (!path.startsWith(basePath + 'tus_uploads/') || !/^[0-9a-f-]{36}$/.test(sessionId)) return this.tusError('Session not found', 404);
-        const namespace = this.cache.env.TUS_UPLOADS;
+        const namespace = this.env.TUS_UPLOADS;
         if (!namespace) return this.tusError('TUS_UPLOADS Durable Object binding is required', 503);
         const headers = new Headers(request.headers);
         headers.set('x-tus-owner', this.owner);
@@ -974,7 +923,7 @@ class GDrive {
             return new Response(message, { status: errorStatus(error) });
         } finally {
             // Also evict after failed/ambiguous writes, not just confirmed ones.
-            // Run this after Drive writes so KV work does not widen the replace gap.
+            // Evict after Drive writes so the confirmed result is visible locally.
             // Cache failures must not hide the Drive outcome/recovery IDs or
             // prevent invalidating the other path. Local subtree eviction comes first.
             const invalidations = [this.cache.invalidateTransferPath(destPath, parentId, target?.mimeType === FOLDER_MIME)];
@@ -1115,7 +1064,7 @@ class GDrive {
             // success or undo a potentially completed operation.
             return new Response('Drive property update outcome uncertain; read properties before retrying', { status: 502 });
         } finally {
-            await this.cache.invalidateFileAndParent(fpath, metadata.parents?.[0], true)
+            await this.cache.invalidateFileAndParent(fpath, metadata.parents?.[0])
                 .catch(error => console.error('PROPPATCH cache invalidation failed:', error));
         }
     }

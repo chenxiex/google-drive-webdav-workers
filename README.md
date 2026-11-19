@@ -5,7 +5,7 @@ A Cloudflare Workers script that transforms Google Drive into a fully functional
 ## Features
 
 - **WebDAV Support**: Mount your Google Drive in Windows Explorer, macOS Finder, Infuse, and other DAV clients.
-- **High Performance**: Leverages Cloudflare Workers and optional KV caching for minimal latency.
+- **High Performance**: Leverages Cloudflare Workers and bounded in-memory caching for minimal latency.
 - **Resumable Uploads**: Supports the Google Drive Resumable API for reliable file transfers.
 - **Multi-Status Support**: Full implementation of WebDAV protocols (PROPFIND, MKCOL, MOVE, COPY, etc.).
 - **Environment Variables**: Configure your worker securely without modifying the source code.
@@ -33,11 +33,6 @@ A Cloudflare Workers script that transforms Google Drive into a fully functional
    - Install dependencies with `pnpm install --frozen-lockfile` and deploy the repository with `pnpm exec wrangler deploy`. Choose your Worker name in `wrangler.jsonc` first.
    - Keep the `TUS_UPLOADS` Durable Object binding and SQLite class migration in `wrangler.jsonc`. Upload sessions require durable storage; pasting the built script alone does not create the binding or migrate the class.
    - Set `CLIENT_ID`, `CLIENT_SECRET`, `REFRESH_TOKEN`, and `USERS` before using the Worker. Store sensitive values as Cloudflare encrypted secrets. Do not paste credentials into the source or built file.
-
-3. **(Optional) KV Caching**:
-
-   - Create a KV Namespace named `KV`.
-   - Replace the placeholder KV namespace ID in `wrangler.jsonc` with the real ID before deployment, or remove `kv_namespaces` to run without this optional cache. TUS upload storage uses Durable Objects, not KV.
 
 ## Environment Variables (Recommended)
 

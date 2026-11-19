@@ -81,3 +81,14 @@ of the old trace or a live oCIS/Worker semantic test. See
   [drive-version.json](probes/2026-11-18/drive-version.json); it is not part of default tests.
 - No GUI 7.1 / Android / Windows or deployed Worker acceptance is claimed. The
   unmerged TUS branch was not merged or re-tested as part of this dev patch.
+
+## Subsequent download refinement (2026-11-19)
+
+The review correction above is preserved as commit `eb1c95d`. The follow-up on
+`fix/drive-download-etag` replaces derived GET validators and unconditional If-Range
+full responses with Drive v2 media ETags and response-side comparison. HEAD omits
+ETag; PROPFIND retains a version-based synchronization marker, not a media validator.
+See [current WebDAV behavior](webdav-behavior.md) for the implemented contract.
+The review-time description above is historical, not a claim these validators still match.
+KV removal remains independent on the Durable Object TUS branch; neither branch is
+merged into `dev` by this work.

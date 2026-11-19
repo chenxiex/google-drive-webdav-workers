@@ -195,12 +195,18 @@ folder size honestly (do not invent a recursively computed total). Map `oc:id` a
 only when applying that preference, with `Preference-Applied: return=minimal`; it does
 not permit omitting successful requested properties or partial listing errors.
 
-Files have stable quoted validators that change with represented content/metadata.
-GET, HEAD and PROPFIND validators must agree. `id + modifiedTime` is insufficient
-when a client preserves mtime across a content update; use Drive version (including
-metadata/dead-property mutations), not mtime alone or only a content checksum. Evaluate
-If-Range against the adapter validator/date before forwarding Range; never send an
-adapter ETag to Google as if it were Google's validator. Directory and Space-root validators must
+Separate synchronization change markers from HTTP media validators. PROPFIND currently
+uses Drive version (including metadata/dead-property mutations); `id + modifiedTime`
+is insufficient when a client preserves mtime across a content update. Binary GET uses
+the actual Drive v2 `alt=media` response ETag, never the v2 JSON etag or a derived
+metadata version. HEAD currently omits ETag rather than claim its cached metadata
+validator identifies the downloaded representation. The future compatibility profile
+must test client synchronization and HEAD expectations with this distinction; do not
+claim all three validators agree without a verified representation-bound implementation.
+For Range + If-Range, compare the requested strong tag with the actual partial response
+ETag before exposing its body. A mismatch, weak/date validator, absent response tag, or
+416 falls back to full GET; unrelated errors do not. Google does not enforce If-Range
+for this media path. Ordinary Range is unchanged. Directory and Space-root validators must
 reflect descendant changes; Drive folder modifiedTime/version alone is insufficient.
 Clients can skip a complete tree when root.eTag is unchanged. A constant synthetic
 root validator silently loses synchronization.

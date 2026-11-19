@@ -2,7 +2,7 @@
 
 原文来源：`origin/docs/bug-review-todo-20261103:todo.md`，原基线 `78161f0`。  
 初次复核日期：2026-11-14，基线 `8ae7b31`（Google Drive mock contract audit）。  
-上次更新：2026-11-18（独立审查建议复核）。当前文档基线 `dev` `73398c2`；本文已经纳入版本管理，不再本地忽略。TUS 基础修复位于已推送的 `fix/durable-tus-upload` `c45b349`，尚未合入 dev；旧对象 `fef204e` 丢失不等于恢复分支丢失。恢复后尚未重跑该分支全套测试，合入及复测属于 OC-06 前置步骤。下方历史记录中的“本地忽略/未提交”等只描述当时状态。
+上次更新：2026-11-19（v2 下载验证器重构）。审查修正已提交 `eb1c95d`，与本次下载修改位于独立 `fix/drive-download-etag` 分支；`dev` 仍为 `73398c2`；本文已经纳入版本管理，不再本地忽略。TUS 基础修复位于已推送的 `fix/durable-tus-upload` `c45b349`，尚未合入 dev；旧对象 `fef204e` 丢失不等于恢复分支丢失。恢复后尚未重跑该分支全套测试，合入及复测属于 OC-06 前置步骤。下方历史记录中的“本地忽略/未提交”等只描述当时状态。
 
 ## 复核结论与证据边界
 
@@ -208,3 +208,10 @@
 - [x] 5个本地配置覆盖重跑：Cyberduck8MiB/12MiB/256KiB生效，rclone Nextcloud8Mi/12Mi仍10MiB；下载hash均相同。
 - [x] 三客户端21次CRUD命令全部成功，CLI/rclone实际下载hash一致，Cyberduck110,000,000B实际下载hash一致。保留脱敏wire与复现脚本；不把命令退出码当全语义/并发验收。
 - [x] 参考证据分层保存：HTTP54请求/66断言、OIDC19响应、客户端12矩阵+21CRUD+5覆盖、固定官方来源hash，均无私有凭据。未增加默认生产测试的外部依赖或真实Drive访问。
+
+### 2026-11-19 下载验证器与分支边界
+
+- 二进制下载使用 Drive v2 `alt=media` 的真实 HTTP ETag；v3 元数据/写入接口不变。If-Range 对返回的部分内容强 ETag 比较后才流式透传，否则完整重取；416 也完整重取，其他错误不掩盖。
+- HEAD 不增加媒体请求，也不输出由缓存元数据伪造的强 ETag；PROPFIND version 仍是同步变化标记，不等同下载表示验证器。oCIS 客户端对这一区别的完整验收仍属于 OC-07。
+- KV 移除单独放在 `fix/durable-tus-upload`，不合并到本下载分支或 dev；该分支先已有 DO 上传会话，因此可移除整个 KV 依赖。此分支仍保留 KV，部署说明按各分支实际配置理解。
+- 本下载分支验证：13 files / 311 tests、源码与测试两组 TypeScript、build dry-run、diff check 全部通过；构建产物已同步，默认测试仍只访问 mock。

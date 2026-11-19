@@ -109,3 +109,20 @@ Official references:
 ## Version field audit (2026-11-18)
 
 An isolated real Drive binary file was overwritten with different four-byte contents, then updated with the same explicit `modifiedTime` after each write. `version` advanced from `6` to `10`; a subsequent `appProperties` update preserving that timestamp advanced it to `11`. `files.get` and `files.list` returned the same decimal-string version. The test file was moved to Trash afterwards. The mock now exposes `version` and advances it on updates; the exact increment is deliberately not modeled. This supports validators that change even when clients preserve timestamps and sizes. No account identifiers or credentials are retained here.
+
+## v2 media validator audit (2026-11-19)
+
+The v2 media subset was added after isolated real Drive probes confirmed:
+full and partial downloads of the same representation return the same strong
+HTTP ETag; changing bytes while preserving file ID, size and modification time
+changes that ETag; a stale If-Range sent upstream is ignored and the new partial
+representation is still returned. Metadata and writes remain the v3 contract.
+The mock uses a SHA-256-derived opaque tag for v2 media only, not Google's
+undocumented tag algorithm, v2 JSON etag, or v3 version. It deliberately ignores
+If-Range. Out-of-bounds range starts return 416; arbitrary malformed/multipart
+ranges and native Google Workspace export behavior remain outside this subset.
+
+Acceptance covers matching/stale/weak/date validators, missing/weak upstream
+tags, 416 fallback, unchanged-metadata content replacement, and preservation of
+other upstream failures. Missing/weak-tag cases are boundary fault injection,
+not claims that the live Drive probe returned those values.

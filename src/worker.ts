@@ -476,11 +476,19 @@ class GDrive {
                     return new Response(arrayToHtml(rpath, files), { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8' } });
                 }
                 const abuse = url.searchParams.get('abuse') === 'true';
-                // Until range selection can be bound atomically to a Drive
-                // revision, conservatively send the full representation for
-                // If-Range. Never append bytes selected using a stale validator.
-                const range = request.headers.has('If-Range') ? null : request.headers.get('Range');
+                const range = request.headers.get('Range');
+                const ifRange = request.headers.get('If-Range');
                 response = await this.getRawContent(metadata.id, range, abuse);
+                if (range && ifRange !== null && (response.status === 206 || response.status === 416)) {
+                    // Drive ignores If-Range. Compare against the validator of
+                    // the actual partial representation, never cached metadata.
+                    const etag = response.headers.get('ETag');
+                    const matches = etag !== null && /^"[\x21\x23-\x7e\x80-\xff]*"$/.test(etag) && ifRange === etag;
+                    if (response.status === 416 || !matches) {
+                        await response.body?.cancel();
+                        response = await this.getRawContent(metadata.id, null, abuse);
+                    }
+                }
                 if (response.status >= 400) {
                     // The body is not always JSON, and `errors` is not always
                     // populated; either would otherwise turn into a 500 that
@@ -493,9 +501,7 @@ class GDrive {
                     throw new StatusError(result?.error?.message || response.statusText || 'Drive error', response.status);
                 }
                 response = new Response(response.body, response);
-                response.headers.set('ETag', fileEtag(metadata));
                 response.headers.set('Accept-Ranges', 'bytes');
-                if (metadata.modifiedTime) response.headers.set('Last-Modified', new Date(metadata.modifiedTime).toUTCString());
             } catch (e: any) { return new Response(e.message, { status: errorStatus(e) }); }
         } else { response = new Response(null, { status: 404 }); }
         return response;
@@ -1053,7 +1059,6 @@ class GDrive {
                     'Content-Length': size,
                     'Content-Type': mimeType,
                     'Last-Modified': modifiedTime,
-                    'ETag': fileEtag(metadata),
                     ...(metadata.mimeType !== FOLDER_MIME ? { 'Accept-Ranges': 'bytes' } : {})
                 }
             });
@@ -1231,7 +1236,7 @@ class GDrive {
     async getRawContent(id: string, range: string | null, abuse: boolean): Promise<Response> {
         const headers: Record<string, string> = { Authorization: 'Bearer ' + (await this.getAccessToken()) };
         if (range) headers['Range'] = range;
-        const url = new URL(`https://www.googleapis.com/drive/v3/files/${id}`);
+        const url = new URL(`https://www.googleapis.com/drive/v2/files/${id}`);
         url.searchParams.set('supportsAllDrives', 'true');
         url.searchParams.set('alt', 'media');
         url.searchParams.set('acknowledgeAbuse', abuse ? 'true' : 'false');

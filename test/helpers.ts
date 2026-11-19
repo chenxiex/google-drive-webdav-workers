@@ -454,20 +454,27 @@ export class MockDrive {
 			}
 		}
 		const match = url.pathname.match(/^\/drive\/v3\/files\/([^/]+)$/);
-		if (match && method === 'GET' && url.searchParams.get('alt') === 'media') {
-			const file = this.findById(match[1]);
-			if (!file) return notFound(match[1]);
+		const media = url.pathname.match(/^\/drive\/v[23]\/files\/([^/]+)$/);
+		if (media && method === 'GET' && url.searchParams.get('alt') === 'media') {
+			const file = this.findById(media[1]);
+			if (!file) return notFound(media[1]);
 			if (file.mimeType.startsWith('application/vnd.google-apps.')) unsupported('media downloads of folders/native documents');
 			const content = file.content;
 			if (!content || Number(file.size) !== content.length) unsupported('media fixture without explicit bytes and matching size');
+            // v2 media ETag is an opaque strong representation validator, not
+            // the v2 JSON etag or v3 metadata version. If-Range is ignored.
+            const digest = await crypto.subtle.digest('SHA-256', content);
+            const etag = '"' + Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, '0')).join('') + '"';
+            const mediaHeaders = { 'Content-Type': file.mimeType, ...(url.pathname.includes('/v2/') ? { ETag: etag } : {}) };
 			const range = headers.get('Range');
-			if (!range) return new Response(content.slice(), { headers: { 'Content-Type': file.mimeType, 'Content-Length': String(content.length) } });
+			if (!range) return new Response(content.slice(), { headers: { ...mediaHeaders, 'Content-Length': String(content.length) } });
 			const parsed = range.match(/^bytes=(\d+)-(\d+)$/);
 			if (!parsed) unsupported('unverified media range syntax');
 			const start = Number(parsed[1]), end = Number(parsed[2]);
-			if (start > end || end >= content.length) unsupported('unverified media range bounds');
+			if (url.pathname.includes('/v2/') && start >= content.length) return new Response(null, { status: 416, headers: { 'Content-Range': `bytes */${content.length}` } });
+            if (start > end || end >= content.length) unsupported('unverified media range bounds');
 			return new Response(content.slice(start, end + 1), {
-				status: 206, headers: { 'Content-Type': file.mimeType, 'Content-Length': String(end - start + 1), 'Content-Range': `bytes ${start}-${end}/${content.length}` },
+				status: 206, headers: { ...mediaHeaders, 'Content-Length': String(end - start + 1), 'Content-Range': `bytes ${start}-${end}/${content.length}` },
 			});
 		}
 		if (match && method === 'GET') {

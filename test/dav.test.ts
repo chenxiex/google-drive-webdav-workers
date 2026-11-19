@@ -139,10 +139,24 @@ describe('original file downloads', () => {
 		expect(response.headers.get('Content-Type')).toBe('image/png');
 		expect(response.headers.get('Content-Length')).toBe(String(content.length));
 		expect(head.headers.get('Content-Length')).toBe(response.headers.get('Content-Length'));
+		expect(head.headers.get('ETag')).toBe(response.headers.get('ETag'));
+		expect(head.headers.get('Accept-Ranges')).toBe('bytes');
+		expect(response.headers.get('Accept-Ranges')).toBe('bytes');
+		expect(head.headers.get('Date')).not.toBe(head.headers.get('Last-Modified'));
+		const properties = await (await request('/dav/image.png', { method: 'PROPFIND', headers: { Depth: '0' } })).text();
+		expect(properties).toContain('<D:getetag>' + response.headers.get('ETag')!.replaceAll('"', '&quot;') + '</D:getetag>');
 		expect(new Uint8Array(await response.arrayBuffer())).toEqual(content);
 		const urls = spy.mock.calls.map(([input]) => new URL(input instanceof Request ? input.url : String(input)));
 		expect(urls.some(url => url.searchParams.get('alt') === 'media')).toBe(true);
 		expect(urls.every(url => url.hostname === 'www.googleapis.com')).toBe(true);
+	});
+
+	it.each([false, true])('falls back to a complete download for If-Range (matching=%s)', async matching => {
+        const tag = matching ? (await request('/dav/image.png', { method: 'HEAD' })).headers.get('ETag')! : '"old-version"';
+		const response = await request('/dav/image.png', { headers: { Range: 'bytes=1-3', 'If-Range': tag } });
+		expect(response.status).toBe(200);
+		expect(response.headers.get('Content-Range')).toBeNull();
+		expect(new Uint8Array(await response.arrayBuffer())).toEqual(content);
 	});
 
 	it('forwards the client Range and preserves the partial original response', async () => {
@@ -161,6 +175,26 @@ describe('original file downloads', () => {
 });
 
 describe('PROPFIND', () => {
+	// Documented Drive int64 / absent-limit shapes injected at the boundary.
+	// This does not claim the synthetic account has an unlimited plan.
+	it.each([
+		[{ usage: '9007199254740993', limit: '9223372036854775807' }, '9214364837600034814'],
+		[{ usage: '4096' }, undefined],
+		[{ usage: '4096', limit: '1024' }, '0'],
+	])('preserves quota integers and handles absent or exhausted limits', async (storageQuota, available) => {
+		const original = drive.handle.bind(drive);
+		vi.spyOn(drive, 'handle').mockImplementation(async (input, init) => {
+			if (String(input).includes('/drive/v3/about?')) return new Response(JSON.stringify({ storageQuota }));
+			return original(input, init);
+		});
+		const response = await request('/dav/', { method: 'PROPFIND', headers: { Depth: '0' } });
+		expect(response.status).toBe(207);
+		const xml = await response.text();
+		expect(xml).toContain('<D:quota-used-bytes>' + storageQuota.usage + '</D:quota-used-bytes>');
+		if (available === undefined) expect(xml).not.toContain('<D:quota-available-bytes>');
+		else expect(xml).toContain('<D:quota-available-bytes>' + available + '</D:quota-available-bytes>');
+	});
+
 	it('lists children with encoded hrefs and numeric sizes (Depth 1)', async () => {
 		const res = await request('/dav/', {
 			method: 'PROPFIND',

@@ -1,4 +1,5 @@
 import secrets,tempfile,shutil,re,ssl,os,sys,time,json,subprocess,hashlib,threading,http.server,http.client,urllib.request,base64,pathlib
+import capture
 P=pathlib.Path(os.environ.get('PROBE_OUTPUT','client-probe-output')).resolve();P.mkdir(parents=True,exist_ok=True)
 private=pathlib.Path(tempfile.mkdtemp(prefix='ocis-client-private-'));password_plain=secrets.token_urlsafe(24)
 ocis=os.environ['OCIS_BINARY'];rclone=os.environ['RCLONE_BINARY'];owncloud=os.environ['OWNCLOUD_APPRUN'];duck_binary=os.environ['DUCK_BINARY']
@@ -26,10 +27,11 @@ class Proxy(http.server.BaseHTTPRequestHandler):
   headers=dict(self.headers);headers.pop('Transfer-Encoding',None);headers['Content-Length']=str(len(body));headers['Connection']='close'
   try:
    c=http.client.HTTPConnection('127.0.0.1',9201,timeout=120);c.request(self.command,self.path,body,headers);r=c.getresponse();data=r.read()
-   keep=lambda k:k.lower() not in ['authorization','cookie','set-cookie','x-access-token']
-   rec={'phase':phase,'method':self.command,'path':self.path.split('?')[0],'request_bytes':len(body),'request_headers':{k:v for k,v in self.headers.items() if keep(k)},'status':r.status,'response_headers':{k:v for k,v in r.getheaders() if keep(k)}}
-   for k in list(rec['response_headers']):
-    if k.lower()=='location':rec['response_headers'][k]=rec['response_headers'][k].split('?')[0]
+   redactions=(password_plain,auth)
+   rec={'phase':phase,'method':self.command,'path':capture.target(self.path,redactions),'request_bytes':len(body),'request_headers':capture.headers(self.headers.items(),redactions),'status':r.status,'response_headers':capture.headers(r.getheaders(),redactions)}
+   for key,payload,ctype in [('request_body',body,self.headers.get('Content-Type','')),('response_body',data,r.getheader('Content-Type',''))]:
+    captured=capture.payload(self.command,self.path,payload,ctype,redactions)
+    if captured is not None:rec[key]=captured
    records.append(rec)
    self.send_response(r.status)
    for k,v in r.getheaders():

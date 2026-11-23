@@ -268,47 +268,6 @@ describe('persisted WebDAV properties', () => {
         expect(response.status).toBe(400);
         expect(mutationCalls(spy)).toHaveLength(0);
     });
-    it('finishes an already-started stale KV put before eviction and response', async () => {
-        const path = '/dav/delayed-kv-property.txt';
-        const key = 'meta./delayed-kv-property.txt/';
-        drive.add({ id: 'delayed-kv-property', name: 'delayed-kv-property.txt', mimeType: 'text/plain', parents: ['root'] });
-        const kv = (env as Env).KV!;
-        const originalPut = kv.put.bind(kv), originalDelete = kv.delete.bind(kv);
-        const events: string[] = [];
-        let releasePut!: () => void, signalWrite!: () => void;
-        const putGate = new Promise<void>(resolve => { releasePut = resolve; });
-        const driveWritten = new Promise<void>(resolve => { signalWrite = resolve; });
-        vi.spyOn(kv, 'put').mockImplementation(async (name, content, options) => {
-            if (name === key) {
-                events.push('old-put-start');
-                await putGate;
-                await originalPut(name, content, options);
-                events.push('old-put-finish');
-            } else await originalPut(name, content, options);
-        });
-        vi.spyOn(kv, 'delete').mockImplementation(async name => {
-            if (name === key) events.push('delete');
-            await originalDelete(name);
-        });
-        const handle = drive.handle.bind(drive);
-        vi.spyOn(drive, 'handle').mockImplementation(async (input, init) => {
-            const response = await handle(input, init);
-            if (init?.method === 'PATCH') signalWrite();
-            return response;
-        });
-        const pending = patch(set('<X:label>fresh</X:label>'), path).then(response => { events.push('response'); return response; });
-        try {
-            await driveWritten;
-            // One event-loop turn lets request continuations reach eviction;
-            // the old put is still explicitly gated, not delayed by a timer.
-            await new Promise(resolve => setTimeout(resolve, 0));
-            expect(events).toEqual(['old-put-start']);
-        } finally { releasePut(); await pending; }
-        expect((await pending).status).toBe(207);
-        expect(events).toEqual(['old-put-start', 'old-put-finish', 'delete', 'response']);
-        expect(await kv.get(key)).toBeNull();
-        expect(value(await (await find(undefined, path)).text(), 'urn:test', 'label')).toBe('fresh');
-    });
     it.each(['propertyLengthLimitExceeded', 'propertyCountLimitExceeded'])('maps upstream quota rejection %s to 507 without applying the batch', async reason => {
         const handle = drive.handle.bind(drive);
         const spy = vi.spyOn(drive, 'handle').mockImplementation(async (input, init) => {

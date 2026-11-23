@@ -230,7 +230,7 @@ describe('resumable uploads', () => {
 		const drive = fixture();
 		const endpoint = UPLOADS + (overwrite ? '/source' : '') + '?uploadType=resumable&fields=id,name,size';
 		const init = await api(drive, endpoint, {
-			...metadata(overwrite ? {} : { name: 'upload.bin', parents: ['b'] }, overwrite ? 'PATCH' : 'POST'),
+			...metadata(overwrite ? { modifiedTime: '2001-02-03T04:05:06.000Z' } : { name: 'upload.bin', parents: ['b'], modifiedTime: '2001-02-03T04:05:06.000Z' }, overwrite ? 'PATCH' : 'POST'),
 			headers: { 'Content-Type': 'application/json', 'X-Upload-Content-Type': 'application/octet-stream', 'X-Upload-Content-Length': '262149' },
 		});
 		expect(init.status).toBe(200);
@@ -249,6 +249,7 @@ describe('resumable uploads', () => {
 		const file: any = await finished.json();
 		expect(file).toEqual({ id: overwrite ? 'source' : expect.any(String), name: overwrite ? 'source.bin' : 'upload.bin', size: '262149' });
 		expect(drive.findById(file.id)?.content?.slice(-5)).toEqual(bytes);
+		expect(drive.findById(file.id)?.modifiedTime).toBe('2001-02-03T04:05:06.000Z');
 		expect(drive.findById(file.id)?.parents).toEqual([overwrite ? 'a' : 'b']);
 		expect(drive.files).toHaveLength(overwrite ? 3 : 4);
 		expect((await put('bytes */262149')).status).toBe(200);
@@ -282,6 +283,58 @@ describe('resumable uploads', () => {
 		const expected = new Uint8Array(total).fill(65);
 		expected.fill(66, offset);
 		expect(drive.findById(file.id)?.content).toEqual(expected);
+	});
+
+	it('acknowledges only the aligned prefix of a nonfinal unaligned chunk', async () => {
+		const drive = fixture();
+		const init = await api(drive, UPLOADS + '?uploadType=resumable', metadata({ name: 'unaligned.bin' }));
+		const location = init.headers.get('Location')!;
+		const first = await drive.handle(location, { method: 'PUT', headers: { 'Content-Range': 'bytes 0-262144/524289' }, body: new Uint8Array(262145) });
+		expect(first.status).toBe(308);
+		expect(first.headers.get('Range')).toBe('bytes=0-262143');
+		const query = await drive.handle(location, { method: 'PUT', headers: { 'Content-Range': 'bytes */524289' }, body: '' });
+		expect(query.headers.get('Range')).toBe('bytes=0-262143');
+	});
+
+	it('keeps accepted bytes on replay and appends only the unreceived suffix', async () => {
+		const drive = fixture();
+		const init = await api(drive, UPLOADS + '?uploadType=resumable', metadata({ name: 'replay.bin' }));
+		const location = init.headers.get('Location')!;
+		const put = (range: string, body: Uint8Array) => drive.handle(location, { method: 'PUT', headers: { 'Content-Range': range }, body });
+		await put('bytes 0-262143/524293', new Uint8Array(262144).fill(65));
+		const replay = await put('bytes 0-262143/524293', new Uint8Array(262144).fill(88));
+		expect(replay.status).toBe(308);
+		expect(replay.headers.get('Range')).toBe('bytes=0-262143');
+		const overlap = new Uint8Array(524288).fill(89); overlap.fill(66, 262144);
+		expect((await put('bytes 0-524287/524293', overlap)).headers.get('Range')).toBe('bytes=0-524287');
+		const result = await put('bytes 524288-524292/524293', bytes);
+		const file: any = await result.json();
+		const expected = new Uint8Array(524293).fill(65); expected.fill(66, 262144, 524288); expected.set(bytes, 524288);
+		expect(drive.findById(file.id)?.content).toEqual(expected);
+		expect((await put('bytes 524288-524292/524293', bytes)).status).toBe(200);
+	});
+
+	it('preserves modifiedTime on metadata-only empty creation and after truncation', async () => {
+		const drive = fixture();
+		const modifiedTime = '2001-02-03T04:05:06.000Z';
+		const created = await api(drive, FILES, metadata({ name: 'empty.bin', modifiedTime }));
+		const file: any = await created.json();
+		expect(drive.findById(file.id)?.modifiedTime).toBe(modifiedTime);
+		await api(drive, UPLOADS + '/source?uploadType=media', { method: 'PATCH', body: '' });
+		await api(drive, FILES + '/source', metadata({ modifiedTime }, 'PATCH'));
+		expect(drive.findById('source')).toMatchObject({ modifiedTime, size: 0 });
+	});
+
+	it('finalizes an empty upload and retains its completion status', async () => {
+		const drive = fixture();
+		const init = await api(drive, UPLOADS + '?uploadType=resumable', metadata({ name: 'empty.bin' }));
+		const location = init.headers.get('Location')!;
+		const query = () => drive.handle(location, { method: 'PUT', headers: { 'Content-Range': 'bytes */0' }, body: '' });
+		const result = await query();
+		expect(result.status).toBe(200);
+		const file: any = await result.json();
+		expect(drive.findById(file.id)?.content).toEqual(new Uint8Array(0));
+		expect((await query()).status).toBe(200);
 	});
 
 	it('issues distinct session URLs and rejects unknown sessions', async () => {

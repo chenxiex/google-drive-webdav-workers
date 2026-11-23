@@ -3,7 +3,7 @@ import { cloudflareTest } from '@cloudflare/vitest-pool-workers';
 
 const compat = {
 	compatibilityDate: '2026-04-15',
-	kvNamespaces: ['KV'],
+    durableObjects: { TUS_UPLOADS: { className: 'TusUpload', useSQLite: true } },
 };
 
 const davBindings = {
@@ -35,6 +35,10 @@ export default defineConfig({
                     test: { name: 'oauth-missing-' + mask, include: ['test/oauth-config.test.ts'] },
                 };
             }),
+            {
+                plugins: [cloudflareTest({ main: 'src/worker.ts', miniflare: { ...compat, bindings: davBindings } })],
+                test: { name: 'tus', include: ['test/tus.test.ts'] },
+            },
 			{ test: { name: 'mock-drive', include: ['test/mock-drive.test.ts', 'test/dav-properties.test.ts'] } },
 			{
 				plugins: [

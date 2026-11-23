@@ -33,10 +33,10 @@ Property semantics follow [RFC 4918](https://www.rfc-editor.org/rfc/rfc4918.html
 ### Storage and failure semantics
 
 - Dead properties are persisted on the resource in OAuth-client-private Drive `appProperties`, using reserved keys `wdp00` through `wdp29`. Keep the same OAuth application to read them. Do not edit those keys directly. Unrelated appProperties are preserved; corrupt stored WebDAV data causes an error rather than being overwritten.
-- Drive permits 30 private properties per application per file, each with at most 124 UTF-8 bytes for key plus value. Each five-byte chunk key leaves 119 payload bytes: at most 3,570 bytes **including the versioned JSON/XML representation**, less if other private properties use slots. Drive's aggregate 100-property limit can further constrain storage. This is bounded metadata storage, not unlimited arbitrary XML; a capacity failure returns 507 without applying the other requested updates. No sidecar files or KV property database are created.
+- Drive permits 30 private properties per application per file, each with at most 124 UTF-8 bytes for key plus value. Each five-byte chunk key leaves 119 payload bytes: at most 3,570 bytes **including the versioned JSON/XML representation**, less if other private properties use slots. Drive's aggregate 100-property limit can further constrain storage. This is bounded metadata storage, not unlimited arbitrary XML; a capacity failure returns 507 without applying the other requested updates. No sidecar files or separate property database are created.
 - All operations are parsed and validated before a single `files.update` PATCH containing the final native fields and dead-property changes. Invalid values receive 409, protected writes receive 403 with `cannot-modify-protected-property`, and the other properties in a rejected batch receive 424. Missing resources receive 404. A 207 is a container: inspect each property's status, not just the outer response.
 - The one Drive PATCH is the atomic boundary. Real-API contract tests verified that invalid multi-field requests do not partially modify valid fields; this is not a cross-request transaction or lock. Concurrent read-modify-write requests can still overwrite one another. A lost response returns 502 with an uncertain-outcome explanation, without retry or rollback; read the properties before deciding whether to retry.
-- Property writes invalidate metadata and parent listings, waiting for this instance's already-started KV write and eviction before returning. A KV failure is logged without changing the confirmed Drive outcome. This cannot synchronously invalidate other instances or guarantee global immediate freshness.
+- Property writes invalidate this instance's metadata and parent listings before returning. This cannot synchronously invalidate other instances or guarantee global immediate freshness.
 - Changing dead properties can advance Drive's modification time. When a request also explicitly sets `modifiedTime`, that timestamp is sent in the same PATCH. Folder colors and timestamp precision can be normalized by Drive; read-back uses the returned Drive representation.
 
 ## PUT uploads
@@ -44,6 +44,39 @@ Property semantics follow [RFC 4918](https://www.rfc-editor.org/rfc/rfc4918.html
 - PUT with a known `Content-Length` retains the small media/multipart and large resumable upload paths. Without a length, the worker streams through resumable uploads instead of buffering the entire file.
 - Unknown-length uploads hold a 10 MiB upload buffer plus the current input chunk, with one-read lookahead to identify the final chunk (including an exact 10 MiB boundary). Each chunk is acknowledged before assembling the next. Runtime/network buffering and concurrent requests still consume additional memory; this does not bypass the Worker ingress request-size limit.
 - Empty uploads create an empty file or truncate an existing file. Nonempty uploads report success only after Drive confirms completion. An unexpected offset, incomplete final response, stream error, or upstream failure stops the upload; there is no automatic retry or rollback. An ambiguous failure can follow a committed write, so inspect the destination before retrying.
+
+## TUS and rclone uploads
+
+TUS is a separate resumable-upload protocol, not part of WebDAV. An ordinary WebDAV client sends a PUT for the whole file; a 413 response does not instruct it to retry using TUS. Streaming PUT reduces server memory use but does not remove Cloudflare’s per-request ingress limit.
+
+The server implements TUS 1.0 core and the `creation` extension with a known `Upload-Length`. It does not advertise creation-with-upload, deferred length, concatenation, checksum or termination extensions. `OPTIONS` reports the supported version and extension; unsupported versions return 412. Creation accepts optional UTF-8 `filename` / `filetype` metadata and rclone's Unix-seconds `mtime` metadata. Zero-length uploads create or truncate the destination immediately.
+
+Each upload has its own SQLite Durable Object. PATCH requests for that session are serialized. Small or unaligned client chunks are buffered durably and combined into Google-compatible blocks; no entire upload is buffered. A bounded write-ahead journal holds bytes until Drive confirms them, and recovery uses Drive's actual acknowledged range. The returned offset includes bytes safely held in this journal, not only bytes already in Drive. A failed or interrupted PATCH can have accepted a prefix: query HEAD and resume at its returned offset rather than blindly repeating the old offset. Offset mismatches return 409, and upstream failures never masquerade as offset zero.
+
+Sessions, including completed-upload receipts, expire 24 hours after creation. HEAD remains usable after the final response is lost. The expiry alarm removes session state, not the destination file; incomplete uploads are not automatically rolled back. Sessions belong to the authenticated WebDAV username that created them. Different uploads to the same destination are not a distributed file lock and can still conflict. Ordinary metadata caching remains unchanged.
+
+For rclone, configure its WebDAV remote with `vendor = infinitescale` to select its TUS upload path:
+
+```ini
+[worker]
+type = webdav
+url = https://YOUR-WORKER/dav/
+vendor = infinitescale
+user = YOUR-WEBDAV-USER
+pass = YOUR-RCLONE-OBSCURED-PASSWORD
+```
+
+Use `rclone config` to enter the password, then upload with `rclone copy /path/to/file worker:`. The vendor setting selects the relevant rclone upload behavior; this service does not implement the entire ownCloud Infinite Scale API. The ordinary `other` vendor uses PUT instead. rclone's TUS chunks must each fit the deployment's request limit; splitting a large file across requests avoids that limit, rather than increasing it. In the tested rclone v1.76.0, upload-session resumption is not implemented. Its TUS filename metadata is the source basename, so use `copy` as shown rather than relying on `copyto` to rename during upload; rename separately afterward. See the [rclone TUS implementation](https://github.com/rclone/rclone/blob/v1.76.0/backend/webdav/tus.go).
+
+### Reproducing the local client check
+
+The opt-in test runs an installed rclone executable against a local Worker with SQLite Durable Objects and the Google Drive mock:
+
+```bash
+RCLONE_BIN=/path/to/rclone pnpm exec vitest run --config test/rclone.config.mts
+```
+
+It uses only test credentials, never `.dev.vars` or real Google/Cloudflare resources. Its front-door proxy rejects bodies above 12 MiB, while rclone uploads a file above 25 MiB in multiple TUS requests. It checks the final bytes by SHA-256, records each PATCH size, and separately checks that an oversized PUT gets 413. Verified with rclone v1.76.0: 26,214,523 bytes were sent in PATCH bodies of 10,485,760, 10,485,760 and 5,243,003 bytes, all below the 12,582,912-byte cap. This is a simulated ingress-limit test, not a deployed Cloudflare acceptance test. Default tests do not launch rclone.
 
 ## File downloads
 
@@ -57,14 +90,14 @@ Property semantics follow [RFC 4918](https://www.rfc-editor.org/rfc/rfc4918.html
 - Replacement never permanently deletes the previous destination. If the final write is definitively rejected (4xx other than 408), the worker attempts to restore that destination. A failed restore is reported, not hidden. The account must have permission to trash and restore the destination; deletion permission alone is insufficient. Ordinary WebDAV DELETE still uses permanent deletion and is unchanged by this replacement fix.
 - Restoring a replaced collection can also restore descendants that were independently trashed before the replacement. This was observed after Drive propagation settled; restoration is not an exact snapshot rollback.
 - A timeout, network error, 5xx, 408, or invalid success response can mean a write already happened. The worker returns an error without retrying or blindly rolling back. Inspect Drive before retrying: the previous destination may be in Trash, and COPY may leave a staged file (or an already-published copy). Error responses include recovery names/known IDs. Failed COPY stages are retained, not automatically deleted; clean them up manually once their outcome is known. Trash is subject to Google Drive's retention rules and is not a permanent backup.
-- This is a recoverable, multi-request workflow, **not an atomic transaction**. Concurrent clients can still produce duplicate names or race with restoration, and there is a brief interval without the destination name. Existing metadata caches and cross-instance KV propagation can also be stale. Directory transfers evict affected descendant metadata locally and attempt KV eviction after the Drive writes. KV failures are logged without masking the Drive result; they can leave stale entries. This does not provide cross-instance locking or eliminate in-flight cache races.
+- This is a recoverable, multi-request workflow, **not an atomic transaction**. Concurrent clients can still produce duplicate names or race with restoration, and there is a brief interval without the destination name. Directory transfers evict affected descendant metadata locally after the Drive writes. Other instances can retain stale entries until expiry. This does not provide cross-instance locking or eliminate in-flight cache races.
 
 ## Metadata and listing caches
 
-- Fresh Drive metadata is cached in the writing instance for 300 seconds and directory listings for 30 seconds. With KV configured, those writes also use KV TTLs of 300 and 60 seconds respectively; KV's minimum TTL means a listing can remain available there after its local 30-second entry expires.
-- Metadata and listing hits from KV are returned directly, without promotion to instance memory. A hit near KV expiry no longer starts another five-minute local lifetime. Once the local entry is absent or expired, each read consults KV again; this deliberately trades more KV reads for avoiding that lifetime extension. Fresh Drive results still populate both caches.
-- This does not enforce a 30-second end-to-end listing freshness limit or immediate visibility of external Drive changes. KV propagation and edge caching remain eventually consistent. Invalidating one instance cannot synchronously clear other instances' existing memory entries.
-- TUS session caching is unchanged: session writes are awaited in KV, use a one-day TTL, and KV session hits retain the existing five-minute local promotion.
+- Fresh Drive metadata is cached in the current isolate for 300 seconds and directory listings for 30 seconds. Cache hits do not extend expiry; expired or absent entries are read from Drive.
+- Each namespace retains at most 128 entries (plus the fixed root mapping). Expired entries are removed on lookup/write, and the oldest inserted entry is evicted at capacity. Entries whose key and serialized value exceed 64 KiB are not cached, so large listings still work without being retained.
+- There is no Workers KV binding or shared metadata cache. This remains eventually consistent: local invalidation cannot clear another isolate's memory, and concurrent in-flight reads or external Drive changes can remain stale until expiry.
+- TUS upload sessions still use Durable Objects. Removing metadata caching persistence does not remove upload recovery state.
 
 ## Verification and scope
 

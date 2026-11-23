@@ -7,10 +7,6 @@
 	"send_metrics": false,
 	"keep_names": false,
 	"minify": true,
-	"kv_namespaces": [
-		{
-			"binding": "KV",
-			"id": "google-drive-webdav-kv"
-		}
-	]
+	"durable_objects": { "bindings": [{ "name": "TUS_UPLOADS", "class_name": "TusUpload" }] },
+	"migrations": [{ "tag": "v1-tus", "new_sqlite_classes": ["TusUpload"] }]
 }

@@ -68,7 +68,7 @@ Required endpoints (base-path routing must be integration-tested):
 
 | Endpoint | Contract |
 | --- | --- |
-| `GET /status.php` | 200 JSON with installed=true, truthful version/product/status fields; not an arbitrary HTML page. Exact accepted compatibility-version values are a client-probe gate. |
+| `GET /status.php` | 200 JSON with installed=true, truthful installed/maintenance status; publish a tested compatibility version/product profile, not package.json version and not an assertion that the upstream oCIS binary is running. Exact accepted values are a client-probe gate. |
 | unauthenticated `PROPFIND /remote.php/webdav/` | 401 with Bearer challenge; do not return a fake successful directory. |
 | `GET /.well-known/webfinger?resource=...` | Valid subject when supplied; issuer link with rel `http://openid.net/specs/connect/1.0/issuer`; client configuration only for approved client IDs. |
 | `GET /.well-known/openid-configuration` | Real issuer and authorization/token/userinfo/JWKS endpoints, code response, S256; advertise only implemented methods/scopes. |
@@ -76,9 +76,18 @@ Required endpoints (base-path routing must be integration-tested):
 | token endpoint | authorization_code and refresh_token grants; supported client_secret_basic/post for these clients. |
 | userinfo endpoint | Authenticated, stable sub and truthful profile claims. |
 | JWKS endpoint | Public keys for valid signed ID tokens; never publish private keys. |
-| `GET /ocs/v2.php/cloud/user?format=json` | OCS envelope with data.id and data["display-name"]. |
-| `GET /ocs/v2.php/cloud/capabilities[?format=json]` | OCS envelope with data.capabilities; honor OCS-APIREQUEST and JSON requests. |
+| `GET /ocs/{v1,v2}.php/cloud/user` | OCS envelope with data.id and data["display-name"], XML/JSON representation as below. |
+| `GET /ocs/{v1,v2}.php/cloud/capabilities` | OCS envelope with data.capabilities; honor OCS-APIREQUEST and representation selection below. |
+| authenticated `OPTIONS /remote.php/webdav` (also trailing slash) | Discovery response with DAV/TUS support matching enabled operations; reference returns 204. |
 | `GET /graph/v1.0/me/drives` | Graph value array containing the authorized personal Space. |
+
+OCS v1 success uses envelope `meta.statuscode=100`; v2 success uses `200`. These
+are envelope values, not interchangeable with HTTP status. Support `format=json` and
+`format=xml` explicitly; without format honor XML/JSON Accept and use the reference XML
+default. Preserve OCS envelope/error shapes and the observed v1 `Ocs-Api-Version: 1`
+header. Cyberduck requests XML and CLI 6 uses v1, so JSON-only v2 is insufficient.
+Cyberduck also probes `HEAD /remote.php/dav/files/<user>/Personal/`; reference 404 is a
+valid fallback to OCS/Graph discovery, not an obligation to synthesize another mount.
 
 Minimal implementation still requires HTTPS, login CSRF protection/rate limiting,
 short-lived unpredictable one-use authorization codes, PKCE S256, code binding to
@@ -96,6 +105,22 @@ possible OIDC grants. Dynamic registration and federation can be omitted entirel
 Desktop token success requires access_token, refresh_token and token_type=Bearer;
 Android also consumes expires_in. Verify renewal, restart persistence, logout/revocation,
 expired tokens and concurrent refresh before accepting the auth implementation.
+
+Signing keys must survive isolate restart and work across instances: use deployment
+Secrets or persisted Auth DO key material, never cold-start-only random keys. Choose
+a supported Web Crypto signing algorithm (RS256 is a candidate), stable `kid`, and
+retain public verification keys until issued tokens expire when rotating. Freeze the
+actual desktop/Android public client IDs and callback rules from pinned sources into
+a tested allowlist; an embedded desktop client secret is not confidential. Do not
+accept arbitrary IDs, wildcard custom schemes or arbitrary loopback hosts. A concurrent
+refresh must have a documented atomic policy (single winner or bounded same-result
+retry); a grace window is not permission to mint independent unlimited token chains.
+
+USERS accounts currently share one Google identity and ROOT_ID. Authentication subjects
+and upload/session ownership remain distinct, but this is not per-user file isolation.
+One configured shared view may have one stable Space identity and common generation;
+Graph owner must describe that model truthfully or be omitted. Do not imply that
+different login names create private Google roots.
 
 ## 4. Capabilities and Space model
 
@@ -156,14 +181,32 @@ must never be reported as a successful empty or complete directory.
 
 Required property surface from client source includes DAV displayname, resourcetype,
 getcontenttype, getcontentlength, getlastmodified, creationdate and getetag; ownCloud
-id, permissions, checksums, size, has-preview, plus requested optional share-types,
+id and fileid, spaceid, file-parent, name, permissions, checksums, size, has-preview,
+plus requested optional share-types,
 privatelink, downloadURL, dDC and root data-fingerprint. Return only valid semantics;
 unsupported optional properties use 404. Permissions must describe actual operations,
 not a universal writable string. ID survives rename/move; real replacement/new objects
 must not reuse an unrelated identity. Proper namespaced errors matter.
 
-Files have stable quoted validators that change with represented content/metadata.
-GET and PROPFIND validators must agree. Directory and Space-root validators must
+Reference collections expose `oc:size` rather than a file `d:getcontentlength`. Define
+folder size honestly (do not invent a recursively computed total). Map `oc:id` and
+`oc:fileid` consistently to stable identity; requested unsupported optional fields remain
+404. Support `Prefer: return=minimal` for PROPFIND by omitting 404 Not Found property propstat entries
+only when applying that preference, with `Preference-Applied: return=minimal`; it does
+not permit omitting successful requested properties or partial listing errors.
+
+Separate synchronization change markers from HTTP media validators. PROPFIND currently
+uses Drive version (including metadata/dead-property mutations); `id + modifiedTime`
+is insufficient when a client preserves mtime across a content update. Binary GET uses
+the actual Drive v2 `alt=media` response ETag, never the v2 JSON etag or a derived
+metadata version. HEAD currently omits ETag rather than claim its cached metadata
+validator identifies the downloaded representation. The future compatibility profile
+must test client synchronization and HEAD expectations with this distinction; do not
+claim all three validators agree without a verified representation-bound implementation.
+For Range + If-Range, compare the requested strong tag with the actual partial response
+ETag before exposing its body. A mismatch, weak/date validator, absent response tag, or
+416 falls back to full GET; unrelated errors do not. Google does not enforce If-Range
+for this media path. Ordinary Range is unchanged. Directory and Space-root validators must
 reflect descendant changes; Drive folder modifiedTime/version alone is insufficient.
 Clients can skip a complete tree when root.eTag is unchanged. A constant synthetic
 root validator silently loses synchronization.
@@ -172,13 +215,29 @@ root validator silently loses synchronization.
 strategy. A per-view DO generation, advanced by local mutations plus Drive changes
 polling, and used conservatively for every directory, is a candidate, not a proven
 solution. It avoids an ancestor index but rescans more. Evaluate persisted feed cursors,
-external creates/edits/moves/deletes, changes outside the mounted root, cursor expiry,
+external creates/edits/moves/deletes, changes outside the mounted root, missing/invalid cursors,
 cache invalidation, multiple users/views, polling lag and Drive/DO costs. Compare it
 against deliberately invalidating discovery on a poll interval/full traversal; do not
 promise zero lag or no missed changes without tests. Feed outage must not issue a false
 "unchanged" assertion from an unverified generation. KV eventual consistency must not
 silently restore an older validator. This profile does not require a globally distributed
 lock service, but honest synchronization cannot ignore stale directory validators.
+
+Drive changes start/page tokens are documented as non-expiring; do not invent a token
+TTL (unlike OAuth or upload sessions). Recovery still needs invalid/missing state,
+permission loss and pagination/crash handling. Before using changes, audit
+getStartPageToken/changes.list and extend the mock; the existing mock does not cover it.
+
+A generation may never label an older cached listing as current. For the candidate
+DO design, namespace both metadata and listing caches by authoritative view generation,
+and ensure in-flight results retain the generation they started under. A request that
+observes a generation change must not publish old data under the new key; retry or fail
+without an unchanged assertion. KV deletion alone cannot enforce this across instances.
+Test old memory/KV hits, in-flight stale fills, external deletion/move and restart after
+feed checkpointing. This is a new sync correctness requirement, not a reversal of the
+accepted generic DAV 30/60-second cache policy. If changes cannot cheaply be scoped to
+a mounted subtree, account-wide generation invalidation is safe but can cause excess
+traversals; measure that tradeoff rather than pretending unrelated changes are free.
 
 ## 6. File operations and errors
 
@@ -207,6 +266,34 @@ restoration limitations, before release. No fake recycle-bin endpoint. Google Do
 native documents/export remain a separate product decision; do not expose them as
 ordinary downloadable binary files unless a defined export representation exists.
 
+### Legacy route and migration boundary
+
+The oCIS profile is opt-in. With it disabled, existing PATH routing and its legacy
+parent-creating PUT/MKCOL behavior remain unchanged. When enabled, bootstrap endpoints
+above are origin-root endpoints and `/dav/spaces/<spaceId>/...` is reserved for the
+compatibility dispatcher before legacy PATH dispatch. Do not silently shadow a real
+legacy `spaces` folder under PATH=/dav/: require a non-overlapping legacy mount (for
+example `/webdav/`) or reject the conflicting configuration before enabling the profile.
+This migration is explicit and must be documented and tested, not silently renamed.
+
+Decode each path segment once. Both literal `$` and `%24` in a Space ID identify the
+same authorized Space; encoded separators and double-decoding must not escape the
+mount. Compatibility MKCOL/PUT/TUS creation require existing parent collections (409
+when absent); legacy recursive ensureDir is not reused there. Preserve the old test
+for legacy behavior and add separate compatibility tests. Non-TUS PATCH must not be
+dispatched to COPY in the compatibility route; return method-not-supported instead.
+The existing legacy PATCH alias is a separate migration choice.
+
+Native Google documents and shortcuts need an explicit sync representation or an
+explicitly excluded, discoverable unsupported-resource policy. Do not promise that
+every such item produces a 403 loop; verify actual client response. An export or
+shortcut-resolution feature is not implicitly authorized by this design correction.
+
+Quota arithmetic must handle absent Drive limit (unlimited) and decimal-string values
+without NaN/unsafe integer rounding. Use exact integer arithmetic internally; do not
+copy oCIS's 2^63-1 sentinel into a JS Number. Optional Graph quota should be omitted
+when a truthful client-safe representation has not been established.
+
 ## 7. TUS upload and recovery
 
 Desktop requires creation-with-upload, not merely creation. POST to a DAV collection
@@ -221,7 +308,13 @@ Parse metadata filename, mtime, checksum and optional MIME safely. Observed Cybe
 9.6.0 sends `filename <base64>, filetype application/octet-stream,`: the extra filetype
 value is not Base64 and there is a trailing comma. To support this client, tolerate
 that narrowly scoped optional hint (or ignore it and infer MIME); do not relax filename,
-checksum, path authorization or arbitrary mandatory metadata validation. Document this
+checksum, path authorization or arbitrary mandatory metadata validation. Accept finite
+fractional Unix-second mtime where observed, define conversion precision, and reconcile
+X-OC-Mtime with metadata mtime explicitly. Pinned rclone 1.76.0 SetModTime source uses `DAV:lastmodified` (integer Unix
+seconds), optionally alongside `oc:checksums`; this differs from DAV:getlastmodified.
+The historical 337-byte capture lacks its body. A fresh original-client synthetic
+recorder probe now confirms that property combination and body length; it is not
+a recovery of the old values or a live oCIS semantic acceptance test. Document this
 as a vendor deviation from strict TUS syntax, not a reason to accept all malformed input.
 Support TUS 1.0 OPTIONS, POST, HEAD and PATCH with correct Tus-Resumable/Upload-Offset/
 Upload-Length and Location. The Location remains reachable through the Worker and
@@ -247,6 +340,29 @@ and overwrite preconditions on the applicable creation/finalization paths. Test 
 each client carries If-Match on TUS independently of its ordinary PUT path. Checksum
 mismatch must be surfaced, not ignored after claiming verification. Verify checksum
 availability and Drive digest timing in the mock contract before relying on it.
+
+The oCIS whole-file checksum metadata is distinct from the TUS per-request
+Upload-Checksum extension; do not advertise the latter merely for implementing the former.
+
+Checksum verification for an in-place replacement must finish **before** sending the
+Google-finalizing bytes, otherwise mismatch detection is too late to protect the old
+content. Persist incremental digest state and its byte position alongside the upload
+journal (or demonstrate an equally bounded recoverable alternative); hash each byte
+once despite client replay and upstream partial acknowledgments. Hold the final block
+until the declared whole-file checksum is validated, including exact-block and empty
+files. Native digest APIs alone do not supply serializable cross-request hash state.
+Audit Drive finalization and checksum response fields before relying on them; a digest
+returned after commit can validate success but cannot undo a failed replacement.
+A temporary-file replacement changes Google identity and is not equivalent to stable-ID
+in-place overwrite. This is OC-06 work, not functionality promised by the independent
+generic TUS foundation. It does not provide atomic exclusion of concurrent writers.
+
+A replay at an old Upload-Offset can correctly return 409 even after completion; HEAD
+then exposes retained completed progress. Probe client recovery rather than changing
+this to fake unconditional PATCH success. Reference HEAD 404 and our receipt HEAD 200
+are an intentional lifecycle difference. Measure current 1 MiB upstream/journal writes
+and bound the accepted request size against platform request and CPU/storage budgets;
+10 MiB announcement alone does not prove cost or large-request safety.
 
 Acceptance cases: new/overwrite/empty files; paths with Unicode/spaces; data-bearing POST;
 multiple PATCHes; smaller than/at/over chunk bound; arbitrary client chunk alignment;
@@ -292,6 +408,11 @@ coverage or an image-only heuristic. Validate dimensions; do not promise exact r
 semantics absent an implementation. Missing preview produces a real not-found/unsupported
 response and has-preview=false where known, not the original file masquerading as a
 thumbnail. Cache by identity and version, enforce the same user/root authorization.
+
+For rclone compatibility, writable `{DAV:}lastmodified` uses integer Unix seconds,
+while readable `{DAV:}getlastmodified` uses HTTP-date. A request can also contain
+`{http://owncloud.org/ns}checksums`; do not mistake stored client claims for verified
+content digests.
 
 Keep Drive-backed custom properties and native metadata mapping from the existing
 WebDAV behavior document. Unmapped rich Drive capabilities can remain unavailable;

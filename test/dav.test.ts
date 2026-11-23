@@ -139,11 +139,101 @@ describe('original file downloads', () => {
 		expect(response.headers.get('Content-Type')).toBe('image/png');
 		expect(response.headers.get('Content-Length')).toBe(String(content.length));
 		expect(head.headers.get('Content-Length')).toBe(response.headers.get('Content-Length'));
+		expect(head.headers.get('ETag')).toBeNull();
+        expect(response.headers.get('ETag')).toMatch(/^"[^"]+"$/);
+		expect(head.headers.get('Accept-Ranges')).toBe('bytes');
+		expect(response.headers.get('Accept-Ranges')).toBe('bytes');
+		expect(head.headers.get('Date')).not.toBe(head.headers.get('Last-Modified'));
+		const properties = await (await request('/dav/image.png', { method: 'PROPFIND', headers: { Depth: '0' } })).text();
+		expect(properties).toContain('<D:getetag>&quot;image-1&quot;</D:getetag>');
 		expect(new Uint8Array(await response.arrayBuffer())).toEqual(content);
 		const urls = spy.mock.calls.map(([input]) => new URL(input instanceof Request ? input.url : String(input)));
 		expect(urls.some(url => url.searchParams.get('alt') === 'media')).toBe(true);
 		expect(urls.every(url => url.hostname === 'www.googleapis.com')).toBe(true);
 	});
+
+
+    it.each(['matching', 'stale', 'weak', 'date', 'empty', 'invalid', 'missing-upstream', 'weak-upstream', 'unsatisfiable'])('handles If-Range safely (%s)', async mode => {
+        const initial = await request('/dav/image.png');
+        const tag = initial.headers.get('ETag')!;
+        await initial.arrayBuffer();
+        const handle = drive.handle.bind(drive);
+        const calls: (string | null)[] = [];
+        vi.spyOn(drive, 'handle').mockImplementation(async (input, init) => {
+            const response = await handle(input, init);
+            if (String(input).includes('alt=media')) {
+                calls.push(new Headers(init?.headers).get('Range'));
+                if (mode === 'missing-upstream') response.headers.delete('ETag');
+                if (mode === 'weak-upstream') response.headers.set('ETag', 'W/' + tag);
+            }
+            return response;
+        });
+        const validator = mode === 'stale' ? '"old-version"' : mode === 'weak' ? 'W/' + tag
+            : mode === 'date' ? 'Mon, 01 Jan 2024 00:00:00 GMT' : mode === 'empty' ? '' : mode === 'invalid' ? 'invalid' : tag;
+        const range = mode === 'unsatisfiable' ? 'bytes=100-102' : 'bytes=1-3';
+        // SELF's HTTP transport drops empty header values; invoke the worker
+        // directly for that boundary so it actually receives an empty field.
+        const ctx = createExecutionContext();
+        const response = mode === 'empty'
+            ? await worker.fetch(new Request(ORIGIN + '/dav/image.png', { headers: { ...AUTH, Range: range, 'If-Range': validator } }), env as Env, ctx)
+            : await request('/dav/image.png', { headers: { Range: range, 'If-Range': validator } });
+        await waitOnExecutionContext(ctx);
+        const matching = mode === 'matching';
+        expect(response.status).toBe(matching ? 206 : 200);
+        expect(response.headers.get('Content-Range')).toBe(matching ? 'bytes 1-3/12' : null);
+        expect(new Uint8Array(await response.arrayBuffer())).toEqual(matching ? content.slice(1, 4) : content);
+        expect(calls).toEqual(matching ? [range] : [range, null]);
+    });
+
+    it('uses the media validator even when cached metadata, size and mtime stay unchanged', async () => {
+        const first = await request('/dav/image.png');
+        const tag = first.headers.get('ETag')!;
+        await first.arrayBuffer();
+        const file = drive.files.find(file => file.id === 'image')!;
+        const modifiedTime = file.modifiedTime;
+        const changed = content.slice(); changed[0] = 1;
+        file.content = changed;
+        const response = await request('/dav/image.png', { headers: { Range: 'bytes=1-3', 'If-Range': tag } });
+        expect(response.status).toBe(200);
+        expect(response.headers.get('ETag')).not.toBe(tag);
+        expect(file.modifiedTime).toBe(modifiedTime);
+        expect(new Uint8Array(await response.arrayBuffer())).toEqual(changed);
+    });
+
+    it('cancels discarded partial bytes and preserves a failed full-download retry', async () => {
+        const handle = drive.handle.bind(drive);
+        let cancelled = false;
+        let mediaCalls = 0;
+        vi.spyOn(drive, 'handle').mockImplementation(async (input, init) => {
+            if (!String(input).includes('alt=media')) return handle(input, init);
+            mediaCalls++;
+            if (mediaCalls === 1) return new Response(new ReadableStream({
+                cancel() { cancelled = true; },
+            }), { status: 206, headers: { ETag: '"new"' } });
+            expect(cancelled).toBe(true);
+            expect(new Headers(init?.headers).has('Range')).toBe(false);
+            return new Response('retry failed', { status: 503 });
+        });
+        const response = await request('/dav/image.png', { headers: { Range: 'bytes=1-3', 'If-Range': '"old"' } });
+        expect(response.status).toBe(503);
+        expect(mediaCalls).toBe(2);
+        expect(cancelled).toBe(true);
+    });
+
+    it.each([403, 404, 500])('does not hide upstream %s with an If-Range retry', async status => {
+        const handle = drive.handle.bind(drive);
+        let mediaCalls = 0;
+        vi.spyOn(drive, 'handle').mockImplementation(async (input, init) => {
+            if (String(input).includes('alt=media')) {
+                mediaCalls++;
+                return new Response('upstream failure', { status });
+            }
+            return handle(input, init);
+        });
+        const response = await request('/dav/image.png', { headers: { Range: 'bytes=1-3', 'If-Range': '"old"' } });
+        expect(response.status).toBe(status);
+        expect(mediaCalls).toBe(1);
+    });
 
 	it('forwards the client Range and preserves the partial original response', async () => {
 		const spy = vi.spyOn(drive, 'handle');
@@ -155,12 +245,33 @@ describe('original file downloads', () => {
 		expect(new Uint8Array(await response.arrayBuffer())).toEqual(content.slice(1, 4));
 		const media = spy.mock.calls.find(([input]) => String(input).includes('alt=media'));
 		expect(media).toBeDefined();
+        expect(String(media![0])).toContain('/drive/v2/files/');
 		expect(new Headers(media![1]?.headers).get('Range')).toBe('bytes=1-3');
 		expect(new Headers(media![1]?.headers).get('Authorization')).toBe('Bearer test-access-token');
 	});
 });
 
 describe('PROPFIND', () => {
+	// Documented Drive int64 / absent-limit shapes injected at the boundary.
+	// This does not claim the synthetic account has an unlimited plan.
+	it.each([
+		[{ usage: '9007199254740993', limit: '9223372036854775807' }, '9214364837600034814'],
+		[{ usage: '4096' }, undefined],
+		[{ usage: '4096', limit: '1024' }, '0'],
+	])('preserves quota integers and handles absent or exhausted limits', async (storageQuota, available) => {
+		const original = drive.handle.bind(drive);
+		vi.spyOn(drive, 'handle').mockImplementation(async (input, init) => {
+			if (String(input).includes('/drive/v3/about?')) return new Response(JSON.stringify({ storageQuota }));
+			return original(input, init);
+		});
+		const response = await request('/dav/', { method: 'PROPFIND', headers: { Depth: '0' } });
+		expect(response.status).toBe(207);
+		const xml = await response.text();
+		expect(xml).toContain('<D:quota-used-bytes>' + storageQuota.usage + '</D:quota-used-bytes>');
+		if (available === undefined) expect(xml).not.toContain('<D:quota-available-bytes>');
+		else expect(xml).toContain('<D:quota-available-bytes>' + available + '</D:quota-available-bytes>');
+	});
+
 	it('lists children with encoded hrefs and numeric sizes (Depth 1)', async () => {
 		const res = await request('/dav/', {
 			method: 'PROPFIND',

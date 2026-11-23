@@ -1,0 +1,19 @@
+{
+  "scope": "Official rclone 1.76.0 client request construction against synthetic localhost recorder; NOT oCIS or adapter acceptance",
+  "exit_code": 0,
+  "stderr": "",
+  "requests": [
+    {
+      "method": "PROPFIND",
+      "path": "/file.txt",
+      "body": "<?xml version=\"1.0\"?>\n<d:propfind  xmlns:d=\"DAV:\" xmlns:oc=\"http://owncloud.org/ns\" xmlns:nc=\"http://nextcloud.org/ns\">\n <d:prop>\n  <d:displayname />\n  <d:getlastmodified />\n  <d:getcontentlength />\n  <d:resourcetype />\n  <oc:checksums />\n  <oc:permissions />\n </d:prop>\n</d:propfind>\n",
+      "bytes": 285
+    },
+    {
+      "method": "PROPPATCH",
+      "path": "/file.txt",
+      "body": "<?xml version=\"1.0\" encoding=\"utf-8\" ?>\n<D:propertyupdate xmlns:D=\"DAV:\" xmlns:oc=\"http://owncloud.org/ns\">\n <D:set>\n  <D:prop>\n   <lastmodified xmlns=\"DAV:\">1794960000</lastmodified>\n   <oc:checksums>\n\t<oc:checksum>SHA1:81fe8bfe87576c3ecb22426f8e57847382917acf</oc:checksum>\n   </oc:checksums>\n  </D:prop>\n </D:set>\n</D:propertyupdate>\n",
+      "bytes": 337
+    }
+  ]
+}

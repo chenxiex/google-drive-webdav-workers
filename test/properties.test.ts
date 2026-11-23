@@ -165,6 +165,32 @@ describe('persisted WebDAV properties', () => {
         expect(source().description).toBeUndefined();
         expect(source().appProperties).toBeUndefined();
     });
+    it('changes ETag for different bytes even when size and client mtime are identical', async () => {
+        const tags: (string | null | undefined)[] = [];
+        for (const content of ['abcd', 'efgh']) {
+            expect((await request('/dav/a.txt', { method: 'PUT', body: content })).status).toBe(204);
+            await patch(set('<D:lastmodified>1577836800</D:lastmodified>'));
+            expect(source().size).toBe(4);
+            expect(source().modifiedTime).toBe('2020-01-01T00:00:00.000Z');
+            tags.push(value(await (await find('<D:getetag/>')).text(), DAV, 'getetag'));
+        }
+        expect(tags[0]).toBeTruthy();
+        expect(tags[1]).not.toBe(tags[0]);
+    });
+
+    it('maps rclone DAV:lastmodified seconds to the native modification time', async () => {
+        const before = source().version;
+        const body = await (await patch(set('<D:lastmodified>1577836800</D:lastmodified>'))).text();
+        expect(propStatus(body, DAV, 'lastmodified')).toBe('HTTP/1.1 200 OK');
+        expect(source().modifiedTime).toBe('2020-01-01T00:00:00.000Z');
+        expect(source().version).not.toBe(before);
+        expect(JSON.stringify(source().appProperties ?? {})).not.toContain('lastmodified');
+        const first = value(await (await find('<D:getetag/>')).text(), DAV, 'getetag');
+        await patch(set('<D:lastmodified>1577836800</D:lastmodified><X:label>changed</X:label>'));
+        expect(source().modifiedTime).toBe('2020-01-01T00:00:00.000Z');
+        expect(value(await (await find('<D:getetag/>')).text(), DAV, 'getetag')).not.toBe(first);
+    });
+
     it.each(['<G:starred>yes</G:starred>', '<D:getlastmodified>yesterday</D:getlastmodified>', '<G:modifiedTime>invalid</G:modifiedTime>', '<G:description><X:nested/></G:description>'])('rejects invalid native values atomically: %s', async invalid => {
         const spy = vi.spyOn(drive, 'handle');
         const body = await (await patch(set(invalid + '<X:label>not saved</X:label>'))).text();

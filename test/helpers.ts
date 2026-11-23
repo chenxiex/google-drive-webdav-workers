@@ -11,6 +11,7 @@ export interface DriveFile {
 	mimeType: string;
 	size?: number | string;
 	parents: string[];
+	version?: string;
 	modifiedTime?: string;
 	createdTime?: string;
 	description?: string;
@@ -65,7 +66,7 @@ function parseMetadata(bytes: Uint8Array): Metadata | Response {
 
 // Drive partial-response selectors used by this worker. Unknown supported-API
 // features fail loudly instead of pretending that the real API accepted them.
-const fileFields = new Set(['kind', 'id', 'name', 'mimeType', 'size', 'modifiedTime', 'createdTime', 'starred', 'folderColorRgb', 'appProperties', 'parents', 'trashed', 'explicitlyTrashed', 'description', 'iconLink', 'thumbnailLink', 'imageMediaMetadata']);
+const fileFields = new Set(['kind', 'id', 'version', 'name', 'mimeType', 'size', 'modifiedTime', 'createdTime', 'starred', 'folderColorRgb', 'appProperties', 'parents', 'trashed', 'explicitlyTrashed', 'description', 'iconLink', 'thumbnailLink', 'imageMediaMetadata']);
 function selections(fields: string): string[] {
 	let depth = 0;
 	let start = 0;
@@ -103,7 +104,7 @@ function project(data: Record<string, unknown>, fields: string, allowed: Set<str
 }
 function representation(file: DriveFile): Record<string, unknown> {
 	return {
-		kind: 'drive#file', id: file.id, name: file.name, mimeType: file.mimeType,
+		kind: 'drive#file', id: file.id, version: file.version ?? '1', name: file.name, mimeType: file.mimeType,
 		createdTime: file.createdTime, starred: file.starred ?? false,
 		...(file.description !== undefined ? { description: file.description } : {}),
 		...(file.folderColorRgb !== undefined ? { folderColorRgb: file.folderColorRgb } : {}),
@@ -153,6 +154,7 @@ export class MockDrive {
 	constructor(private oauth = { clientId: 'test-client-id', clientSecret: 'test-client-secret', refreshToken: 'test-refresh-token-history' }) {}
 
 	add(file: DriveFile): DriveFile {
+		file.version ??= '1';
 		file.parents = [...file.parents];
 		file.modifiedTime ??= '2024-01-01T00:00:00.000Z';
 		file.createdTime ??= file.modifiedTime;
@@ -243,6 +245,8 @@ export class MockDrive {
 		}
 		// In My Drive, adding a different single parent moves the file even if
 		// removeParents is absent. Confirmed with live Drive on 2026-11-13.
+		// Exact Drive increments are opaque; only monotonic advancement is modeled.
+		file.version = (BigInt(file.version ?? '1') + 1n).toString();
 		const nextParents = added.length ? [...added] : file.parents.filter(p => !removed.includes(p));
 		if ((meta.name && meta.name !== file.name) || JSON.stringify(nextParents) !== JSON.stringify(file.parents)) file.modifiedTime = new Date().toISOString();
 		if ((meta.description != null && meta.description !== file.description) || Object.keys(meta.appProperties ?? {}).length) file.modifiedTime = new Date().toISOString();
@@ -458,20 +462,27 @@ export class MockDrive {
 			}
 		}
 		const match = url.pathname.match(/^\/drive\/v3\/files\/([^/]+)$/);
-		if (match && method === 'GET' && url.searchParams.get('alt') === 'media') {
-			const file = this.findById(match[1]);
-			if (!file) return notFound(match[1]);
+		const media = url.pathname.match(/^\/drive\/v[23]\/files\/([^/]+)$/);
+		if (media && method === 'GET' && url.searchParams.get('alt') === 'media') {
+			const file = this.findById(media[1]);
+			if (!file) return notFound(media[1]);
 			if (file.mimeType.startsWith('application/vnd.google-apps.')) unsupported('media downloads of folders/native documents');
 			const content = file.content;
 			if (!content || Number(file.size) !== content.length) unsupported('media fixture without explicit bytes and matching size');
+            // v2 media ETag is an opaque strong representation validator, not
+            // the v2 JSON etag or v3 metadata version. If-Range is ignored.
+            const digest = await crypto.subtle.digest('SHA-256', content);
+            const etag = '"' + Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, '0')).join('') + '"';
+            const mediaHeaders = { 'Content-Type': file.mimeType, ...(url.pathname.includes('/v2/') ? { ETag: etag } : {}) };
 			const range = headers.get('Range');
-			if (!range) return new Response(content.slice(), { headers: { 'Content-Type': file.mimeType, 'Content-Length': String(content.length) } });
+			if (!range) return new Response(content.slice(), { headers: { ...mediaHeaders, 'Content-Length': String(content.length) } });
 			const parsed = range.match(/^bytes=(\d+)-(\d+)$/);
 			if (!parsed) unsupported('unverified media range syntax');
 			const start = Number(parsed[1]), end = Number(parsed[2]);
-			if (start > end || end >= content.length) unsupported('unverified media range bounds');
+			if (url.pathname.includes('/v2/') && start >= content.length) return new Response(null, { status: 416, headers: { 'Content-Range': `bytes */${content.length}` } });
+            if (start > end || end >= content.length) unsupported('unverified media range bounds');
 			return new Response(content.slice(start, end + 1), {
-				status: 206, headers: { 'Content-Type': file.mimeType, 'Content-Length': String(end - start + 1), 'Content-Range': `bytes ${start}-${end}/${content.length}` },
+				status: 206, headers: { ...mediaHeaders, 'Content-Length': String(end - start + 1), 'Content-Range': `bytes ${start}-${end}/${content.length}` },
 			});
 		}
 		if (match && method === 'GET') {

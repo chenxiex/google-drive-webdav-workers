@@ -104,3 +104,36 @@ It uses only test credentials, never `.dev.vars` or real Google/Cloudflare resou
 The mock contract and acceptance tests cover the behaviors above within their documented limits. They do not certify shared-drive permissions, concurrent mutations, or cross-region cache consistency. See the [Drive mock contract and audit](../test/mock-drive.md) for verification details.
 
 [Back to README](../README.md)
+
+## Validators, modification times and quotas
+
+File downloads use Drive v2 `files.get?alt=media`; metadata and writes remain
+on v3. GET preserves the media response's strong HTTP ETag, not the v2 JSON
+`etag` or a validator constructed from cached metadata. HEAD remains a cheap
+metadata lookup: it advertises byte ranges but omits ETag rather than claiming
+its cached metadata identifies the current bytes. PROPFIND's `getetag` remains
+an ID/version synchronization marker, distinct from the GET media validator.
+Directory subtree change detection remains part of the oCIS implementation plan.
+
+Ordinary Range requests are forwarded unchanged. Drive ignores If-Range, so
+the worker compares the client's If-Range with the actual partial response's
+strong ETag. Only an exact strong-tag match permits the 206 stream through.
+For a mismatch, weak/date validator, or missing/weak upstream validator, the
+worker cancels the partial body and requests the full representation (200).
+A 416 with If-Range also triggers a full download, since a stale validator must
+not cause an erroneous range failure; other errors are not hidden by a retry.
+If Drive already returns 200, it is passed through without a second request.
+
+This binds resume decisions to the returned media representation without a
+separate metadata check. It does not provide conditional writes, cross-instance
+cache coherence, or atomic metadata/media snapshots. Clients must retain GET's
+ETag for resumption; HEAD and PROPFIND do not supply that media validator.
+
+`PROPPATCH` accepts ownCloud/rclone's `DAV:lastmodified` Unix-seconds write alias
+as well as `DAV:getlastmodified` HTTP-date. Both update Drive `modifiedTime`;
+the alias is not persisted as a dead property.
+
+Quota integers are preserved without JavaScript floating-point rounding. If
+Drive does not report a finite quota limit, `quota-available-bytes` is absent
+(and explicitly requesting it returns `404` in the multistatus), not zero or
+`NaN`. Exhausted finite quotas report zero available bytes.

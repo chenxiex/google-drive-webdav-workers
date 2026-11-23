@@ -2,7 +2,7 @@
 
 原文来源：`origin/docs/bug-review-todo-20261103:todo.md`，原基线 `78161f0`。  
 初次复核日期：2026-11-14，基线 `8ae7b31`（Google Drive mock contract audit）。  
-上次更新：2026-11-17（快照恢复重建）。文档原基线 `dev` `873aff9`。TUS 基础修复曾独立提交为 `fef204e`，该对象不在恢复快照中，恢复后的独立分支已推送为 `c45b349`，未混入本文档基线。本文拟移除本地忽略并纳入版本管理；下方历史记录中“本地忽略/未提交”等保留为当时状态。oCIS 设计与历史探测证据见文末，恢复过程没有重新执行测试。
+上次更新：2026-11-18（独立审查建议复核）。当前文档基线 `dev` `73398c2`；本文已经纳入版本管理，不再本地忽略。TUS 基础修复位于已推送的 `fix/durable-tus-upload` `c45b349`，尚未合入 dev；旧对象 `fef204e` 丢失不等于恢复分支丢失。恢复后尚未重跑该分支全套测试，合入及复测属于 OC-06 前置步骤。下方历史记录中的“本地忽略/未提交”等只描述当时状态。
 
 ## 复核结论与证据边界
 
@@ -19,12 +19,12 @@
 - 下文区分：**本次复现**（当前源码 + 修正后的 MockDrive）、**故障注入**（人为提供上游失败/边界响应）、**代码确认**、**既有真实审计**、**尚未验证**。没有把注入结果当成 Google 一定会如此响应。
 - 本次未向真实账号发送变更请求，也未执行真实永久删除。复用了已合并的真实 API 审计证据，并核对下文官方文档。此前 115 次 HTTP 请求不是 115 个测试用例，也不是整个 WebDAV 服务的真实端到端验收。
 
-## 本地已修复，待审查合并
+## 已推送独立 TUS 分支，待审查合入 dev
 
 - TUS 已改为每上传 SQLite Durable Object：持久尾块与待发块日志、串行偏移检查、按真实 Google Range 恢复、完成回执及24小时清理；不再使用 KV 会话。
 - rclone v1.76.0 已实际验证 TUS：25 MiB+123字节文件在模拟12 MiB单请求入口下经3个PATCH成功，字节/hash/mtime一致，单次大PUT为413。仅本地Worker+DO+已对齐mock，不是Cloudflare线上验收。
 - 真实 Google 追加审计覆盖重放/重叠、非最终块部分确认、完成状态查询、空上传及mtime，新差异已同步mock；故障注入/DO重启仍为本地测试。所有本次真实测试资源仅移入垃圾箱。
-- 历史记录：独立分支 `fix/durable-tus-upload` 基于 `873aff9`，曾提交 `fef204e`，当时未推送/部署/合入dev。提交前全套305 tests / 14 files、两组TypeScript、构建与diff check通过。该Git对象现已丢失，恢复后的提交与验证状态另行核验。
+- 历史记录：独立分支 `fix/durable-tus-upload` 基于 `873aff9`，曾提交 `fef204e`，当时未推送/部署/合入dev。提交前全套305 tests / 14 files、两组TypeScript、构建与diff check通过。旧对象已丢失；恢复提交 c45b349 已验证在远端，原验收记录不当作恢复后重跑结果。
 
 ## 设计选择、功能缺口和部署核验（不列为已证实的运行故障）
 
@@ -129,9 +129,9 @@
 
 后续待办：
 
-- [ ] 修复各项时，将本次问题场景转为断言**正确行为**的正式回归测试，不能保留“发生误删即通过”作为验收。
-- [ ] 在独立真实测试目录补 WebDAV 端到端验证：原图字节、Range、目录操作、覆盖失败保护及 TUS 恢复。已有直接 Google API 审计不能替代这一层。
-- [ ] 另行验证跨实例/跨地域可见性、生产配置和平台大文件边界。破坏性操作只使用隔离测试资源，并遵守永久删除的单独确认要求。
+- 已合并 PR #2–#8 的修复均已有正式回归；余下各项继续要求断言**正确行为**，不重复列作一个未完成的全局修复。
+- 后续端到端验收统一归 OC-09/OC-10；已对齐 mock 的行为不重复做真实 Drive 验收，缺失合同才做隔离审计。
+- 后续生产配置和平台大文件边界归 OC-10/OC-11；不重开泛化的跨地域强一致目标。OC-05 单独验证同步 generation 不与旧数据混用。破坏性操作只用隔离资源，永久删除另行确认。
 
 2026-11-16 PROPPATCH 发布验证：
 
@@ -151,13 +151,25 @@
 - [ ] OC-02：在可运行原版客户端的环境完成请求捕获。当前7.1 GUI被QLocalServer限制阻断，Android/Windows未实测。固化status/OCS/Graph精确fixtures、路径与checksum能力，不仅登录/目录。
 - [ ] OC-03：实现最小有效OAuth/OIDC登录、PKCE、code/refresh、真实签名ID token、DO会话和撤销，复用USERS校验；测试回调白名单/过期/重放/刷新/账号隔离。不得把客户端ID/secret当用户密码。
 - [ ] OC-04：实现discovery/status/user/capabilities/单personal Space、真实身份/权限/URL；关闭分享/团队/通知等未实现能力，验证客户端不会被默认值误导。
-- [ ] OC-05：验证并选最简同步变化方案。比较Drive changes+DO generation与保守周期全树发现，测外部变更、移动/删除、游标过期、失败/缓存、延迟与调用成本；目录/root ETag不可固定，未验证前不承诺无漏同步。
+- [ ] OC-05：验证并选最简同步变化方案。比较Drive changes+DO generation与保守周期全树发现，测外部变更、移动/删除、游标丢失/无效状态恢复、失败/缓存、延迟与调用成本；目录/root ETag不可固定，未验证前不承诺无漏同步。
 - [ ] OC-06：合入审查后TUS基础，补creation-with-upload、空文件、两类filename路径、mtime/checksum/条件覆盖、完成ETag/ID/权限、POST/PATCH块上限协商。Google mock缺失功能先对齐再验收。
 - [ ] OC-07：按矩阵验收DAV CRUD、原图/Range、元数据/权限/冲突；解决目录COPY初版承诺、普通DELETE trash/永久策略与Google Docs表示，不用假成功掩盖缺口。
 - [ ] OC-08：Android DAV预览和has-preview，Worker代理缩略图、不泄露Google URL；明确尺寸/缓存/无预览行为。
 - [ ] OC-09：全生命周期恢复：客户端/Worker重启、丢响应、offset冲突、Google部分接收/超时/限流、过期/配额/checksum/最后提交丢响应；使用已对齐mock，不无谓重复真实Drive验收。
 - [ ] OC-10：Linux/Windows双向同步与Android前后台上传/下载/预览实机验收，保留rclone回归；真实部署再验收超过单次入口上限的文件，本地模拟不等于线上通过。
 - [ ] OC-11：固定版本兼容矩阵、资源/费用界限、部署迁移说明；通过门槛后才将设计改为已支持协议。
+
+### 2026-11-18 审查后补充验收点
+
+以下是上述阶段的细化，不是第二套待办，也不将尚未实施 oCIS 当作已实现 bug：
+
+- OC-02：捕获保留脱敏 query 和 PROPFIND/PROPPATCH XML 请求/响应、小 OCS/Graph 内容；请求大小不能证明属性名。rclone 337B PROPPATCH 已用原版1.76.0对本地synthetic recorder补采，确认 DAV:lastmodified Unix秒 + oc:checksums；不是oCIS/Worker验收，既有旧 wire 不补造丢失内容。保留凭据、token、会话 URL 脱敏。
+- OC-03：签名密钥持久化及轮换/JWKS 保留、固定官方 client_id/回调白名单、并发刷新策略和 USERS 共享 ROOT_ID 的真实权限边界。status 兼容版本不是本项目 package 版本，也不宣称运行原版 oCIS。
+- OC-04：OCS v1/v2、XML/JSON、v1 meta=100/v2 meta=200、OPTIONS /remote.php/webdav、Cyberduck fallback 404、Space ID 的 $/%24 单次解码。精确字段和值由 fixtures 驱动。
+- OC-05：先审计 Drive changes 并建 mock；generation 与 metadata/listing 缓存键绑定，覆盖旧内存/KV、进行中旧写入、分页/重启/外部删除移动；不能新 ETag 搭配旧列表。Google changes token 官方不失效，不编造 TTL。测子目录挂载下账户外变更导致的遍历成本。
+- OC-06：先合入/复测 c45b349；data-bearing POST、两种 filename、浮点 mtime/X-OC-Mtime、Cyberduck 可选提示语法、独立请求上限；checksum 在 Google 最终提交前校验，hash 状态可恢复且重放不重复计入；完成元数据按真实响应。HEAD 完成回执 200 与旧 offset 重放 409 保留，验证客户端恢复，不机械仿照参考 HEAD 404。
+- OC-07：GET/HEAD/PROPFIND validators 一致且同 mtime 写入不可碰撞；If-Range 本地判断。legacy 自动父目录行为与兼容路由缺父 409 分开测试；oCIS opt-in 路由不能静默遮蔽 legacy spaces 目录；非 TUS PATCH 不走 COPY。Google Docs/Shortcuts 表示、普通 DELETE 策略在本阶段决策，保留文首理由，不另重复勾选。
+- OC-10/OC-11：入口限制、DO 请求/存储开销、实际 KV ID/secrets/OAuth 部署核验统一在此验收，文首项目为解释索引。
 
 测试按独立行为组织，避免按客户端复制同样mock断言；客户端运行记录与协议合同分层。暂不引入R2、完整oCIS服务栈或客户端修改。
 

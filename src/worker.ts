@@ -221,7 +221,7 @@ async function readPropertyBody(request: Request): Promise<string> {
 
 const DAV_NAMESPACE = 'DAV:';
 const DRIVE_NAMESPACE = 'urn:google:drive';
-const PROPERTY_FIELDS = 'id,name,mimeType,size,modifiedTime,createdTime,description,starred,folderColorRgb,appProperties,parents';
+const PROPERTY_FIELDS = 'id,version,name,mimeType,size,modifiedTime,createdTime,description,starred,folderColorRgb,appProperties,parents';
 const statusLabels: Record<number, string> = { 200: 'OK', 400: 'Bad Request', 403: 'Forbidden', 404: 'Not Found', 409: 'Conflict', 424: 'Failed Dependency', 429: 'Too Many Requests', 500: 'Internal Server Error', 502: 'Bad Gateway', 503: 'Service Unavailable', 507: 'Insufficient Storage' };
 function propstat(xml: string, status: number, protectedProperty = false): string {
     return `<D:propstat><D:prop>${xml}</D:prop><D:status>HTTP/1.1 ${status} ${statusLabels[status] || 'Error'}</D:status>`
@@ -237,7 +237,7 @@ function multiStatus(content: string): Response {
     });
 }
 function isNativeProperty(property: DavProperty): boolean {
-    return property.namespace === DAV_NAMESPACE && property.name === 'getlastmodified'
+    return property.namespace === DAV_NAMESPACE && ['getlastmodified', 'lastmodified'].includes(property.name)
         || property.namespace === DRIVE_NAMESPACE && ['description', 'starred', 'modifiedTime', 'folderColorRgb'].includes(property.name);
 }
 function isProtectedProperty(property: DavProperty): boolean {
@@ -257,6 +257,14 @@ function applyNativeProperty(patch: Record<string, unknown>, property: DavProper
         if (node.nodeType === 1) throw new StatusError('This property requires a text value', 409);
     }
     const value = element.textContent || '';
+    // ownCloud/rclone's writable DAV alias uses Unix seconds, not HTTP-date.
+    if (property.namespace === DAV_NAMESPACE && property.name === 'lastmodified') {
+        const seconds = Number(value);
+        const date = new Date(seconds * 1000);
+        if (!/^-?\d+$/.test(value) || !Number.isSafeInteger(seconds) || !Number.isFinite(date.getTime())) throw new StatusError('Invalid timestamp', 409);
+        patch.modifiedTime = date.toISOString();
+        return;
+    }
     if (field === 'description') patch.description = value;
     else if (field === 'starred') {
         if (!['true', 'false', '1', '0'].includes(value.trim())) throw new StatusError('Expected a boolean', 409);
@@ -278,7 +286,9 @@ function applyNativeProperty(patch: Record<string, unknown>, property: DavProper
         patch.modifiedTime = date.toISOString();
     }
 }
-function davProperties(file: any, quota?: { used: number | string; available: number | string }): Map<string, DavProperty> {
+const fileEtag = (file: any): string => '"' + (file.id || 'root') + '-' + (file.version ?? file.modifiedTime ?? '') + '"';
+
+function davProperties(file: any, quota?: { used: string; available?: string }): Map<string, DavProperty> {
     const result = new Map<string, DavProperty>();
     const add = (name: string, value: unknown, namespace = DAV_NAMESPACE, raw = false) => {
         const prefix = namespace === DAV_NAMESPACE ? 'D' : 'G';
@@ -292,14 +302,16 @@ function davProperties(file: any, quota?: { used: number | string; available: nu
         add('getcontentlength', Number(file.size) || 0);
         add('getcontenttype', file.mimeType || 'application/octet-stream');
     }
-    add('getetag', '"' + (file.id || 'root') + '-' + (file.modifiedTime || '') + '"');
+    add('getetag', fileEtag(file));
     if (file.modifiedTime) add('getlastmodified', new Date(file.modifiedTime).toUTCString());
     if (file.createdTime) add('creationdate', file.createdTime);
     // Keep the existing empty lock capability element (Class 1, no locks).
     result.set(propertyKey({ namespace: DAV_NAMESPACE, name: 'supportedlock' }), { namespace: DAV_NAMESPACE, name: 'supportedlock', xml: '<D:supportedlock/>' });
     if (quota) {
-        add('quota-used-bytes', Number(quota.used) || 0);
-        add('quota-available-bytes', Number(quota.available) || 0);
+        add('quota-used-bytes', quota.used);
+        // No finite limit is reported for unlimited Drive accounts. Do not
+        // invent zero free space or round int64 quotas through Number.
+        if (quota.available !== undefined) add('quota-available-bytes', quota.available);
     }
     for (const name of ['description', 'starred', 'modifiedTime', 'createdTime', 'folderColorRgb']) {
         if (file[name] !== undefined) add(name, file[name], DRIVE_NAMESPACE);
@@ -416,7 +428,10 @@ class GDrive {
                     return new Response(arrayToHtml(rpath, files), { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8' } });
                 }
                 const abuse = url.searchParams.get('abuse') === 'true';
-                const range = request.headers.get('Range');
+                // Until range selection can be bound atomically to a Drive
+                // revision, conservatively send the full representation for
+                // If-Range. Never append bytes selected using a stale validator.
+                const range = request.headers.has('If-Range') ? null : request.headers.get('Range');
                 response = await this.getRawContent(metadata.id, range, abuse);
                 if (response.status >= 400) {
                     // The body is not always JSON, and `errors` is not always
@@ -429,6 +444,10 @@ class GDrive {
                     }
                     throw new StatusError(result?.error?.message || response.statusText || 'Drive error', response.status);
                 }
+                response = new Response(response.body, response);
+                response.headers.set('ETag', fileEtag(metadata));
+                response.headers.set('Accept-Ranges', 'bytes');
+                if (metadata.modifiedTime) response.headers.set('Last-Modified', new Date(metadata.modifiedTime).toUTCString());
             } catch (e: any) { return new Response(e.message, { status: errorStatus(e) }); }
         } else { response = new Response(null, { status: 404 }); }
         return response;
@@ -984,7 +1003,8 @@ class GDrive {
                     'Content-Length': size,
                     'Content-Type': mimeType,
                     'Last-Modified': modifiedTime,
-                    'Date': modifiedTime
+                    'ETag': fileEtag(metadata),
+                    ...(metadata.mimeType !== FOLDER_MIME ? { 'Accept-Ranges': 'bytes' } : {})
                 }
             });
         }
@@ -1188,10 +1208,16 @@ class GDrive {
         return result;
     }
 
-    async getQuota(): Promise<{ available: number | string; used: number | string } | undefined> {
+    async getQuota(): Promise<{ available?: string; used: string } | undefined> {
         const response = await fetch('https://www.googleapis.com/drive/v3/about?fields=storageQuota', { headers: { Authorization: 'Bearer ' + (await this.getAccessToken()) } });
         const result: any = await response.json();
-        if (result.storageQuota) return { available: result.storageQuota.limit - result.storageQuota.usage, used: result.storageQuota.usage };
+        if (result.storageQuota) {
+            const { limit, usage } = result.storageQuota;
+            const used = BigInt(usage || '0');
+            if (limit === undefined) return { used: used.toString() };
+            const available = BigInt(limit) - used;
+            return { available: (available < 0n ? 0n : available).toString(), used: used.toString() };
+        }
     }
 
     async getAccessToken(): Promise<string> {

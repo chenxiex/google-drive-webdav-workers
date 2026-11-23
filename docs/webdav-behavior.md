@@ -104,3 +104,25 @@ It uses only test credentials, never `.dev.vars` or real Google/Cloudflare resou
 The mock contract and acceptance tests cover the behaviors above within their documented limits. They do not certify shared-drive permissions, concurrent mutations, or cross-region cache consistency. See the [Drive mock contract and audit](../test/mock-drive.md) for verification details.
 
 [Back to README](../README.md)
+
+## Validators, modification times and quotas
+
+File `PROPFIND`, `HEAD` and `GET` use the same ETag derived from Drive file ID
+and its monotonic `version`, not the client-writable modification timestamp.
+This does not turn the existing bounded-staleness metadata cache into a
+cross-instance consistency mechanism, or make the metadata/media reads atomic.
+Directory subtree change detection remains part of the oCIS implementation plan.
+
+Ordinary byte-range downloads remain supported. A request carrying `If-Range`
+currently receives the complete representation (`200`), ignoring its `Range`,
+rather than risk combining revisions after checking a cached validator. This is
+an intentional conservative fallback, not atomic conditional range support.
+
+`PROPPATCH` accepts ownCloud/rclone's `DAV:lastmodified` Unix-seconds write alias
+as well as `DAV:getlastmodified` HTTP-date. Both update Drive `modifiedTime`;
+the alias is not persisted as a dead property.
+
+Quota integers are preserved without JavaScript floating-point rounding. If
+Drive does not report a finite quota limit, `quota-available-bytes` is absent
+(and explicitly requesting it returns `404` in the multistatus), not zero or
+`NaN`. Exhausted finite quotas report zero available bytes.

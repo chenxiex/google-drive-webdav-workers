@@ -119,3 +119,7 @@ Official references:
 - [Drive errors](https://developers.google.com/workspace/drive/api/guides/handle-errors)
 
 - [Trash and restore semantics and asynchronous propagation](https://developers.google.com/workspace/drive/api/guides/delete)
+
+## Version field audit (2026-11-18)
+
+An isolated real Drive binary file was overwritten with different four-byte contents, then updated with the same explicit `modifiedTime` after each write. `version` advanced from `6` to `10`; a subsequent `appProperties` update preserving that timestamp advanced it to `11`. `files.get` and `files.list` returned the same decimal-string version. The test file was moved to Trash afterwards. The mock now exposes `version` and advances it on updates; the exact increment is deliberately not modeled. This supports validators that change even when clients preserve timestamps and sizes. No account identifiers or credentials are retained here.

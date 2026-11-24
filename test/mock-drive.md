@@ -1,95 +1,8 @@
 # Google Drive mock contract
 
-`helpers.ts` implements the existing worker-facing mock endpoints. `mock-drive.test.ts` checks their upstream contracts in fast, isolated Node tests; `dav.test.ts` checks the WebDAV integration in workerd. Normal tests never load `.dev.vars`, contact Google, or mutate remote files.
+[test/helpers.ts](helpers.ts) implements `MockDrive`, a bounded in-memory test double verified against live Google OAuth and Drive APIs. [test/mock-drive.test.ts](mock-drive.test.ts) verifies the upstream Drive contracts directly in Node, while the WebDAV suites run against `MockDrive` in `workerd`. Default tests never load `.dev.vars`, contact Google, or mutate live Drive files.
 
-## Live audit: 2026-11-13
-
-The audit made 115 HTTP requests to the real Google OAuth/Drive API using the configured account and the environment's existing authenticated-network route. It started read-only, then used two uniquely named fixture folders. Only newly created test data was changed. After separate approval for each folder's permanent deletion, all 12 created resources were removed and individually verified to return 404. No credentials or upload-session URLs were committed, and no existing Drive files were overwritten or deleted.
-
-The requests include setup, independent readbacks, and cleanup; **115 is not a count of distinct test cases**. This was one My Drive account, not an exhaustive certification of every Google Drive behavior or account type.
-
-| Existing mock interface | Live observations incorporated |
-| --- | --- |
-| POST `/oauth2/v4/token` | Form-encoded refresh grant, successful bearer response, missing client/secret/refresh parameters, invalid refresh token and unsupported grant errors. Expiry values vary; the mock uses deterministic synthetic credentials. |
-| GET `/drive/v3/about` | `fields` is required; quota integers are JSON decimal strings; projection of quota subfields. |
-| GET `/drive/v3/files` | Default/explicit field selection, no-query listing, reordered and uppercase conjunctions, escaped apostrophe/backslash names, `trashed` filtering, inequality, sorting, page size, continuation and malformed-query/token errors. Page sizes 0 and 1001 returned 400 on the audited account. |
-| POST `/drive/v3/files` | Default file fields, persistent identity, parent selection, unnamed `Untitled`, binary zero-byte size, folders without size, invalid/nonfolder/multiple parents. |
-| PATCH `/drive/v3/files/{id}` | Missing target 404; rename; add/remove parents; adding a different parent moves rather than adds a second parent; direct `parents` replacement 403; empty names and metadata-only binary MIME changes are ignored. |
-| POST `/drive/v3/files/{id}/copy` | Missing source 404; folder copy 403; copies retain bytes/size, have new identity and independent parent arrays. |
-| DELETE `/drive/v3/files/{id}` | Empty 204; repeat/missing delete 404; deleting a folder removes descendants. |
-| POST multipart upload | Declared and quoted MIME boundary, UTF-8 metadata, nested destination, byte-exact binary payload, response ID matches persisted ID, size is decimal-string in API output. |
-| PATCH media upload | Overwrite and zero-byte truncation update bytes/size without replacing identity; original binary MIME type is preserved. |
-| POST/PATCH resumable initialization and PUT session | Unique Location with empty 200 body; no early commit; status PUT and nonfinal chunks return empty 308 with Range; final 200 returns File and commits bytes; successful create and overwrite; completed status returns 200. Small nonfinal chunks and conflicting totals return 400 and leave the session failed. |
-
-Independent real GET metadata and media/range requests verified mutation effects. They were **not added as mock interfaces in that audit**, because they were not provided by the original mock. The later media-download extension below adds a bounded subset.
-
-### Non-obvious Google behavior
-
-An invalid `fields` parameter does **not** guarantee an atomic failure. In the live audit, metadata create, update, and copy returned 400 but still performed their mutation. A media upload with the same invalid mask returned 400 without changing content. The mock and regression tests preserve that distinction instead of imposing an assumed transactional contract.
-
-Real `size` and quota values are decimal strings. Fixture setup still accepts numeric sizes for existing tests, but API responses serialize them correctly. Binary content is stored separately from metadata and multipart parsing searches bytes directly, avoiding a large per-byte string allocation at the 5 MiB boundary.
-
-## MOVE/COPY contract extension: 2026-11-15
-
-The overwrite fix required contracts that the original audit did **not** establish: binary-file trash/restore, nonempty folder-tree trash/restore, explicit versus inherited trash, copy staging with a caller-selected name and destination parent, and folder moves preserving descendants. These were checked directly against the configured My Drive account using seven new disposable resources in one isolated folder (136 HTTP requests including setup, polling, readbacks and cleanup, not 136 test cases). No existing user files were changed, and no permanent deletion was performed. The test folder and all six descendants were explicitly moved to Trash at cleanup; they remain recoverable there.
-
-The mock now models **settled** folder-tree trash state, with separate `explicitlyTrashed` and effective `trashed` fields. Google propagates descendant changes asynchronously: immediate metadata/list responses can still show the old state. A deterministic mock is not a real-time consistency guarantee. WebDAV tests additionally inject the observed stale-descendant state and check that old paths stay inaccessible after overwrite/cache eviction.
-
-**Important restore side effect:** after settling, restoring an ancestor also restored a child that had already been explicitly trashed before the ancestor was trashed. Immediate reads temporarily suggested the opposite. The mock clears descendant explicit-trash state on folder restore, and recovery tests assert this observed behavior. Consequently, rolling back a collection overwrite can also restore previously trashed children; it is not an exact snapshot rollback.
-
-The extension verifies repeated trash/restore PATCH requests with `fields=id`, preserved identity/parents/bytes, copy bytes and independent identity in the requested parent, publication by rename, and ordinary cross-parent folder moves preserving descendants. Rename/move updates modification time; trash/restore preserves it. Normal tests remain offline.
-
-Overwrite acceptance covers file and collection targets, folder MOVE, successful replacement, rejected publication and restoration, ambiguous committed writes, no permanent cleanup, and descendant-cache invalidation. Network failures, malformed responses, rate limits and permission failures are **fault injection**, not claims that Google necessarily emits these responses or that every 4xx response is mutation-free. The existing invalid-fields contract still demonstrates a committed write can return 400; production transfer uses a fixed valid `fields=id` mask.
-
-This is acceptance of the current MOVE/COPY implementation against these bounded contracts, not exhaustive Drive or distributed-consistency certification. No extra live WebDAV acceptance pass was needed or run. Shared-drive permissions, concurrent changes, trash propagation latency and cross-instance cache visibility remain outside this mock's guarantees.
-
-## Media-download contract extension: 2026-11-16
-
-Ordinary image GET now uses the original-content endpoint rather than a thumbnail CDN. The mock previously had no media GET endpoint. A read-only recheck of an existing retained four-byte binary audit fixture made one OAuth request and three media GET requests, with no Drive writes: full download returned 200 and byte-identical content; `bytes=0-2` and `bytes=1-3` returned 206 with exact bytes and matching Content-Type, Content-Length and Content-Range. Earlier audit evidence also includes a five-byte range readback after a larger upload.
-
-MockDrive now models full binary media GET and in-bounds closed byte ranges using those observations. It requires explicit fixture bytes and matching size. Open-ended, suffix, multipart, invalid and out-of-bounds ranges, and native-document/folder downloads remain deliberately unsupported rather than guessed. The worker forwards Range unchanged, so these mock limits are not restrictions introduced into production downloads. Thumbnail links are optional fixture metadata; no CDN response or thumbnail-generation contract is modeled.
-
-WebDAV regressions verify original image bytes/MIME/length even when thumbnail metadata is present, HEAD/GET length agreement, removal of the old preview `param` behavior, no CDN fetch, and forwarding of Range with the original partial response. These fixtures are synthetic; this is not a claim that a live thumbnail necessarily changes image bytes, nor a live JPEG/PNG end-to-end acceptance pass. Default tests stay entirely offline. After this extension, all 197 tests pass; both TypeScript checks and the Wrangler dry-run build pass. The three new WebDAV download regressions fail against the pre-fix worker and pass with the fix.
-
-## Property metadata contract extension: 2026-11-16
-
-Four isolated live audit runs created five binary/folder fixtures plus two copies (all moved to Trash afterward; no permanent deletion). A separate root metadata GET was read-only. These observations extend the mock for PROPPATCH/PROPFIND:
-
-- `files.get`, `files.list` and field masks expose `createdTime`, `modifiedTime`, `description`, `starred`, `folderColorRgb` and `appProperties`. Absent/empty app properties are omitted from the response. Mock root identifiers and dates remain synthetic.
-- One `files.update` can set `modifiedTime`, `description`, `starred` and `appProperties`. `createdTime` on an existing file returns 403 `fieldNotWritable`. Invalid timestamp strings return 400. Explicit modification timestamps are normalized to RFC 3339 milliseconds and override the automatic timestamp bump.
-- Private properties merge by key: omitted keys survive, `null` removes a key, and `""` is a present empty value. Nonempty app-property patches advance modification time, including setting a key to its current value; `{}` does not. Description changes advance modification time; `description: null` is ignored and an empty string clears it. Star and folder-color changes do not advance modification time.
-- A key plus value of 124 UTF-8 bytes succeeds; 125 bytes returns 403 `propertyLengthLimitExceeded`. Both ASCII and multibyte boundaries were tested. Thirty private properties succeed; adding a thirty-first returns 403 `propertyCountLimitExceeded`. The mock covers one application's private-property quota; the real API additionally limits total public/private properties across applications. It does not emulate other applications' hidden properties.
-- Mixed updates rejected for an invalid timestamp, a non-writable creation timestamp or excessive property length left the other supplied fields unchanged. Count rejection preserved the existing property set. This supports using a single PATCH rather than a chain of property writes; it is not evidence of cross-request/distributed transactions or certainty after a lost response.
-- `files.copy` inherits description and starred state, **not appProperties**. Passing appProperties explicitly in the copy request preserves them. This matters for WebDAV dead properties.
-- Folder colors are quantized by Drive: `#ff0000` became `#f83a22`; palette colors `#f83a22` and `#8f8f8f` stayed unchanged. A fresh folder uses `#8f8f8f`. An invalid string `nope` also became gray with HTTP 200; `""`/`null` retained the current color. Binary-file color writes return 403 `colorNotSupportedForItem`. The mock recognizes only these measured colors and fails loudly for unverified color quantization.
-
-Unverified property contracts intentionally remain unsupported: writes to My Drive root, native-document specifics, creation-time/color overrides during file creation, arbitrary folder-color quantization, nested app-property field masks, and other clients' property quotas. No live end-to-end WebDAV acceptance is implied; default tests remain offline.
-
-## Unknown-length upload contract extension: 2026-11-16
-
-An isolated live audit initiated resumable create and update sessions without `X-Upload-Content-Length`. A 256 KiB chunk with `Content-Range: bytes 0-262143/*` returned 308 and `Range: bytes=0-262143`; the last chunk supplied the final total and returned 200. Downloaded bytes matched for a short tail, an aligned last chunk, a single aligned chunk and replacement of an existing file. Focused mock contracts cover unknown-total creation, replacement and aligned endings without multiplying every combination.
-
-The same audit verified zero-byte create and replacement with `Content-Range: bytes */0`, and the TUS audit below adds this form to the mock; ordinary PUT keeps its existing empty-file paths. Empty finalization after previously uploaded unknown-total chunks was not tested. All fixtures were created in a unique audit folder, then moved to Trash with that folder; nothing was permanently deleted. Default tests remain offline.
-
-The [official upload guide](https://developers.google.com/workspace/drive/api/guides/manage-uploads) makes the initial upload length optional, requires non-final chunks to be multiples of 256 KiB, and instructs callers to inspect the response Range rather than assume all sent bytes were accepted. The extension below covers partial aligned acknowledgments and replay. Network interruptions and session expiry are still fault-injection scenarios, not verified live contracts.
-
-## TUS recovery contract extension: 2026-11-16
-
-Two isolated live audits verified the upload forms needed for durable TUS buffering:
-
-- Replaying an already received 256 KiB chunk returns 308 with the existing Range. Different replayed bytes do not replace the accepted prefix.
-- A 512 KiB request overlapping that prefix accepts only the new suffix. Final download was byte-checked to verify that the original prefix survived.
-- A non-final 262145-byte request acknowledges only 262144 bytes; a subsequent status query returns the same Range. The mock now discards the unacknowledged tail instead of assuming the whole request was accepted.
-- Both status queries and replay of the final chunk return 200 after completion.
-- `Content-Range: bytes */0` finalizes an empty session; download is empty, and a later status query returns 200.
-
-A further isolated audit verified explicit `modifiedTime` on metadata-only empty creation, resumable creation and replacement (including downloaded byte checks), and media truncation followed by a timestamp update. Readback retained the exact supplied timestamp in every case. The mock preserves explicit upload timestamps instead of replacing them with upload completion time; this supports rclone's TUS `mtime` metadata. Its fixture folder was also moved to Trash.
-
-Three focused contracts cover aligned acknowledgment, replay/overlap and empty completion, alongside the existing completed-status contract. The audits created only uniquely named fixtures and moved their parent folders to Trash. No resources were permanently deleted. Socket interruption, request loss and expired sessions remain explicitly simulated failures in worker recovery tests; those simulations are not additional claims about live Google behavior.
-
-## Verification
-
-From a fresh checkout, install Node.js 24 and pnpm 11, then run from the repository root:
+## Verification commands
 
 ```sh
 pnpm install --frozen-lockfile
@@ -99,17 +12,45 @@ pnpm test --run
 pnpm run build
 ```
 
-The original audit had 44 focused mock contract tests and 34 existing/auth/WebDAV cases (78 total). The final extended suite has 172 passing tests: 50 mock contracts and 122 WebDAV/auth/configuration cases, including the overwrite contracts and recovery cases above. Both TypeScript checks and the Wrangler dry-run build pass. The WebDAV upload cases now verify persisted content at the 5 MiB multipart boundary and across two resumable chunks (11 MiB), rather than checking only HTTP success. Build is Wrangler's dry run, not a deployment.
+## Modeled endpoints and verified API behavior
+
+| Endpoint | Modeled behavior & verified quirks |
+| --- | --- |
+| `POST /oauth2/v4/token` | Form-encoded `refresh_token` grant; checks `client_id`, `client_secret`, and `refresh_token` errors (`invalid_request`, `invalid_client`, `invalid_grant`, `unsupported_grant_type`). |
+| `GET /drive/v3/about` | Requires `fields`; projects `storageQuota` subfields with quota integers serialized as JSON decimal strings. |
+| `GET /drive/v3/files` | Supports `fields` projection, `q` conjunctions (`'id' in parents`, `name`/`mimeType` `=`/`!=`, `trashed`), escaped `'` and `\`, `orderBy` (`folder`, `name`, `name_natural`, `modifiedTime`), `pageSize` (1–1000), and `pageToken` validation. |
+| `POST /drive/v3/files` | Persistent UUID identity, parent validation (`404`/`403`), `Untitled` default name, zero-byte file size vs omitted folder size. |
+| `PATCH /drive/v3/files/{id}` | Rename, `addParents`/`removeParents` (adding a single new parent moves the item even without `removeParents`), direct `parents` replacement (`403 fieldNotWritable`), empty `name` and metadata-only binary MIME updates ignored, monotonic `version` increment. |
+| `POST /drive/v3/files/{id}/copy` | Folder copy returns `403 cannotCopyFile`; copies content, `size`, `description`, and `starred`, but **does not inherit `appProperties`** unless explicitly supplied in the request body. |
+| `DELETE /drive/v3/files/{id}` | Returns empty `204`, `404` when missing, and recursively deletes descendants when deleting a folder. |
+| Multipart & media uploads | `POST ?uploadType=multipart` parses quoted/unquoted boundaries, UTF-8 metadata, and exact binary bytes; `PATCH ?uploadType=media` overwrites/truncates while preserving the existing binary MIME type. |
+| Resumable uploads (`uploadType=resumable`) | Empty `200` `Location` session init; status `PUT` (`bytes */total`) and non-final chunks return `308` with `Range`; omitted `X-Upload-Content-Length` (`*`) supported until final chunk; non-final chunks require >= 256 KiB and acknowledge only whole 256 KiB multiples (discarding unaligned tails); replay/overlapping chunks preserve already-accepted prefix bytes; `bytes */0` finalizes empty files; explicit `modifiedTime` is preserved; completed status queries and final-chunk replays return `200`; conflicting totals or small non-final chunks fail with `400` and poison the session. |
+| Media download (`GET /drive/v{2,3}/files/{id}?alt=media`) | Returns exact fixture bytes and MIME; supports in-bounds closed `Range` (`206`); v2 returns a deterministic SHA-256-derived strong `ETag` and `416` when start >= length; deliberately ignores `If-Range` (matching live v2 behavior). |
+
+### Non-obvious Drive contracts modeled in `MockDrive`
+
+- **Non-atomic invalid `fields` behavior**: an invalid `fields` mask on metadata `create`, `update`, and `copy` returns `400` **after** applying the mutation, whereas on `uploadType=media` / `multipart` / `resumable` init it returns `400` before mutating.
+- **Decimal string sizes & quotas**: `size` and `storageQuota` integers are serialized as JSON decimal strings (fixture setup still accepts numeric `size`).
+- **Settled Trash & restore side effects**: models `explicitlyTrashed` alongside effective `trashed` across nested folders. Real Drive propagates descendant trash flags asynchronously; `MockDrive` models settled state, where restoring a trashed folder (`trashed: false`) **also clears `explicitlyTrashed` on descendants that were independently trashed before the folder was trashed**. Trash/restore preserves `modifiedTime`; rename/move updates it.
+- **`appProperties` & native property rules**:
+  - `appProperties` merge by key (`null` removes, `""` keeps an empty value), limited to 124 UTF-8 bytes per `key + value` (`403 propertyLengthLimitExceeded`) and 30 private keys (`403 propertyCountLimitExceeded`).
+  - Non-empty `appProperties` and `description` changes bump `modifiedTime` (unless `modifiedTime` is supplied in the same PATCH); `starred` and `folderColorRgb` updates do not; `description: null` is ignored while `""` clears it.
+  - `createdTime` updates return `403 fieldNotWritable`; invalid timestamps return `400`. Rejected mixed updates leave all supplied fields unchanged.
+  - Folder color quantization models the measured palette mappings (`#ff0000` -> `#f83a22`, `#f83a22`, `#8f8f8f`, `nope` -> `#8f8f8f`, default `#8f8f8f`); binary file color writes return `403 colorNotSupportedForItem`.
+  - Root (`root`) metadata can be read via `files.get` without appearing in `files.list`.
 
 ## Deliberate limits
 
-This is a **bounded test double**, not a full Google API emulator. It supports the worker's ordinary binary-file and folder operations and the query/field expressions described above. It fails loudly for unimplemented routes, verbs, query operators, metadata fields, Workspace conversion, media writes to folders/native documents, moves from/into Trash, changes to trash state beneath a trashed ancestor, folder cycles, selected unverified upload forms. Extend the verified contract before using those features in tests.
+`MockDrive` fails loudly (`MockDrive does not implement ...`) for unverified or unimplemented features instead of faking success, including:
+- Media downloads of folders/Workspace documents, missing fixture bytes/mismatched size, and open/suffix/multipart/out-of-bounds ranges (other than v2 `start >= length` `416`)
+- Unverified `folderColorRgb` values, `createdTime`/`folderColorRgb` on `create`, writes to `root`, Workspace conversions, nested non-`files` `fields` selectors, and unmodeled `q` operators or `orderBy` keys
+- Moving items from/into Trash, changing trash state under a trashed ancestor, and folder cycles
+- `changes.list` / `getStartPageToken` (not yet implemented; must be audited and modeled before `OC-05`)
+- Shared-drive permissions, cross-app 100-property aggregate quotas, real OAuth token expiry/revocation, network/rate-limit retries, and asynchronous trash propagation delays (covered via fault injection in tests).
 
-Other unmodeled dimensions include shared-drive permissions and ownership, concurrent mutations during pagination, real account quota enforcement/unlimited plans, OAuth revocation/expiry/consent, retries/rate limiting, session expiry, Workspace document conversion/export, complex query grammar, and Google's optional metadata fields. The synthetic account, root/file IDs, timestamps, quota and token values are fixture data, not literal live values. Tests must not assert that unsupported or unprobed API combinations conform.
+## Official Google Drive references
 
-Official references:
-
-- [File resource and JSON types](https://developers.google.com/workspace/drive/api/reference/rest/v3/files)
+- [File resource](https://developers.google.com/workspace/drive/api/reference/rest/v3/files)
 - [Files list](https://developers.google.com/workspace/drive/api/reference/rest/v3/files/list)
 - [Files update](https://developers.google.com/workspace/drive/api/reference/rest/v3/files/update)
 - [About and quota](https://developers.google.com/workspace/drive/api/reference/rest/v3/about)
@@ -117,26 +58,4 @@ Official references:
 - [Upload protocols](https://developers.google.com/workspace/drive/api/guides/manage-uploads)
 - [Copy limitations](https://developers.google.com/workspace/drive/api/guides/create-file#copy-files)
 - [Drive errors](https://developers.google.com/workspace/drive/api/guides/handle-errors)
-
-- [Trash and restore semantics and asynchronous propagation](https://developers.google.com/workspace/drive/api/guides/delete)
-
-## Version field audit (2026-11-18)
-
-An isolated real Drive binary file was overwritten with different four-byte contents, then updated with the same explicit `modifiedTime` after each write. `version` advanced from `6` to `10`; a subsequent `appProperties` update preserving that timestamp advanced it to `11`. `files.get` and `files.list` returned the same decimal-string version. The test file was moved to Trash afterwards. The mock now exposes `version` and advances it on updates; the exact increment is deliberately not modeled. This supports validators that change even when clients preserve timestamps and sizes. No account identifiers or credentials are retained here.
-
-## v2 media validator audit (2026-11-19)
-
-The v2 media subset was added after isolated real Drive probes confirmed:
-full and partial downloads of the same representation return the same strong
-HTTP ETag; changing bytes while preserving file ID, size and modification time
-changes that ETag; a stale If-Range sent upstream is ignored and the new partial
-representation is still returned. Metadata and writes remain the v3 contract.
-The mock uses a SHA-256-derived opaque tag for v2 media only, not Google's
-undocumented tag algorithm, v2 JSON etag, or v3 version. It deliberately ignores
-If-Range. Out-of-bounds range starts return 416; arbitrary malformed/multipart
-ranges and native Google Workspace export behavior remain outside this subset.
-
-Acceptance covers matching/stale/weak/date validators, missing/weak upstream
-tags, 416 fallback, unchanged-metadata content replacement, and preservation of
-other upstream failures. Missing/weak-tag cases are boundary fault injection,
-not claims that the live Drive probe returned those values.
+- [Trash and restore semantics](https://developers.google.com/workspace/drive/api/guides/delete)

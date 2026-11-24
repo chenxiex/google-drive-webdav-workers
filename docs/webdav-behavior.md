@@ -2,60 +2,66 @@
 
 ## Locking
 
-- WebDAV locking is not supported. OPTIONS advertises `DAV: 1`, not Class 2, and does not list LOCK/UNLOCK in Allow. PROPFIND returns an empty `supportedlock` property for files and collections.
-- Authenticated LOCK (including refresh) and UNLOCK requests return **501 Not Implemented**, without issuing a lock token, creating a resource, or calling Drive. Locking is unavailable throughout the service, rather than merely disallowed on a particular resource.
-- Clients must work without locks; clients that require them may refuse writes or editing. There is no lock-based protection against concurrent overwrites. This is not a claim of complete WebDAV conformance or client-by-client compatibility.
+- WebDAV locking is not supported. `OPTIONS` advertises `DAV: 1` (not Class 2) and omits `LOCK`/`UNLOCK` from `Allow`. `PROPFIND` returns an empty `<D:supportedlock/>` element for files and collections.
+- Authenticated `LOCK` (including refresh) and `UNLOCK` requests return **501 Not Implemented** without issuing a lock token, creating a resource, or calling Google Drive.
+- Clients must operate without locks; there is no lock-based protection against concurrent overwrites.
 
 ## Properties (PROPFIND / PROPPATCH)
 
-- OPTIONS includes PROPPATCH. PROPFIND supports an empty body / `allprop`, `propname`, selected `prop`, and `allprop` with `include`. Unknown requested properties receive a separate 404 propstat. Dead properties are included in listings and can be read back after setting them.
-- PROPPATCH processes `set` / `remove` in document order. Property identity is the namespace URI plus local name, not the prefix. Dead properties retain XML child elements, attributes, mixed text, significant whitespace, in-scope namespace bindings and inherited `xml:lang`. Empty values differ from absent properties; removing an absent dead property succeeds. UTF-8 XML is limited to 64 KiB and 128 nesting levels; malformed XML and DTD/entity declarations are rejected before writing.
-- `DAV:displayname` is a writable text property stored with the custom metadata. It does **not** rename the Drive file or change its URL; REMOVE suppresses the computed default as well, so subsequent PROPFIND reports it absent; a small tombstone is stored with the property document. SET makes it visible again. Other custom XML properties are stored as dead properties. MOVE preserves them and COPY explicitly sends them to Drive, whose copy endpoint does not inherit `appProperties` automatically.
+- `OPTIONS` includes `PROPPATCH`. `PROPFIND` supports an empty body / `allprop`, `propname`, selected `prop`, and `allprop` with `include`. Unknown requested properties receive a separate `404` propstat. Dead properties are included in listings and can be read back after setting them.
+- `PROPPATCH` processes `set` / `remove` operations in document order. Property identity is the expanded name (namespace URI plus local name), not the prefix. Dead properties retain XML child elements, attributes, mixed text, significant whitespace, in-scope namespace bindings, and inherited `xml:lang` / `xml:space`. Empty values are distinct from absent properties; removing an absent dead property succeeds. UTF-8 XML is limited to 64 KiB and 128 nesting levels; malformed XML and DTD/entity declarations are rejected before writing.
+- `DAV:displayname` is a writable text property stored alongside dead properties. It does **not** rename the Drive file or change its URL; `REMOVE` stores a small tombstone so subsequent `PROPFIND` reports `displayname` absent instead of falling back to the Drive filename, and `SET` makes it visible again. `MOVE` preserves dead properties (including this tombstone) and `COPY` explicitly passes `appProperties` to Drive, since Drive's copy endpoint does not inherit `appProperties` automatically.
+- `PROPFIND` sets `getetag` from Drive ID and `version` (`"<id>-<version|modifiedTime>"`), serving as a metadata/property synchronization marker rather than the binary download validator.
+- Quota integers (`quota-used-bytes` and `quota-available-bytes`, returned on `Depth: 0` root `PROPFIND`) are computed with `BigInt` without JavaScript floating-point rounding. If Drive does not report a finite quota limit, `quota-available-bytes` is absent (explicitly requesting it returns `404` in multistatus), not `0` or `NaN`. Exhausted finite quotas report `0` available bytes.
 
 ### Drive-backed live properties
 
-Use the project-defined namespace `urn:google:drive` for native extensions (for example, `<G:description xmlns:G="urn:google:drive">Notes</G:description>`). These change real Drive metadata, not a parallel WebDAV-only value:
+Use the project namespace `urn:google:drive` for native Drive extensions (for example, `<G:description xmlns:G="urn:google:drive">Notes</G:description>`). These update real Drive metadata:
 
 | Property | Write value / behavior |
 | --- | --- |
-| `DAV:getlastmodified` | HTTP-date, for example `Mon, 16 Nov 2026 08:00:00 GMT`; updates `modifiedTime` |
-| `G:modifiedTime` | RFC 3339 timestamp; same Drive field as `DAV:getlastmodified` |
+| `DAV:getlastmodified` | HTTP-date (`Mon, 16 Nov 2026 08:00:00 GMT`); updates Drive `modifiedTime` |
+| `DAV:lastmodified` | Integer Unix seconds (ownCloud/rclone write alias); updates Drive `modifiedTime` (not saved as a dead property) |
+| `G:modifiedTime` | RFC 3339 timestamp; updates Drive `modifiedTime` |
 | `G:description` | Text description |
 | `G:starred` | `true` / `false` (also `1` / `0`) |
-| `G:folderColorRgb` | `#rrggbb` on folders; Drive maps it to its nearest supported palette color |
+| `G:folderColorRgb` | `#rrggbb` on folders; Drive quantizes to its nearest supported palette color |
 
-Native live properties cannot be removed while present (409): set an empty description or `starred=false` to clear those values. Removing an already absent native property is a no-op.
+Present native live properties cannot be removed (`409`): set an empty description or `starred=false` to clear those values. Removing an already absent optional native property succeeds without altering Drive metadata (if the batch sends `{}` to `files.update`, Drive still increments `version`).
 
-`DAV:creationdate` / `G:createdTime` are read-only: Drive rejects changing the creation timestamp of an existing file. Content type, size, ETag, resource type, lock capabilities and quota properties are also protected; metadata-only MIME updates do not change an existing binary file's MIME type. Use file-content operations for content, and MOVE for renaming. Unsupported native extension names are rejected, rather than silently saved as an unrelated custom value.
+`DAV:creationdate` / `G:createdTime` are read-only, as are `getcontentlength`, `getcontenttype`, `getetag`, `resourcetype`, `supportedlock`, `lockdiscovery`, `quota-used-bytes`, `quota-available-bytes`, and unsupported `urn:google:drive` names. Metadata-only updates do not change an existing binary file's MIME type; use file-content operations for content and `MOVE` for renaming.
 
-Property semantics follow [RFC 4918](https://www.rfc-editor.org/rfc/rfc4918.html); backend limits follow [Drive custom properties](https://developers.google.com/workspace/drive/api/guides/properties). These extensions expose selected file metadata, not every Google Drive API operation.
+Property semantics follow [RFC 4918](https://www.rfc-editor.org/rfc/rfc4918.html); backend limits follow [Drive custom properties](https://developers.google.com/workspace/drive/api/guides/properties).
 
 ### Storage and failure semantics
 
-- Dead properties are persisted on the resource in OAuth-client-private Drive `appProperties`, using reserved keys `wdp00` through `wdp29`. Keep the same OAuth application to read them. Do not edit those keys directly. Unrelated appProperties are preserved; corrupt stored WebDAV data causes an error rather than being overwritten.
-- Drive permits 30 private properties per application per file, each with at most 124 UTF-8 bytes for key plus value. Each five-byte chunk key leaves 119 payload bytes: at most 3,570 bytes **including the versioned JSON/XML representation**, less if other private properties use slots. Drive's aggregate 100-property limit can further constrain storage. This is bounded metadata storage, not unlimited arbitrary XML; a capacity failure returns 507 without applying the other requested updates. No sidecar files or separate property database are created.
-- All operations are parsed and validated before a single `files.update` PATCH containing the final native fields and dead-property changes. Invalid values receive 409, protected writes receive 403 with `cannot-modify-protected-property`, and the other properties in a rejected batch receive 424. Missing resources receive 404. A 207 is a container: inspect each property's status, not just the outer response.
-- The one Drive PATCH is the atomic boundary. Real-API contract tests verified that invalid multi-field requests do not partially modify valid fields; this is not a cross-request transaction or lock. Concurrent read-modify-write requests can still overwrite one another. A lost response returns 502 with an uncertain-outcome explanation, without retry or rollback; read the properties before deciding whether to retry.
-- Property writes invalidate this instance's metadata and parent listings before returning. This cannot synchronously invalidate other instances or guarantee global immediate freshness.
-- Changing dead properties can advance Drive's modification time. When a request also explicitly sets `modifiedTime`, that timestamp is sent in the same PATCH. Folder colors and timestamp precision can be normalized by Drive; read-back uses the returned Drive representation.
+- Dead properties are stored on the resource in OAuth-client-private Drive `appProperties` under reserved keys `wdp00` through `wdp29`. Keep the same OAuth application to read them, and do not edit those keys directly. Unrelated `appProperties` are preserved; corrupt stored `wdp*` data fails with `500` rather than being overwritten.
+- Drive permits 30 private properties per application per file, each at most 124 UTF-8 bytes for key plus value. Each 5-byte chunk key leaves 119 payload bytes: at most 3,570 bytes **including the versioned JSON/XML wrapper**, and less if other `appProperties` occupy slots (Drive also enforces an aggregate 100-property limit across applications). Exceeding capacity returns `507` without applying any updates in the batch.
+- All operations are parsed and validated before a single `files.update` `PATCH`. Invalid values receive `409`, protected writes receive `403` with `cannot-modify-protected-property`, and sibling properties in a rejected batch receive `424`. Missing resources receive `404`. Inspect per-property statuses inside the `207` multistatus response.
+- The single Drive `PATCH` is the atomic boundary for one request, not a cross-request transaction or lock; concurrent read-modify-write requests can overwrite each other. A lost `PATCH` response returns `502` without retry or rollback.
+- Property writes invalidate the current isolate's metadata and parent directory caches before returning.
+- Dead-property writes advance Drive's `modifiedTime` unless the same `PATCH` explicitly sets `modifiedTime`. Folder colors and timestamp precision may be normalized by Drive; read-back reflects Drive's stored values.
 
 ## PUT uploads
 
-- PUT with a known `Content-Length` retains the small media/multipart and large resumable upload paths. Without a length, the worker streams through resumable uploads instead of buffering the entire file.
-- Unknown-length uploads hold a 10 MiB upload buffer plus the current input chunk, with one-read lookahead to identify the final chunk (including an exact 10 MiB boundary). Each chunk is acknowledged before assembling the next. Runtime/network buffering and concurrent requests still consume additional memory; this does not bypass the Worker ingress request-size limit.
-- Empty uploads create an empty file or truncate an existing file. Nonempty uploads report success only after Drive confirms completion. An unexpected offset, incomplete final response, stream error, or upstream failure stops the upload; there is no automatic retry or rollback. An ambiguous failure can follow a committed write, so inspect the destination before retrying.
+- `PUT` with a known `Content-Length` streams files `<= 5 MiB` via `uploadType=media` (overwrite) or `uploadType=multipart` (new), and streams larger files via `uploadType=resumable` in 10 MiB chunks. Empty uploads (`Content-Length: 0` or no body) create an empty file or truncate an existing file via `uploadType=media`.
+- `PUT` without `Content-Length` (`putUnknownLength`) streams through Drive resumable uploads instead of buffering the entire body. It buffers at most one 10 MiB chunk plus one read lookahead to detect EOF (including exact 10 MiB boundaries), and checks each `308` status, `Range` header, and final `200`/`201` completion before continuing or returning success. Streaming reduces Worker memory usage but does not bypass Cloudflare's per-request ingress limit.
+- Note: the known-length `> 5 MiB` resumable `PUT` path currently does not verify `308` `Range` headers or reject a non-final `308` on the last chunk, and maps a missing `Location` header to `500` without forwarding the upstream status.
+- Uploads never automatically retry or roll back on error; an ambiguous network/upstream failure can follow a committed write, so inspect the destination before retrying.
 
 ## TUS and rclone uploads
 
-TUS is a separate resumable-upload protocol, not part of WebDAV. An ordinary WebDAV client sends a PUT for the whole file; a 413 response does not instruct it to retry using TUS. Streaming PUT reduces server memory use but does not remove Cloudflare’s per-request ingress limit.
+TUS is a separate resumable-upload protocol outside WebDAV; an ordinary WebDAV `PUT` receiving `413` will not automatically retry with TUS.
 
-The server implements TUS 1.0 core and the `creation` extension with a known `Upload-Length`. It does not advertise creation-with-upload, deferred length, concatenation, checksum or termination extensions. `OPTIONS` reports the supported version and extension; unsupported versions return 412. Creation accepts optional UTF-8 `filename` / `filetype` metadata and rclone's Unix-seconds `mtime` metadata. Zero-length uploads create or truncate the destination immediately.
+The server implements TUS 1.0 core and the `creation` extension with a required `Upload-Length` (no `creation-with-upload`, deferred length, concatenation, checksum, or termination extensions). `OPTIONS` advertises `Tus-Version: 1.0.0` and `Tus-Extension: creation`; unsupported `Tus-Resumable` versions return `412`. Creation accepts optional Base64 UTF-8 `filename` / `filetype` metadata and integer Unix-seconds `mtime`. Missing parent directories are created via `ensureDir` (matching `PUT` and `MKCOL`), overwriting a folder returns `409`, and zero-length uploads create or truncate the destination immediately.
 
-Each upload has its own SQLite Durable Object. PATCH requests for that session are serialized. Small or unaligned client chunks are buffered durably and combined into Google-compatible blocks; no entire upload is buffered. A bounded write-ahead journal holds bytes until Drive confirms them, and recovery uses Drive's actual acknowledged range. The returned offset includes bytes safely held in this journal, not only bytes already in Drive. A failed or interrupted PATCH can have accepted a prefix: query HEAD and resume at its returned offset rather than blindly repeating the old offset. Offset mismatches return 409, and upstream failures never masquerade as offset zero.
+Each upload session uses its own SQLite Durable Object (`TusUpload`):
+- `PATCH` requests for a session are serialized. Unaligned or small client chunks are durably buffered (in 1 MiB blocks with a `< 256 KiB` alignment tail) and flushed as 256 KiB-aligned chunks to Drive; no entire upload is buffered in memory or storage.
+- A write-ahead `pending` record persists bytes before flushing to Drive, and recovery reconciles via `bytes */<total>` against Drive's actual acknowledged `Range`.
+- Returned `Upload-Offset` includes bytes safely persisted in the Durable Object journal as well as bytes already in Drive. Offset mismatches return `409`, expired Drive upload URLs return `410`, and upstream failures return `503`/`502` without resetting offset to zero.
+- Sessions (including completed upload receipts for lost final responses) expire 24 hours after creation. The expiry alarm cleans up session state only, not the destination file. Sessions are scoped to the authenticated WebDAV username.
 
-Sessions, including completed-upload receipts, expire 24 hours after creation. HEAD remains usable after the final response is lost. The expiry alarm removes session state, not the destination file; incomplete uploads are not automatically rolled back. Sessions belong to the authenticated WebDAV username that created them. Different uploads to the same destination are not a distributed file lock and can still conflict. Ordinary metadata caching remains unchanged.
-
-For rclone, configure its WebDAV remote with `vendor = infinitescale` to select its TUS upload path:
+For rclone, configure its WebDAV remote with `vendor = infinitescale` to use TUS:
 
 ```ini
 [worker]
@@ -66,74 +72,42 @@ user = YOUR-WEBDAV-USER
 pass = YOUR-RCLONE-OBSCURED-PASSWORD
 ```
 
-Use `rclone config` to enter the password, then upload with `rclone copy /path/to/file worker:`. The vendor setting selects the relevant rclone upload behavior; this service does not implement the entire ownCloud Infinite Scale API. The ordinary `other` vendor uses PUT instead. rclone's TUS chunks must each fit the deployment's request limit; splitting a large file across requests avoids that limit, rather than increasing it. In the tested rclone v1.76.0, upload-session resumption is not implemented. Its TUS filename metadata is the source basename, so use `copy` as shown rather than relying on `copyto` to rename during upload; rename separately afterward. See the [rclone TUS implementation](https://github.com/rclone/rclone/blob/v1.76.0/backend/webdav/tus.go).
+Use `rclone config` to obscure the password and `rclone copy /path/to/file worker:`. Each TUS chunk sent by rclone must fit the deployment's ingress limit (in rclone v1.76.0, `vendor = infinitescale` sends 10 MiB chunks, does not resume failed TUS sessions, and sets `filename` from the source basename—so use `copy` and rename afterward rather than `copyto`).
 
-### Reproducing the local client check
+### Reproducing the local rclone check
 
-The opt-in test runs an installed rclone executable against a local Worker with SQLite Durable Objects and the Google Drive mock:
+An opt-in test runs an installed `rclone` binary against a local Worker with SQLite Durable Objects, `MockDrive`, and a simulated 12 MiB ingress cap:
 
 ```bash
 RCLONE_BIN=/path/to/rclone pnpm exec vitest run --config test/rclone.config.mts
 ```
 
-It uses only test credentials, never `.dev.vars` or real Google/Cloudflare resources. Its front-door proxy rejects bodies above 12 MiB, while rclone uploads a file above 25 MiB in multiple TUS requests. It checks the final bytes by SHA-256, records each PATCH size, and separately checks that an oversized PUT gets 413. Verified with rclone v1.76.0: 26,214,523 bytes were sent in PATCH bodies of 10,485,760, 10,485,760 and 5,243,003 bytes, all below the 12,582,912-byte cap. This is a simulated ingress-limit test, not a deployed Cloudflare acceptance test. Default tests do not launch rclone.
+Verified with rclone v1.76.0: uploading a 26,214,523-byte file produced `PATCH` bodies of 10,485,760, 10,485,760, and 5,243,003 bytes (matching SHA-256 and `mtime`), while an oversized single `PUT` received `413`.
 
-## File downloads
+## File downloads and validators
 
-- Ordinary file GET uses Drive's original-content endpoint (`files.get?alt=media`), including for images with a `thumbnailLink`. It does not substitute a preview or fetch the thumbnail CDN. The former image `param` query parameter no longer selects a preview size.
-- Client `Range` is forwarded to Drive; successful upstream status, body and content headers are returned unchanged. This does not add thumbnail generation or Google Workspace document export.
+- Ordinary file `GET` downloads from Drive **v2** `files.get?alt=media` (metadata and writes remain on **v3**). Images with `thumbnailLink` download their original bytes rather than a preview CDN, and the legacy `param` query parameter is ignored. `?abuse=true` redirects (`302`) when Drive rejects abusive downloads unless already set.
+- `GET` passes through upstream content headers, `Accept-Ranges: bytes`, and the **media response's strong HTTP `ETag`** (not v2 JSON `etag` or v3 `version`).
+- `HEAD` remains a metadata lookup: it returns `Content-Length`, `Content-Type`, `Last-Modified` (falling back to current UTC time if `modifiedTime` is null), and `Accept-Ranges: bytes` for files, while omitting `ETag` rather than synthesizing a media validator from cached metadata.
+- Ordinary `Range` requests are forwarded to Drive and returned unchanged. Because Drive ignores `If-Range` on `alt=media`, when a client supplies both `Range` and `If-Range` and Drive returns `206` or `416`, the worker checks `If-Range` against the partial response's strong `ETag`:
+  - Only an exact strong-tag match (`"..."`) streams the `206` body through.
+  - On mismatch, weak/date `If-Range`, missing/weak upstream `ETag`, or `416`, the worker cancels the partial body and falls back to a full `GET` (`200`).
+  - Direct `200` responses and other upstream errors pass through without a second request.
 
 ## MOVE / COPY replacement
 
-- `Overwrite: F` rejects an existing destination with 412. Otherwise, successful replacement returns 204; creating a new destination returns 201.
-- MOVE trashes the previous destination, then renames/moves the source by ID. COPY first creates a uniquely named `.webdav-copy-<UUID>` file in the destination folder, trashes the previous destination, then publishes the staged copy under its final name. COPY to a new path uses one copy request. Collection COPY is rejected before any mutation; overlapping paths and same-ID resources are protected.
-- Replacement never permanently deletes the previous destination. If the final write is definitively rejected (4xx other than 408), the worker attempts to restore that destination. A failed restore is reported, not hidden. The account must have permission to trash and restore the destination; deletion permission alone is insufficient. Ordinary WebDAV DELETE still uses permanent deletion and is unchanged by this replacement fix.
-- Restoring a replaced collection can also restore descendants that were independently trashed before the replacement. This was observed after Drive propagation settled; restoration is not an exact snapshot rollback.
-- A timeout, network error, 5xx, 408, or invalid success response can mean a write already happened. The worker returns an error without retrying or blindly rolling back. Inspect Drive before retrying: the previous destination may be in Trash, and COPY may leave a staged file (or an already-published copy). Error responses include recovery names/known IDs. Failed COPY stages are retained, not automatically deleted; clean them up manually once their outcome is known. Trash is subject to Google Drive's retention rules and is not a permanent backup.
-- This is a recoverable, multi-request workflow, **not an atomic transaction**. Concurrent clients can still produce duplicate names or race with restoration, and there is a brief interval without the destination name. Directory transfers evict affected descendant metadata locally after the Drive writes. Other instances can retain stale entries until expiry. This does not provide cross-instance locking or eliminate in-flight cache races.
+- `Overwrite: F` rejects an existing destination with `412`. Otherwise, successful replacement returns `204` and creating a new destination returns `201` (`MOVE` to a new destination also sets `Location`).
+- `MOVE` trashes the previous destination, then renames/moves the source by ID. `COPY` stages a uniquely named `.webdav-copy-<UUID>` copy in the destination folder, trashes the previous destination, then renames the staged copy to its final name (`COPY` to a new path uses one copy request). Collection `COPY` (`403`), overlapping trees, and same-ID targets are rejected before any mutation.
+- Replacement never permanently deletes the previous destination. If the final rename/move fails with a definitive `4xx` (other than `408`), the worker attempts to restore the trashed destination (`trashed: false`) and reports whether restore succeeded or failed. Restoring a replaced folder also restores descendants that had been explicitly trashed prior to replacement.
+- Ambiguous errors (network errors, `5xx`, `408`, or unreadable/mismatched `id` responses) return an error without retry or rollback, including the known target/stage IDs and `.webdav-copy-<UUID>` recovery name in the response text. Inspect Drive before retrying or deleting staged copies.
+- This is a multi-request workflow, not an atomic transaction. Local metadata and descendant caches are evicted in `finally`. Ordinary `DELETE` still permanently deletes resources in Drive.
 
 ## Metadata and listing caches
 
-- Fresh Drive metadata is cached in the current isolate for 300 seconds and directory listings for 30 seconds. Cache hits do not extend expiry; expired or absent entries are read from Drive.
-- Each namespace retains at most 128 entries (plus the fixed root mapping). Expired entries are removed on lookup/write, and the oldest inserted entry is evicted at capacity. Entries whose key and serialized value exceed 64 KiB are not cached, so large listings still work without being retained.
-- There is no Workers KV binding or shared metadata cache. This remains eventually consistent: local invalidation cannot clear another isolate's memory, and concurrent in-flight reads or external Drive changes can remain stale until expiry.
-- TUS upload sessions still use Durable Objects. Removing metadata caching persistence does not remove upload recovery state.
+- Drive metadata is cached in isolate-local memory for 300 seconds and directory listings (`objects`) for 30 seconds. Cache hits do not extend TTL; expired or missing entries fetch from Drive.
+- Each cache namespace holds at most 128 entries (excluding the fixed `/` root mapping). Expired entries are purged on write, and the oldest inserted entry is evicted at capacity. Entries whose key plus serialized JSON value exceed 64 KiB are not cached.
+- There is no Workers KV binding or shared cache across isolates; external Drive edits or mutations handled by another isolate remain stale locally until expiry. TUS upload sessions remain durable in Durable Objects.
 
-## Verification and scope
-
-The mock contract and acceptance tests cover the behaviors above within their documented limits. They do not certify shared-drive permissions, concurrent mutations, or cross-region cache consistency. See the [Drive mock contract and audit](../test/mock-drive.md) for verification details.
+See [test/mock-drive.md](../test/mock-drive.md) for the Drive mock contract and verified API behavior.
 
 [Back to README](../README.md)
-
-## Validators, modification times and quotas
-
-File downloads use Drive v2 `files.get?alt=media`; metadata and writes remain
-on v3. GET preserves the media response's strong HTTP ETag, not the v2 JSON
-`etag` or a validator constructed from cached metadata. HEAD remains a cheap
-metadata lookup: it advertises byte ranges but omits ETag rather than claiming
-its cached metadata identifies the current bytes. PROPFIND's `getetag` remains
-an ID/version synchronization marker, distinct from the GET media validator.
-Directory subtree change detection remains part of the oCIS implementation plan.
-
-Ordinary Range requests are forwarded unchanged. Drive ignores If-Range, so
-the worker compares the client's If-Range with the actual partial response's
-strong ETag. Only an exact strong-tag match permits the 206 stream through.
-For a mismatch, weak/date validator, or missing/weak upstream validator, the
-worker cancels the partial body and requests the full representation (200).
-A 416 with If-Range also triggers a full download, since a stale validator must
-not cause an erroneous range failure; other errors are not hidden by a retry.
-If Drive already returns 200, it is passed through without a second request.
-
-This binds resume decisions to the returned media representation without a
-separate metadata check. It does not provide conditional writes, cross-instance
-cache coherence, or atomic metadata/media snapshots. Clients must retain GET's
-ETag for resumption; HEAD and PROPFIND do not supply that media validator.
-
-`PROPPATCH` accepts ownCloud/rclone's `DAV:lastmodified` Unix-seconds write alias
-as well as `DAV:getlastmodified` HTTP-date. Both update Drive `modifiedTime`;
-the alias is not persisted as a dead property.
-
-Quota integers are preserved without JavaScript floating-point rounding. If
-Drive does not report a finite quota limit, `quota-available-bytes` is absent
-(and explicitly requesting it returns `404` in the multistatus), not zero or
-`NaN`. Exhausted finite quotas report zero available bytes.

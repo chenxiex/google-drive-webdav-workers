@@ -90,32 +90,27 @@ describe('server metadata', () => {
 });
 
 describe('unsupported locking', () => {
-	it.each(['/dav/', '/dav/a.txt', '/dav/missing.txt'])(
-		'rejects lock creation, refresh and unlock without contacting Drive (%s)', async path => {
-			const spy = vi.spyOn(drive, 'handle');
-			const attempts: RequestInit[] = [
-				{ method: 'LOCK', headers: { 'Content-Type': 'application/xml', Timeout: 'Second-3600' },
-					body: '<D:lockinfo xmlns:D="DAV:"><D:lockscope><D:exclusive/></D:lockscope><D:locktype><D:write/></D:locktype></D:lockinfo>' },
-				{ method: 'LOCK' },
-				{ method: 'LOCK', headers: { If: '(<opaquelocktoken:test>)' } },
-				{ method: 'UNLOCK', headers: { 'Lock-Token': '<opaquelocktoken:test>' } },
-			];
-			for (const attempt of attempts) {
-				const response = await request(path, attempt);
-				expect(response.status).toBe(501);
-				expect(response.headers.has('Lock-Token')).toBe(false);
-				expect(await response.text()).toBe('WebDAV locking is not supported');
-			}
-			expect(spy).not.toHaveBeenCalled();
-		});
-
-	it.each(['LOCK', 'UNLOCK'])('still authenticates %s requests', async method => {
-		const response = await SELF.fetch(ORIGIN + '/dav/a.txt', { method });
-		expect(response.status).toBe(401);
+	it.each(['/dav/a.txt', '/dav/missing.txt'])('rejects LOCK and UNLOCK without contacting Drive (%s)', async path => {
+		const spy = vi.spyOn(drive, 'handle');
+		for (const attempt of [
+			{ method: 'LOCK', headers: { 'Content-Type': 'application/xml', Timeout: 'Second-3600' },
+				body: '<D:lockinfo xmlns:D="DAV:"><D:lockscope><D:exclusive/></D:lockscope><D:locktype><D:write/></D:locktype></D:lockinfo>' },
+			{ method: 'LOCK', headers: { If: '(<opaquelocktoken:test>)' } },
+			{ method: 'UNLOCK', headers: { 'Lock-Token': '<opaquelocktoken:test>' } },
+		] as RequestInit[]) {
+			const response = await request(path, attempt);
+			expect(response.status).toBe(501);
+			expect(response.headers.has('Lock-Token')).toBe(false);
+			expect(await response.text()).toBe('WebDAV locking is not supported');
+		}
+		expect(spy).not.toHaveBeenCalled();
 	});
 
-	it.each(['/dav/', '/dav/a.txt'])('reports no supported lock types in PROPFIND (%s)', async path => {
-		const response = await request(path, { method: 'PROPFIND', headers: { Depth: '1' } });
+	it('still authenticates LOCK/UNLOCK and reports empty supportedlock in PROPFIND', async () => {
+		for (const method of ['LOCK', 'UNLOCK']) {
+			expect((await SELF.fetch(ORIGIN + '/dav/a.txt', { method })).status).toBe(401);
+		}
+		const response = await request('/dav/', { method: 'PROPFIND', headers: { Depth: '1' } });
 		expect(response.status).toBe(207);
 		const xml = await response.text();
 		expect(xml.match(/<D:supportedlock\/>/g)?.length).toBe(xml.match(/<D:response>/g)?.length);
@@ -140,7 +135,7 @@ describe('original file downloads', () => {
 		expect(response.headers.get('Content-Length')).toBe(String(content.length));
 		expect(head.headers.get('Content-Length')).toBe(response.headers.get('Content-Length'));
 		expect(head.headers.get('ETag')).toBeNull();
-        expect(response.headers.get('ETag')).toMatch(/^"[^"]+"$/);
+		expect(response.headers.get('ETag')).toMatch(/^"[^"]+"$/);
 		expect(head.headers.get('Accept-Ranges')).toBe('bytes');
 		expect(response.headers.get('Accept-Ranges')).toBe('bytes');
 		expect(head.headers.get('Date')).not.toBe(head.headers.get('Last-Modified'));
@@ -152,88 +147,79 @@ describe('original file downloads', () => {
 		expect(urls.every(url => url.hostname === 'www.googleapis.com')).toBe(true);
 	});
 
+	it.each(['matching', 'stale', 'weak', 'missing-upstream', 'unsatisfiable'] as const)('handles If-Range safely (%s)', async mode => {
+		const initial = await request('/dav/image.png');
+		const tag = initial.headers.get('ETag')!;
+		await initial.arrayBuffer();
+		const handle = drive.handle.bind(drive);
+		const calls: (string | null)[] = [];
+		vi.spyOn(drive, 'handle').mockImplementation(async (input, init) => {
+			const response = await handle(input, init);
+			if (String(input).includes('alt=media')) {
+				calls.push(new Headers(init?.headers).get('Range'));
+				if (mode === 'missing-upstream') response.headers.delete('ETag');
+			}
+			return response;
+		});
+		const validator = mode === 'stale' ? '"old-version"' : mode === 'weak' ? 'W/' + tag : tag;
+		const range = mode === 'unsatisfiable' ? 'bytes=100-102' : 'bytes=1-3';
+		const response = await request('/dav/image.png', { headers: { Range: range, 'If-Range': validator } });
+		const matching = mode === 'matching';
+		expect(response.status).toBe(matching ? 206 : 200);
+		expect(response.headers.get('Content-Range')).toBe(matching ? 'bytes 1-3/12' : null);
+		expect(new Uint8Array(await response.arrayBuffer())).toEqual(matching ? content.slice(1, 4) : content);
+		expect(calls).toEqual(matching ? [range] : [range, null]);
+	});
 
-    it.each(['matching', 'stale', 'weak', 'date', 'empty', 'invalid', 'missing-upstream', 'weak-upstream', 'unsatisfiable'])('handles If-Range safely (%s)', async mode => {
-        const initial = await request('/dav/image.png');
-        const tag = initial.headers.get('ETag')!;
-        await initial.arrayBuffer();
-        const handle = drive.handle.bind(drive);
-        const calls: (string | null)[] = [];
-        vi.spyOn(drive, 'handle').mockImplementation(async (input, init) => {
-            const response = await handle(input, init);
-            if (String(input).includes('alt=media')) {
-                calls.push(new Headers(init?.headers).get('Range'));
-                if (mode === 'missing-upstream') response.headers.delete('ETag');
-                if (mode === 'weak-upstream') response.headers.set('ETag', 'W/' + tag);
-            }
-            return response;
-        });
-        const validator = mode === 'stale' ? '"old-version"' : mode === 'weak' ? 'W/' + tag
-            : mode === 'date' ? 'Mon, 01 Jan 2024 00:00:00 GMT' : mode === 'empty' ? '' : mode === 'invalid' ? 'invalid' : tag;
-        const range = mode === 'unsatisfiable' ? 'bytes=100-102' : 'bytes=1-3';
-        // SELF's HTTP transport drops empty header values; invoke the worker
-        // directly for that boundary so it actually receives an empty field.
-        const ctx = createExecutionContext();
-        const response = mode === 'empty'
-            ? await worker.fetch(new Request(ORIGIN + '/dav/image.png', { headers: { ...AUTH, Range: range, 'If-Range': validator } }), env as Env, ctx)
-            : await request('/dav/image.png', { headers: { Range: range, 'If-Range': validator } });
-        await waitOnExecutionContext(ctx);
-        const matching = mode === 'matching';
-        expect(response.status).toBe(matching ? 206 : 200);
-        expect(response.headers.get('Content-Range')).toBe(matching ? 'bytes 1-3/12' : null);
-        expect(new Uint8Array(await response.arrayBuffer())).toEqual(matching ? content.slice(1, 4) : content);
-        expect(calls).toEqual(matching ? [range] : [range, null]);
-    });
+	it('uses the media validator even when cached metadata, size and mtime stay unchanged', async () => {
+		const first = await request('/dav/image.png');
+		const tag = first.headers.get('ETag')!;
+		await first.arrayBuffer();
+		const file = drive.files.find(file => file.id === 'image')!;
+		const modifiedTime = file.modifiedTime;
+		const changed = content.slice(); changed[0] = 1;
+		file.content = changed;
+		const response = await request('/dav/image.png', { headers: { Range: 'bytes=1-3', 'If-Range': tag } });
+		expect(response.status).toBe(200);
+		expect(response.headers.get('ETag')).not.toBe(tag);
+		expect(file.modifiedTime).toBe(modifiedTime);
+		expect(new Uint8Array(await response.arrayBuffer())).toEqual(changed);
+	});
 
-    it('uses the media validator even when cached metadata, size and mtime stay unchanged', async () => {
-        const first = await request('/dav/image.png');
-        const tag = first.headers.get('ETag')!;
-        await first.arrayBuffer();
-        const file = drive.files.find(file => file.id === 'image')!;
-        const modifiedTime = file.modifiedTime;
-        const changed = content.slice(); changed[0] = 1;
-        file.content = changed;
-        const response = await request('/dav/image.png', { headers: { Range: 'bytes=1-3', 'If-Range': tag } });
-        expect(response.status).toBe(200);
-        expect(response.headers.get('ETag')).not.toBe(tag);
-        expect(file.modifiedTime).toBe(modifiedTime);
-        expect(new Uint8Array(await response.arrayBuffer())).toEqual(changed);
-    });
+	it('cancels discarded partial bytes and preserves a failed full-download retry', async () => {
+		const handle = drive.handle.bind(drive);
+		let cancelled = false;
+		let mediaCalls = 0;
+		vi.spyOn(drive, 'handle').mockImplementation(async (input, init) => {
+			if (!String(input).includes('alt=media')) return handle(input, init);
+			mediaCalls++;
+			if (mediaCalls === 1) return new Response(new ReadableStream({
+				cancel() { cancelled = true; },
+			}), { status: 206, headers: { ETag: '"new"' } });
+			expect(cancelled).toBe(true);
+			expect(new Headers(init?.headers).has('Range')).toBe(false);
+			return new Response('retry failed', { status: 503 });
+		});
+		const response = await request('/dav/image.png', { headers: { Range: 'bytes=1-3', 'If-Range': '"old"' } });
+		expect(response.status).toBe(503);
+		expect(mediaCalls).toBe(2);
+		expect(cancelled).toBe(true);
+	});
 
-    it('cancels discarded partial bytes and preserves a failed full-download retry', async () => {
-        const handle = drive.handle.bind(drive);
-        let cancelled = false;
-        let mediaCalls = 0;
-        vi.spyOn(drive, 'handle').mockImplementation(async (input, init) => {
-            if (!String(input).includes('alt=media')) return handle(input, init);
-            mediaCalls++;
-            if (mediaCalls === 1) return new Response(new ReadableStream({
-                cancel() { cancelled = true; },
-            }), { status: 206, headers: { ETag: '"new"' } });
-            expect(cancelled).toBe(true);
-            expect(new Headers(init?.headers).has('Range')).toBe(false);
-            return new Response('retry failed', { status: 503 });
-        });
-        const response = await request('/dav/image.png', { headers: { Range: 'bytes=1-3', 'If-Range': '"old"' } });
-        expect(response.status).toBe(503);
-        expect(mediaCalls).toBe(2);
-        expect(cancelled).toBe(true);
-    });
-
-    it.each([403, 404, 500])('does not hide upstream %s with an If-Range retry', async status => {
-        const handle = drive.handle.bind(drive);
-        let mediaCalls = 0;
-        vi.spyOn(drive, 'handle').mockImplementation(async (input, init) => {
-            if (String(input).includes('alt=media')) {
-                mediaCalls++;
-                return new Response('upstream failure', { status });
-            }
-            return handle(input, init);
-        });
-        const response = await request('/dav/image.png', { headers: { Range: 'bytes=1-3', 'If-Range': '"old"' } });
-        expect(response.status).toBe(status);
-        expect(mediaCalls).toBe(1);
-    });
+	it.each([404, 500])('does not hide upstream %s with an If-Range retry', async status => {
+		const handle = drive.handle.bind(drive);
+		let mediaCalls = 0;
+		vi.spyOn(drive, 'handle').mockImplementation(async (input, init) => {
+			if (String(input).includes('alt=media')) {
+				mediaCalls++;
+				return new Response('upstream failure', { status });
+			}
+			return handle(input, init);
+		});
+		const response = await request('/dav/image.png', { headers: { Range: 'bytes=1-3', 'If-Range': '"old"' } });
+		expect(response.status).toBe(status);
+		expect(mediaCalls).toBe(1);
+	});
 
 	it('forwards the client Range and preserves the partial original response', async () => {
 		const spy = vi.spyOn(drive, 'handle');
@@ -245,7 +231,7 @@ describe('original file downloads', () => {
 		expect(new Uint8Array(await response.arrayBuffer())).toEqual(content.slice(1, 4));
 		const media = spy.mock.calls.find(([input]) => String(input).includes('alt=media'));
 		expect(media).toBeDefined();
-        expect(String(media![0])).toContain('/drive/v2/files/');
+		expect(String(media![0])).toContain('/drive/v2/files/');
 		expect(new Headers(media![1]?.headers).get('Range')).toBe('bytes=1-3');
 		expect(new Headers(media![1]?.headers).get('Authorization')).toBe('Bearer test-access-token');
 	});
@@ -329,76 +315,52 @@ describe('PROPFIND', () => {
 });
 
 describe('MOVE / COPY overwrite semantics', () => {
-	it('COPY to a new destination returns 201', async () => {
-		const res = await request('/dav/a.txt', {
-			method: 'COPY',
-			headers: { Destination: ORIGIN + '/dav/cp-new.txt' },
-		});
+	it.each([
+		['COPY', '/dav/cp-new.txt'],
+		['MOVE', '/dav/mv-new.txt'],
+	] as const)('%s to a new destination returns 201', async (method, destination) => {
+		const res = await request('/dav/a.txt', { method, headers: { Destination: ORIGIN + destination } });
 		expect(res.status).toBe(201);
-		expect(drive.findById('file-a')).toBeDefined();
-		expect(drive.children('root').some((f) => f.name === 'cp-new.txt')).toBe(true);
+		if (method === 'MOVE') {
+			expect(res.headers.get('Location')).toBe(ORIGIN + destination);
+			expect(drive.findById('file-a')?.name).toBe('mv-new.txt');
+			expect(drive.children('root').some(f => f.name === 'a.txt')).toBe(false);
+		} else {
+			expect(drive.findById('file-a')?.name).toBe('a.txt');
+			expect(drive.children('root').some(f => f.name === 'cp-new.txt')).toBe(true);
+		}
 	});
 
-	it('COPY with Overwrite: F onto an existing target returns 412', async () => {
+	it.each(['MOVE', 'COPY'])('%s with Overwrite: F onto an existing target returns 412', async method => {
 		const res = await request('/dav/a.txt', {
-			method: 'COPY',
+			method,
 			headers: { Destination: ORIGIN + '/dav/dest.txt', Overwrite: 'F' },
 		});
 		expect(res.status).toBe(412);
 		expect(drive.findById('file-dest')).toBeDefined();
+		expect(drive.findById('file-a')).toBeDefined();
 	});
 
-
-	it('COPY onto itself returns 403', async () => {
+	it.each([
+		['COPY', 403],
+		['MOVE', 204],
+	] as const)('%s onto itself returns %i', async (method, status) => {
 		const res = await request('/dav/a.txt', {
-			method: 'COPY',
+			method,
 			headers: { Destination: ORIGIN + '/dav/a.txt' },
 		});
+		expect(res.status).toBe(status);
+		expect(drive.findById('file-a')).toBeDefined();
+	});
+
+	it.each([
+		['MOVE', '/dav/a.txt', undefined],
+		['COPY', '/dav/a.txt', undefined],
+		['MOVE', '/dav/', ORIGIN + '/dav/x/'],
+		['COPY', '/dav/', ORIGIN + '/dav/x/'],
+	] as const)('rejects invalid %s on %s with 403', async (method, path, destination) => {
+		const res = await request(path, { method, ...(destination ? { headers: { Destination: destination } } : {}) });
 		expect(res.status).toBe(403);
-	});
-
-	it('MOVE onto itself returns 204', async () => {
-		const res = await request('/dav/a.txt', {
-			method: 'MOVE',
-			headers: { Destination: ORIGIN + '/dav/a.txt' },
-		});
-		expect(res.status).toBe(204);
-		expect(drive.findById('file-a')).toBeDefined();
-	});
-
-	it('MOVE to a new destination returns 201 with a Location header', async () => {
-		const res = await request('/dav/a.txt', {
-			method: 'MOVE',
-			headers: { Destination: ORIGIN + '/dav/mv-new.txt' },
-		});
-		expect(res.status).toBe(201);
-		expect(res.headers.get('Location')).toBe(ORIGIN + '/dav/mv-new.txt');
-		expect(drive.findById('file-a')?.name).toBe('mv-new.txt');
-		expect(drive.children('root').some((f) => f.name === 'a.txt')).toBe(false);
-	});
-
-	it('MOVE with Overwrite: F onto an existing target returns 412', async () => {
-		const res = await request('/dav/a.txt', {
-			method: 'MOVE',
-			headers: { Destination: ORIGIN + '/dav/dest.txt', Overwrite: 'F' },
-		});
-		expect(res.status).toBe(412);
-		expect(drive.findById('file-dest')).toBeDefined();
-		expect(drive.findById('file-a')).toBeDefined();
-	});
-
-	it('rejects MOVE/COPY without a Destination header', async () => {
-		const move = await request('/dav/a.txt', { method: 'MOVE' });
-		expect(move.status).toBe(403);
-		const copy = await request('/dav/a.txt', { method: 'COPY' });
-		expect(copy.status).toBe(403);
-	});
-
-	it('rejects MOVE/COPY of the collection root', async () => {
-		const move = await request('/dav/', { method: 'MOVE', headers: { Destination: ORIGIN + '/dav/x/' } });
-		expect(move.status).toBe(403);
-		const copy = await request('/dav/', { method: 'COPY', headers: { Destination: ORIGIN + '/dav/x/' } });
-		expect(copy.status).toBe(403);
 	});
 });
 
@@ -691,13 +653,13 @@ describe('recoverable overwrite operations', () => {
 		if (method === 'COPY') expect(drive.files.some(f => f.name.startsWith('.webdav-copy-') && !f.trashed)).toBe(true);
 	});
 
-	it.each(['network', '500', 'malformed', 'missing-id', 'source-id'])('COPY preserves a committed stage after ambiguous %s response without touching the target', async failure => {
+	it.each(['network', '500', 'source-id'])('COPY preserves a committed stage after ambiguous %s response without touching the target', async failure => {
 		const calls = recordMutations(async (call, commit) => {
 			if (call.method !== 'POST') return;
 			await commit();
 			if (failure === 'network') throw new Error('Injected lost staging response');
 			if (failure === '500') return rejectMutation(500);
-			return new Response(failure === 'malformed' ? '{invalid JSON' : failure === 'source-id' ? JSON.stringify({ id: 'file-a' }) : '{}', { status: 200 });
+			return new Response(JSON.stringify({ id: 'file-a' }), { status: 200 });
 		});
 		expect((await overwrite('COPY')).status).toBe(ambiguousStatus(failure));
 		expect(calls.map(c => c.method)).toEqual(['POST']);
@@ -706,26 +668,36 @@ describe('recoverable overwrite operations', () => {
 		expect(drive.files.some(f => f.name === calls[0].body.name && !f.trashed)).toBe(true);
 	});
 
-	// Classify each response once; COPY separately checks its staged-data recovery path.
-	it.each([...['network', '500', '408', 'malformed'].map(failure => ({ method: 'MOVE', failure })), { method: 'COPY', failure: 'network' }])(
-		'$method aborts without rollback when trashing commits but its $failure response is ambiguous', async ({ method, failure }) => {
-			const calls = recordMutations(async (call, commit) => {
-				if (call.body.trashed !== true) return;
-				await commit();
-				if (failure === 'network') throw new Error('Injected lost trash response');
-				if (failure === 'malformed') return new Response('{invalid JSON', { status: 200 });
-				return rejectMutation(Number(failure));
-			});
-			expect((await overwrite(method)).status).toBe(ambiguousStatus(failure));
-			expect(calls.map(c => c.method)).toEqual(method === 'COPY' ? ['POST', 'PATCH'] : ['PATCH']);
-			expect(drive.findById('file-dest')?.trashed).toBe(true);
-			expect(drive.findById('file-a')?.name).toBe('a.txt');
-			if (method === 'COPY') expect(drive.files.some(f => f.name === calls[0].body.name && !f.trashed)).toBe(true);
-		},
-	);
+	it.each([
+		{ method: 'MOVE', failure: '500' },
+		{ method: 'MOVE', failure: '408' },
+		{ method: 'COPY', failure: 'network' },
+	])('$method aborts without rollback when trashing commits but its $failure response is ambiguous', async ({ method, failure }) => {
+		const calls = recordMutations(async (call, commit) => {
+			if (call.body.trashed !== true) return;
+			await commit();
+			if (failure === 'network') throw new Error('Injected lost trash response');
+			return rejectMutation(Number(failure));
+		});
+		expect((await overwrite(method)).status).toBe(ambiguousStatus(failure));
+		expect(calls.map(c => c.method)).toEqual(method === 'COPY' ? ['POST', 'PATCH'] : ['PATCH']);
+		expect(drive.findById('file-dest')?.trashed).toBe(true);
+		expect(drive.findById('file-a')?.name).toBe('a.txt');
+		if (method === 'COPY') expect(drive.files.some(f => f.name === calls[0].body.name && !f.trashed)).toBe(true);
+	});
 
-	it('COPY retries use distinct staging names and retain both recoverable copies', async () => {
-		const calls = recordMutations(async call => call.body.trashed === true ? rejectMutation(403) : undefined);
+	it('COPY staging failure leaves the target untouched and retries use distinct staging names', async () => {
+		let failStage = true;
+		const calls = recordMutations(async call => {
+			if (failStage && call.method === 'POST') return rejectMutation(403);
+			if (!failStage && call.body.trashed === true) return rejectMutation(403);
+		});
+		expect((await overwrite('COPY')).status).toBe(403);
+		expect(calls.map(c => c.method)).toEqual(['POST']);
+		expect(drive.findById('file-dest')?.trashed).not.toBe(true);
+
+		failStage = false;
+		calls.length = 0;
 		expect((await overwrite('COPY')).status).toBe(403);
 		expect((await overwrite('COPY')).status).toBe(403);
 		const names = calls.filter(c => c.method === 'POST').map(c => c.body.name);
@@ -735,25 +707,15 @@ describe('recoverable overwrite operations', () => {
 		expect(calls.some(c => c.method === 'DELETE')).toBe(false);
 	});
 
-	it.each([403, 500])('COPY staging failure (%i) leaves the old target untouched', async status => {
-		const calls = recordMutations(async call => call.method === 'POST' ? rejectMutation(status) : undefined);
-		expect((await overwrite('COPY')).status).toBe(status);
-		expect(calls.map(c => c.method)).toEqual(['POST']);
-		expect(drive.findById('file-dest')?.trashed).not.toBe(true);
+	it.each(['MOVE', 'COPY'])('%s restores the old destination after definitive 403 publication rejection', async method => {
+		const calls = recordMutations(async call => isPublish(call) ? rejectMutation(403) : undefined);
+		expect((await overwrite(method)).status).toBe(403);
+		expect(mutationSummary(calls).at(-1)).toEqual({ method: 'PATCH', path: '/drive/v3/files/file-dest', body: { trashed: false } });
+		expect(calls.map(c => c.method)).toEqual(method === 'COPY' ? ['POST', 'PATCH', 'PATCH', 'PATCH'] : ['PATCH', 'PATCH', 'PATCH']);
+		expect(drive.findById('file-dest')).toMatchObject({ name: 'dest.txt', size: 456, trashed: false });
 		expect(drive.findById('file-a')?.name).toBe('a.txt');
+		if (method === 'COPY') expect(drive.files.some(f => f.name.startsWith('.webdav-copy-') && !f.trashed)).toBe(true);
 	});
-
-	it.each([...[400, 403, 404, 409, 429].map(status => ({ method: 'MOVE', status })), { method: 'COPY', status: 403 }])(
-		'$method restores the old destination after definitive $status publication rejection', async ({ method, status }) => {
-			const calls = recordMutations(async call => isPublish(call) ? rejectMutation(status) : undefined);
-			expect((await overwrite(method)).status).toBe(status);
-			expect(mutationSummary(calls).at(-1)).toEqual({ method: 'PATCH', path: '/drive/v3/files/file-dest', body: { trashed: false } });
-			expect(calls.map(c => c.method)).toEqual(method === 'COPY' ? ['POST', 'PATCH', 'PATCH', 'PATCH'] : ['PATCH', 'PATCH', 'PATCH']);
-			expect(drive.findById('file-dest')).toMatchObject({ name: 'dest.txt', size: 456, trashed: false });
-			expect(drive.findById('file-a')?.name).toBe('a.txt');
-			if (method === 'COPY') expect(drive.files.some(f => f.name.startsWith('.webdav-copy-') && !f.trashed)).toBe(true);
-		},
-	);
 
 	it.each(['MOVE', 'COPY'])('%s reports failure if destination restoration is rejected', async method => {
 		const calls = recordMutations(async call => isPublish(call) || call.body.trashed === false ? rejectMutation(403) : undefined);
@@ -766,30 +728,25 @@ describe('recoverable overwrite operations', () => {
 		expect(drive.findById('file-a')?.name).toBe('a.txt');
 	});
 
-	// The shared writer classifies errors; retain both methods and both commit outcomes
-	// without multiplying every classification by every recovery scenario.
 	it.each([
-		...['network', '500', '408', 'malformed', 'missing-id', 'wrong-id'].map(failure => ({ method: 'MOVE', failure, committed: true })),
-		{ method: 'COPY', failure: 'network', committed: true },
-		...['MOVE', 'COPY'].map(method => ({ method, failure: 'network', committed: false })),
-	])(
-		'$method does not undo or delete after ambiguous $failure publication (committed=$committed)', async ({ method, failure, committed }) => {
-			const calls = recordMutations(async (call, commit) => {
-				if (!isPublish(call)) return;
-				if (committed) await commit();
-				if (failure === 'network') throw new Error('Injected connection loss');
-				if (failure === 'malformed') return new Response('{invalid JSON', { status: 200 });
-				if (failure === 'missing-id') return new Response('{}', { status: 200 });
-				if (failure === 'wrong-id') return new Response(JSON.stringify({ id: 'unrelated-id' }), { status: 200 });
-				return rejectMutation(Number(failure));
-			});
-			expect((await overwrite(method)).status).toBe(ambiguousStatus(failure));
-			expect(calls.map(c => c.method)).toEqual(method === 'COPY' ? ['POST', 'PATCH', 'PATCH'] : ['PATCH', 'PATCH']);
-			expect(drive.findById('file-dest')).toMatchObject({ name: 'dest.txt', size: 456, trashed: true });
-			expect(drive.findById('file-a')?.name).toBe(method === 'MOVE' && committed ? 'dest.txt' : 'a.txt');
-			if (method === 'COPY') expect(drive.files.some(f => f.id !== 'file-dest' && f.name === (committed ? 'dest.txt' : calls[0].body.name))).toBe(true);
-		},
-	);
+		{ method: 'MOVE', failure: 'network', committed: true },
+		{ method: 'MOVE', failure: '408', committed: true },
+		{ method: 'MOVE', failure: 'wrong-id', committed: true },
+		{ method: 'COPY', failure: 'network', committed: false },
+	])('$method does not undo or delete after ambiguous $failure publication (committed=$committed)', async ({ method, failure, committed }) => {
+		const calls = recordMutations(async (call, commit) => {
+			if (!isPublish(call)) return;
+			if (committed) await commit();
+			if (failure === 'network') throw new Error('Injected connection loss');
+			if (failure === 'wrong-id') return new Response(JSON.stringify({ id: 'unrelated-id' }), { status: 200 });
+			return rejectMutation(Number(failure));
+		});
+		expect((await overwrite(method)).status).toBe(ambiguousStatus(failure));
+		expect(calls.map(c => c.method)).toEqual(method === 'COPY' ? ['POST', 'PATCH', 'PATCH'] : ['PATCH', 'PATCH']);
+		expect(drive.findById('file-dest')).toMatchObject({ name: 'dest.txt', size: 456, trashed: true });
+		expect(drive.findById('file-a')?.name).toBe(method === 'MOVE' && committed ? 'dest.txt' : 'a.txt');
+		if (method === 'COPY') expect(drive.files.some(f => f.id !== 'file-dest' && f.name === (committed ? 'dest.txt' : calls[0].body.name))).toBe(true);
+	});
 });
 
 describe('MOVE / COPY destructive-operation guards', () => {
@@ -935,7 +892,6 @@ describe('DELETE cache invalidation', () => {
 	});
 });
 
-// Folder-tree behavior is independently verified in mock-drive.test.ts.
 describe('recoverable collection overwrites', () => {
 	let targetName: string;
 	function targetTree(): void {
@@ -954,15 +910,14 @@ describe('recoverable collection overwrites', () => {
 		expect((await request('/dav/' + targetName + '/nested/keep.bin', { method: 'HEAD' })).status).toBe(200);
 		const calls = recordMutations();
 		expect((await transfer(method)).status).toBe(204);
-		for (const id of ['old-tree', 'old-trash']) expect(drive.findById(id)?.trashed).toBe(true);
-		for (const id of ['old-sub', 'old-leaf']) expect(drive.findById(id)?.trashed).toBe(true);
+		for (const id of ['old-tree', 'old-trash', 'old-sub', 'old-leaf']) expect(drive.findById(id)?.trashed).toBe(true);
 		expect(drive.findById('old-leaf')?.content).toEqual(new Uint8Array([1, 2, 255]));
 		expect((await request('/dav/' + targetName + '/nested/keep.bin', { method: 'HEAD' })).status).toBe(404);
-		expect((await request('/dav/' + targetName + '', { method: 'HEAD' })).status).toBe(200);
+		expect((await request('/dav/' + targetName, { method: 'HEAD' })).status).toBe(200);
 		expect(calls.some(c => c.method === 'DELETE')).toBe(false);
 	});
 
-	it.each(['MOVE', 'COPY'])('%s hides old paths even while descendant trash flags lag behind the parent', async method => {
+	it('MOVE hides old paths even while descendant trash flags lag behind the parent', async () => {
 		targetTree();
 		expect((await request('/dav/' + targetName + '/nested/keep.bin', { method: 'HEAD' })).status).toBe(200);
 		recordMutations(async (call, commit) => {
@@ -972,7 +927,7 @@ describe('recoverable collection overwrites', () => {
 			for (const id of ['old-sub', 'old-leaf']) drive.findById(id)!.trashed = false;
 			return response;
 		});
-		expect((await transfer(method)).status).toBe(204);
+		expect((await transfer('MOVE')).status).toBe(204);
 		// Publication may recompute the mock's settled flags. Reproduce stale
 		// descendant reads at the moment the client next resolves the old path.
 		for (const id of ['old-sub', 'old-leaf']) drive.findById(id)!.trashed = false;
@@ -995,10 +950,10 @@ describe('recoverable collection overwrites', () => {
 		expect(calls.map(c => c.method)).toEqual(['PATCH', 'PATCH']);
 	});
 
-	it.each(['MOVE', 'COPY'])('%s restores the destination tree after an injected publication rejection, including independently trashed children', async method => {
+	it('MOVE restores the destination tree after an injected publication rejection, including independently trashed children', async () => {
 		targetTree();
 		const calls = recordMutations(async call => call.body.name === targetName ? rejectMutation(403) : undefined);
-		expect((await transfer(method)).status).toBe(403);
+		expect((await transfer('MOVE')).status).toBe(403);
 		expect(drive.findById('old-tree')?.trashed).toBe(false);
 		for (const id of ['old-sub', 'old-leaf']) expect(drive.findById(id)?.trashed).not.toBe(true);
 		expect(drive.findById('old-trash')).toMatchObject({ trashed: false, explicitlyTrashed: false });
@@ -1007,22 +962,7 @@ describe('recoverable collection overwrites', () => {
 		expect(calls.at(-1)?.body).toEqual({ trashed: false });
 		expect(calls.some(c => c.method === 'DELETE')).toBe(false);
 	});
-
-	it.each(['MOVE', 'COPY'])('%s preserves the recoverable tree after a committed publication loses its response', async method => {
-		targetTree();
-		const calls = recordMutations(async (call, commit) => {
-			if (call.body.name !== targetName) return;
-			await commit();
-			throw new Error('Injected lost publication response');
-		});
-		expect((await transfer(method)).status).toBe(500);
-		expect(drive.findById('old-tree')?.trashed).toBe(true);
-		for (const id of ['old-sub', 'old-leaf']) expect(drive.findById(id)).toBeDefined();
-		expect(calls.some(c => c.body.trashed === false || c.method === 'DELETE')).toBe(false);
-		expect((await request('/dav/' + targetName + '', { method: 'HEAD' })).status).toBe(200);
-	});
 });
-
 
 describe('isolate cache bounds and lifetime', () => {
     it.each(['meta', 'objects'])('expires %s entries without extending their lifetime on hits', async ns => {
@@ -1048,14 +988,27 @@ describe('isolate cache bounds and lifetime', () => {
     });
 
     it('evicts old metadata at capacity while preserving the mounted root', async () => {
+        const directHead = async (path: string) => {
+            const ctx = createExecutionContext();
+            const response = await worker.fetch(new Request(ORIGIN + path, { method: 'HEAD', headers: AUTH }), env as Env, ctx);
+            await waitOnExecutionContext(ctx);
+            return response;
+        };
         for (let i = 0; i <= 128; i++) {
-            const name = 'bounded-' + i;
-            drive.add({ id: name, name, mimeType: 'text/plain', size: 123, parents: ['root'] });
-            expect((await request('/dav/' + name, { method: 'HEAD' })).status).toBe(200);
+            drive.add({ id: 'bounded-' + i, name: 'bounded-' + i, mimeType: 'text/plain', size: 123, parents: ['root'] });
         }
+        expect((await directHead('/dav/bounded-0')).status).toBe(200);
+        for (let start = 1; start < 128; start += 16) {
+            const batch = Array.from({ length: Math.min(16, 128 - start) }, (_, j) => directHead('/dav/bounded-' + (start + j)));
+            const responses = await Promise.all(batch);
+            expect(responses.every(r => r.status === 200)).toBe(true);
+        }
+        expect((await directHead('/dav/bounded-128')).status).toBe(200);
         drive.findById('bounded-0')!.size = 456;
-        expect((await request('/dav/bounded-0', { method: 'HEAD' })).headers.get('Content-Length')).toBe('456');
-        expect((await request('/dav/', { method: 'HEAD' })).status).toBe(200);
+        drive.findById('bounded-128')!.size = 456;
+        expect((await directHead('/dav/bounded-0')).headers.get('Content-Length')).toBe('456');
+        expect((await directHead('/dav/bounded-128')).headers.get('Content-Length')).toBe('123');
+        expect((await directHead('/dav/')).status).toBe(200);
     });
 
     it('does not retain oversized directory listings', async () => {

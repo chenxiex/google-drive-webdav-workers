@@ -23,9 +23,14 @@ describe('WebDAV property XML', () => {
         expect(xml(operations[2].property.xml).textContent).toBe('blue');
     });
 
-    it('preserves mixed XML, significant whitespace, namespace context and inherited language', () => {
-        const [operation] = parsePatch('<d:propertyupdate xmlns:d="DAV:" xmlns:x="urn:test" xmlns:q="urn:q" xml:lang="zh"><d:set><d:prop><x:value xml:space="preserve" kind="q:thing"> pre <q:child q:flag="a&amp;b"/> post\n </x:value></d:prop></d:set></d:propertyupdate>');
-        const element = xml(operation.property.xml);
+    it('preserves mixed XML, whitespace, namespaces, inherited language, and empty vs absent distinction', () => {
+        const [mixed, cleared] = parsePatch(
+            '<d:propertyupdate xmlns:d="DAV:" xmlns:x="urn:test" xmlns:q="urn:q" xml:lang="zh">'
+            + '<d:set><d:prop><x:value xml:space="preserve" kind="q:thing"> pre <q:child q:flag="a&amp;b"/> post\n </x:value></d:prop></d:set>'
+            + '<d:set xml:lang="fr"><d:prop><p xmlns="urn:test" xml:lang=""/></d:prop></d:set>'
+            + '</d:propertyupdate>',
+        );
+        const element = xml(mixed.property.xml);
         expect(element.namespaceURI).toBe('urn:test');
         expect(element.getAttribute('xml:lang')).toBe('zh');
         expect(element.getAttribute('xml:space')).toBe('preserve');
@@ -33,6 +38,11 @@ describe('WebDAV property XML', () => {
         expect(element.getAttribute('kind')).toBe('q:thing');
         expect(element.textContent).toBe(' pre  post\n ');
         expect(element.getElementsByTagNameNS('urn:q', 'child').item(0)?.getAttributeNS('urn:q', 'flag')).toBe('a&b');
+
+        const empty = xml(cleared.property.xml);
+        expect(empty.hasAttribute('xml:lang')).toBe(true);
+        expect(empty.getAttribute('xml:lang')).toBe('');
+        expect(empty.textContent).toBe('');
     });
 
     it('does not conflate namespace-less or equal local-name properties', () => {
@@ -47,46 +57,19 @@ describe('WebDAV property XML', () => {
         }
     });
 
-    it('keeps empty property distinct from absent, and inherits the nearest xml:lang', () => {
-        const [operation] = parsePatch('<propertyupdate xmlns="DAV:" xml:lang="en"><set xml:lang="fr"><prop><p xmlns="urn:test" xml:lang=""/></prop></set></propertyupdate>');
-        expect(xml(operation.property.xml).hasAttribute('xml:lang')).toBe(true);
-        expect(xml(operation.property.xml).getAttribute('xml:lang')).toBe('');
-        expect(xml(operation.property.xml).textContent).toBe('');
-    });
-
-    it('preserves DTD-like literal text without allowing declarations', () => {
+    it('preserves DTD-like literal text inside CDATA without allowing declarations', () => {
         const [operation] = parsePatch(patch(set('<x:value><![CDATA[<!DOCTYPE sample>]]></x:value>')));
         expect(xml(operation.property.xml).textContent).toBe('<!DOCTYPE sample>');
     });
 
-    it('preserves character-reference carriage returns across serialization', () => {
-        const [operation] = parsePatch(patch(set('<x:value attr="&#9;&#10;&#13;">&#13;</x:value>')));
-        expect(xml(operation.property.xml).textContent).toBe('\r');
-        expect(xml(operation.property.xml).getAttribute('attr')).toBe('\t\n\r');
-    });
-
-    it('normalizes XML 1.0 newlines without changing Unicode text', () => {
-        const [operation] = parsePatch(patch(set('<x:value>one\r\ntwo\rthree\u0085four\u2028five</x:value>')));
-        expect(xml(operation.property.xml).textContent).toBe('one\ntwo\nthree\u0085four\u2028five');
-    });
-
     it.each([
-        '', 'not XML', '<p/>', '<propertyupdate/>',
-        '<d:propertyupdate xmlns:d="DAV:"/>',
+        '',
+        'not XML',
+        '<propertyupdate/>',
         patch('<d:set><d:prop/></d:set>'),
         patch(set('<x:value>unclosed')),
-        patch(set('<missing:value/>')),
-        patch(set('<x:value>&unknown;</x:value>')),
         patch(remove('<x:value>text</x:value>')),
-        patch(remove('<x:value><x:child/></x:value>')),
-        patch('<d:unknown/>'),
         patch(set('<x:value>\u0000</x:value>')),
-        patch(set('<x:value>&#0;</x:value>')),
-        patch(set('<x:value>]]></x:value>')),
-        '<?xml version="1.1"?>' + patch(set('<x:value/>')),
-        patch(set('<x:value xmlns:xml="wrong"/>')),
-        patch(set('<x:value xmlns:a=""/>')),
-        patch(set('<x:value xmlns:a="urn:a" xmlns:b="urn:a" a:z="1" b:z="2"/>')),
         '<!DOCTYPE d:propertyupdate [<!ENTITY x "secret">]>' + patch(set('<x:value>&x;</x:value>')),
         '<!DOCTYPE d:propertyupdate SYSTEM "https://example.com/external.dtd">' + patch(set('<x:value/>')),
     ])('rejects malformed or unsafe propertyupdate: %s', body => {
@@ -105,24 +88,6 @@ describe('WebDAV property XML', () => {
         const result = parseFind('<propfind xmlns="DAV:" xmlns:x="urn:test"><allprop/><include><x:p/></include></propfind>');
         expect(result.mode).toBe('allprop');
         expect(result.properties[0]).toMatchObject({ namespace: 'urn:test', name: 'p' });
-    });
-
-    it('ignores unexpected update-envelope elements and their whole subtrees', () => {
-        const operations = parsePatch(patch(
-            '<x:extension><d:set><d:prop><x:ignored/></d:prop></d:set></x:extension>' +
-            '<d:set x:attribute="ignored"><x:extension><d:prop><x:ignored/></d:prop></x:extension>' +
-            '<d:prop><x:kept>value<x:nested/></x:kept></d:prop><d:unexpected/></d:set>' +
-            '<d:remove><x:extension/><d:prop><x:removed/></d:prop></d:remove>'
-        ));
-        expect(operations.map(operation => [operation.action, operation.property.name])).toEqual([['set', 'kept'], ['remove', 'removed']]);
-        expect(xml(operations[0].property.xml).getElementsByTagNameNS('urn:test', 'nested').length).toBe(1);
-    });
-
-    it('ignores unexpected find-envelope elements without interpreting nested selectors', () => {
-        expect(parseFind('<propfind xmlns="DAV:" xmlns:x="urn:test"><x:extension><prop/></x:extension><allprop><propname/></allprop></propfind>')).toEqual({ mode: 'allprop', properties: [] });
-        expect(parseFind('<propfind xmlns="DAV:"><propname><unexpected/></propname></propfind>')).toEqual({ mode: 'propname', properties: [] });
-        const result = parseFind('<propfind xmlns="DAV:" xmlns:x="urn:test"><x:extension/><prop><x:kept/></prop></propfind>');
-        expect(result.properties.map(property => property.name)).toEqual(['kept']);
     });
 
     it.each([

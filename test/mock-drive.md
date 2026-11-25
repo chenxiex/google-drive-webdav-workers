@@ -1,6 +1,6 @@
 # Google Drive mock contract
 
-[test/helpers.ts](helpers.ts) implements `MockDrive`, a bounded in-memory test double verified against live Google OAuth and Drive APIs. [test/mock-drive.test.ts](mock-drive.test.ts) verifies the upstream Drive contracts directly in Node, while the WebDAV suites run against `MockDrive` in `workerd`. Default tests never load `.dev.vars`, contact Google, or mutate live Drive files.
+[test/helpers.ts](helpers.ts) implements `MockDrive`, a bounded in-memory test double verified against live Google OAuth and Drive APIs, exercised by the WebDAV and TUS test suites in `workerd`. Default tests never load `.dev.vars`, contact Google, or mutate live Drive files.
 
 ## Verification commands
 

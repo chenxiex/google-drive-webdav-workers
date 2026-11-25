@@ -384,3 +384,117 @@ describe('isolate cache bounds and lifetime', () => {
 		expect(await read()).toContain('fresh-child.txt');
 	});
 });
+
+describe('Google Workspace native docs and Shortcuts (7A)', () => {
+	const workspaceTypes = [
+		['Google Doc', 'application/vnd.google-apps.document', 'Project Plan'],
+		['Google Sheet', 'application/vnd.google-apps.spreadsheet', 'Budget'],
+		['Google Slides', 'application/vnd.google-apps.presentation', 'Deck'],
+		['Google Drawing', 'application/vnd.google-apps.drawing', 'Diagram'],
+		['Drive Shortcut', 'application/vnd.google-apps.shortcut', 'Folder Shortcut'],
+		['Drive SDK file', 'application/vnd.google-apps.drive-sdk.42', 'Third Party'],
+	] as const;
+
+	const paginate = (pageSize: number) => {
+		const original = drive.handle.bind(drive);
+		return vi.spyOn(drive, 'handle').mockImplementation((input, init) => {
+			const url = new URL(input instanceof Request ? input.url : String(input));
+			if (url.pathname === '/drive/v3/files' && (init?.method ?? 'GET') === 'GET') {
+				url.searchParams.set('pageSize', String(pageSize));
+			}
+			return original(url.toString(), init);
+		});
+	};
+
+	it('excludes native Google Workspace docs and Shortcuts from multi-page PROPFIND listings while retaining folders and Office files', async () => {
+		const dir = 'ws-list-' + crypto.randomUUID();
+		drive.add({ id: dir, name: dir, mimeType: FOLDER, parents: ['root'] });
+		for (const [label, mimeType, name] of workspaceTypes) {
+			drive.add({ id: dir + '-' + label, name, mimeType, parents: [dir] });
+		}
+		drive.add({ id: dir + '-sub', name: 'Real Folder', mimeType: FOLDER, parents: [dir] });
+		drive.add({
+			id: dir + '-docx',
+			name: 'Spec.docx',
+			mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+			size: 4,
+			content: new Uint8Array([80, 75, 3, 4]),
+			parents: [dir],
+		});
+		drive.add({ id: dir + '-txt', name: 'readme.txt', mimeType: 'text/plain', size: 2, content: new Uint8Array([111, 107]), parents: [dir] });
+
+		const spy = paginate(2);
+		const res = await request('/dav/' + dir + '/', { method: 'PROPFIND', headers: { Depth: '1' } });
+		expect(res.status).toBe(207);
+		const xml = await res.text();
+		for (const [, , name] of workspaceTypes) expect(xml).not.toContain(name);
+		expect(xml).toContain('/dav/' + dir + '/Real%20Folder/');
+		expect(xml).toContain('/dav/' + dir + '/Spec.docx');
+		expect(xml).toContain('/dav/' + dir + '/readme.txt');
+		expect(spy.mock.calls.filter(([input]) => String(input).includes('orderBy=')).length).toBeGreaterThan(1);
+	});
+
+	it.each(workspaceTypes)('returns 404 for %s across read, metadata, copy/move source, and delete without downloading or mutating', async (label, mimeType, name) => {
+		const dir = 'ws-hide-' + crypto.randomUUID();
+		const itemId = dir + '-item';
+		drive.add({ id: dir, name: dir, mimeType: FOLDER, parents: ['root'] });
+		drive.add({ id: itemId, name, mimeType, parents: [dir] });
+		drive.add({ id: dir + '-child', name: 'hidden-child.txt', mimeType: 'text/plain', size: 3, parents: [itemId] });
+		const path = '/dav/' + dir + '/' + encodeURIComponent(name);
+
+		const spy = vi.spyOn(drive, 'handle');
+		for (const init of [
+			{ method: 'GET' },
+			{ method: 'HEAD' },
+			{ method: 'PROPFIND', headers: { Depth: '0' } },
+			{ method: 'PROPFIND', headers: { Depth: '1' } },
+			{ method: 'PROPPATCH', body: '<D:propertyupdate xmlns:D="DAV:" xmlns:X="urn:test"><D:set><D:prop><X:k>v</X:k></D:prop></D:set></D:propertyupdate>' },
+			{ method: 'DELETE' },
+			{ method: 'MOVE', headers: { Destination: ORIGIN + '/dav/' + dir + '/moved-' + label } },
+			{ method: 'COPY', headers: { Destination: ORIGIN + '/dav/' + dir + '/copied-' + label } },
+		] as RequestInit[]) {
+			expect((await request(path, init)).status).toBe(404);
+		}
+		expect((await request(path + '/hidden-child.txt')).status).toBe(404);
+		expect(drive.findById(itemId)?.trashed).not.toBe(true);
+		const calls = spy.mock.calls.map(([input, init]) => ({
+			url: String(input),
+			method: (init?.method ?? (input instanceof Request ? input.method : 'GET')).toUpperCase(),
+		}));
+		expect(calls.some(call => call.url.includes('alt=media') || call.method !== 'GET')).toBe(false);
+	});
+
+	it('resolves a visible file or folder when hidden items share the same name across pages and stops traversal at non-folders', async () => {
+		const dir = 'ws-same-' + crypto.randomUUID();
+		drive.add({ id: dir, name: dir, mimeType: FOLDER, parents: ['root'] });
+		drive.add({ id: dir + '-doc', name: 'Report', mimeType: 'application/vnd.google-apps.document', parents: [dir] });
+		drive.add({ id: dir + '-shortcut', name: 'Report', mimeType: 'application/vnd.google-apps.shortcut', parents: [dir] });
+		const pdf = new TextEncoder().encode('%PDF-1.4');
+		drive.add({ id: dir + '-pdf', name: 'Report', mimeType: 'application/pdf', size: pdf.length, content: pdf, parents: [dir] });
+		drive.add({ id: dir + '-folder-shortcut', name: 'Shared', mimeType: 'application/vnd.google-apps.shortcut', parents: [dir] });
+		drive.add({ id: dir + '-folder-real', name: 'Shared', mimeType: FOLDER, parents: [dir] });
+		drive.add({ id: dir + '-inner', name: 'inside.txt', mimeType: 'text/plain', size: 2, content: new Uint8Array([49, 50]), parents: [dir + '-folder-real'] });
+
+		const spy = paginate(1);
+		const listing = await request('/dav/' + dir + '/', { method: 'PROPFIND', headers: { Depth: '1' } });
+		expect(listing.status).toBe(207);
+		const listingXml = await listing.text();
+		expect(listingXml).not.toContain('application/vnd.google-apps.document');
+		expect(listingXml).not.toContain('application/vnd.google-apps.shortcut');
+		expect(listingXml).toContain('<D:getcontenttype>application/pdf</D:getcontenttype>');
+		expect(listingXml).toContain('/dav/' + dir + '/Shared/');
+
+		const download = await request('/dav/' + dir + '/Report');
+		expect(download.status).toBe(200);
+		expect(download.headers.get('Content-Type')).toBe('application/pdf');
+		expect(new Uint8Array(await download.arrayBuffer())).toEqual(pdf);
+
+		const sub = await request('/dav/' + dir + '/Shared/', { method: 'PROPFIND', headers: { Depth: '1' } });
+		expect(sub.status).toBe(207);
+		expect(await sub.text()).toContain('/dav/' + dir + '/Shared/inside.txt');
+
+		const callsBeforeNonFolder = spy.mock.calls.length;
+		expect((await request('/dav/' + dir + '/Report/child.txt')).status).toBe(404);
+		expect(spy.mock.calls.length).toBe(callsBeforeNonFolder);
+	});
+});

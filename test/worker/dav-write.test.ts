@@ -329,3 +329,45 @@ describe('DELETE trash, cache invalidation, and restore semantics', () => {
 		expect(calls).toEqual([]);
 	});
 });
+
+describe('Google Workspace native docs and Shortcuts coexistence (7A)', () => {
+	it('treats paths occupied only by hidden Workspace items or Shortcuts as absent on PUT, MKCOL, MOVE, and DELETE', async () => {
+		const dir = 'ws-write-' + crypto.randomUUID();
+		drive.add({ id: dir, name: dir, mimeType: FOLDER, parents: ['root'] });
+		drive.add({ id: dir + '-doc', name: 'Notes', mimeType: 'application/vnd.google-apps.document', parents: [dir] });
+		drive.add({ id: dir + '-shortcut', name: 'Linked', mimeType: 'application/vnd.google-apps.shortcut', parents: [dir] });
+		drive.add({ id: dir + '-sheet', name: 'Budget', mimeType: 'application/vnd.google-apps.spreadsheet', parents: [dir] });
+
+		expect((await request('/dav/' + dir + '/Notes', {
+			method: 'PUT',
+			headers: { 'Content-Type': 'text/plain' },
+			body: 'plain text copy',
+		})).status).toBe(201);
+		const fetched = await request('/dav/' + dir + '/Notes');
+		expect(fetched.status).toBe(200);
+		expect(await fetched.text()).toBe('plain text copy');
+
+		expect((await request('/dav/' + dir + '/Linked', { method: 'MKCOL' })).status).toBe(201);
+		expect((await request('/dav/' + dir + '/Linked/child.txt', {
+			method: 'PUT',
+			headers: { 'Content-Type': 'text/plain' },
+			body: 'inside folder',
+		})).status).toBe(201);
+		expect(await (await request('/dav/' + dir + '/Linked/', { method: 'PROPFIND', headers: { Depth: '1' } })).text())
+			.toContain('/dav/' + dir + '/Linked/child.txt');
+
+		expect((await request('/dav/a.txt', {
+			method: 'MOVE',
+			headers: { Destination: ORIGIN + '/dav/' + dir + '/Budget' },
+		})).status).toBe(201);
+		const movedHead = await request('/dav/' + dir + '/Budget', { method: 'HEAD' });
+		expect(movedHead.status).toBe(200);
+		expect(movedHead.headers.get('Content-Length')).toBe('123');
+
+		expect((await request('/dav/' + dir + '/Notes', { method: 'DELETE' })).status).toBe(204);
+		expect((await request('/dav/' + dir + '/Notes', { method: 'HEAD' })).status).toBe(404);
+		expect(drive.findById(dir + '-doc')?.trashed).not.toBe(true);
+		expect(drive.findById(dir + '-shortcut')?.trashed).not.toBe(true);
+		expect(drive.findById(dir + '-sheet')?.trashed).not.toBe(true);
+	});
+});

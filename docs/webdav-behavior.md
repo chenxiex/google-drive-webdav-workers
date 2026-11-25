@@ -110,6 +110,12 @@ Verified with rclone v1.76.0: uploading a 26,214,523-byte file produced `PATCH` 
 - Trashed items and folders can be restored in Google Drive (`trashed: false`) with their original Drive IDs, bytes, timestamps, and dead properties intact (note Drive's settled folder-restore behavior also clears `explicitlyTrashed` on previously trashed descendants).
 - Permissions: trashing requires `supportsAllDrives=true` and owner permission in My Drive or Content Manager / Manager permissions in a Shared Drive.
 
+## Google Workspace native documents and Shortcuts
+
+- Directory listings (`PROPFIND`) and path resolution (`getMetadata`) exclude every Drive item whose `mimeType` starts with `application/vnd.google-apps.` except `application/vnd.google-apps.folder` (such as Google Docs, Sheets, Slides, Drawings, Forms, third-party Drive apps, and Drive Shortcuts).
+- Hidden Workspace items and Shortcuts return `404` for direct reads, property requests, `MOVE`/`COPY` sources, and `DELETE` without calling `alt=media` or mutating Drive, and cannot be traversed as collections.
+- Because hidden items are filtered out during resolution and never cached, an ordinary file or folder sharing the same name in Drive resolves normally, and writes (`PUT`, `MKCOL`, `MOVE`/`COPY` destinations, TUS uploads) treat a path occupied only by a hidden item as absent without overwriting or trashing it.
+
 ## Metadata and listing caches
 
 - Drive metadata is cached in isolate-local memory for 300 seconds and directory listings (`objects`) for 30 seconds. Cache hits do not extend TTL; expired or missing entries fetch from Drive.

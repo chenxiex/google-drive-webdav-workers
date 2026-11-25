@@ -2,7 +2,7 @@ import { type RuntimeConfig } from '../config';
 import { StatusError, TransferError, encodeQueryString, escapeQuery, trimString } from '../http';
 import { type MemoryCache, isolateCache } from './cache';
 import { getAccessToken } from './oauth';
-import { FOLDER_MIME, PROPERTY_FIELDS, type StorageQuota } from './types';
+import { FOLDER_MIME, PROPERTY_FIELDS, type StorageQuota, isVisibleDriveItem } from './types';
 
 export class DriveClient {
     readonly config: RuntimeConfig;
@@ -198,23 +198,29 @@ export class DriveClient {
 
         for (const name of fragments) {
             if (!name) continue;
+            if (metadata.mimeType !== FOLDER_MIME) return null;
             fullpath += name + '/';
             meta = await this.cache.get(fullpath, 'meta');
             if (!meta) {
                 // `getUrl` already decoded the path once; decoding again here
                 // threw a URIError for any name containing a literal "%".
-                const result = await this.queryDrive({
-                    includeItemsFromAllDrives: true,
-                    supportsAllDrives: true,
-                    q: `'${metadata.id}' in parents and name = '${escapeQuery(name)}' and trashed = false`,
-                    fields: `files(${PROPERTY_FIELDS},thumbnailLink,imageMediaMetadata)`,
-                });
-                if (result.files && result.files.length > 0) {
-                    await this.cache.put(fullpath, result.files[0], 'meta');
-                    meta = result.files[0];
-                } else {
-                    return null;
-                }
+                let pageToken: string | undefined;
+                let visible: any;
+                do {
+                    const result = await this.queryDrive({
+                        includeItemsFromAllDrives: true,
+                        supportsAllDrives: true,
+                        pageSize: 1000,
+                        q: `'${metadata.id}' in parents and name = '${escapeQuery(name)}' and trashed = false`,
+                        fields: `nextPageToken, files(${PROPERTY_FIELDS},thumbnailLink,imageMediaMetadata)`,
+                        ...(pageToken ? { pageToken } : {}),
+                    });
+                    visible = result.files?.find(isVisibleDriveItem) ?? null;
+                    pageToken = result.nextPageToken;
+                } while (!visible && pageToken);
+                if (!visible) return null;
+                await this.cache.put(fullpath, visible, 'meta');
+                meta = visible;
             }
             metadata = meta;
         }
@@ -239,7 +245,7 @@ export class DriveClient {
             if (pageToken) params.pageToken = pageToken;
             const result = await this.queryDrive(params);
             pageToken = result.nextPageToken;
-            if (result.files) list.push(...result.files);
+            if (result.files) list.push(...result.files.filter(isVisibleDriveItem));
         } while (pageToken);
 
         await this.cache.put(id, list, 'objects', 30000);

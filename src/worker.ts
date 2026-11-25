@@ -48,7 +48,7 @@ const pathJoin = (...args: string[]): string => args.join('/').replace(/\\/g, '/
 const encodeQueryString = (data: Record<string, string>): string => Object.keys(data).map(k => encodeURIComponent(k) + '=' + encodeURIComponent(data[k])).join('&');
 const trimString = (string: string, char?: string): string => char ? string.replace(new RegExp('^\\' + char + '+|\\' + char + '+$', 'g'), '') : string.replace(/^\s+|\s+$/g, '');
 const formatSize = (n: number | string): string => {
-    let num = typeof n === 'string' ? parseFloat(n) : Math.round(n);
+    const num = typeof n === 'string' ? parseFloat(n) : Math.round(n);
     if (num === 0 || isNaN(num)) return '';
     if (num < 1024) return num + 'B'; if (num < 1024 * 1024) return Math.round(num / 1024) + 'K';
     return parseFloat((num / 1024 / 1024).toFixed(1)) + 'M';
@@ -358,7 +358,7 @@ class GDrive {
 
     async OPTIONS(): Promise<Response> {
         // Locking (Class 2) is not implemented.
-        let allowed_methods = ['GET', 'HEAD', 'OPTIONS', 'PUT', 'PROPFIND', 'PROPPATCH', 'MKCOL', 'DELETE', 'MOVE', 'COPY', 'POST', 'PATCH'].join(',');
+        const allowed_methods = ['GET', 'HEAD', 'OPTIONS', 'PUT', 'PROPFIND', 'PROPPATCH', 'MKCOL', 'DELETE', 'MOVE', 'COPY', 'POST', 'PATCH'].join(',');
         return new Response(null, { status: 200, headers: { 'Allow': allowed_methods, 'DAV': '1', 'MS-Author-Via': 'DAV', 'Accept-Ranges': 'bytes', 'Tus-Version': '1.0.0', 'Tus-Extension': 'creation' } });
     }
 
@@ -402,16 +402,16 @@ class GDrive {
     }
 
     async MKCOL(request: Request): Promise<Response> {
-        let { fpath } = this.url(request.url);
+        const { fpath } = this.url(request.url);
 
-        let metadata = await this.getMetadata(fpath);
+        const metadata = await this.getMetadata(fpath);
         if (metadata) return new Response('<D:error xmlns:D="DAV:"><D:exception>MethodNotAllowed</D:exception><D:message>The resource you tried to create already exists</D:message></D:error>', { status: 405 });
 
         const { name, parent } = splitPath(fpath);
         const parentMetadata = await this.ensureDir(parent);
         if (!parentMetadata) return new Response(null, { status: 404 });
 
-        let response = await fetch(new Request('https://www.googleapis.com/drive/v3/files?supportsAllDrives=true', {
+        const response = await fetch(new Request('https://www.googleapis.com/drive/v3/files?supportsAllDrives=true', {
             body: JSON.stringify({ name, mimeType: FOLDER_MIME, parents: [parentMetadata.id] }),
             method: 'POST',
             headers: { 'Content-Type': 'application/json; charset=UTF-8', Authorization: 'Bearer ' + (await this.getAccessToken()) }
@@ -425,8 +425,8 @@ class GDrive {
     }
 
     async GET(request: Request): Promise<Response> {
-        let { rpath, fpath } = this.url(request.url);
-        let url = new URL(request.url);
+        const { rpath, fpath } = this.url(request.url);
+        const url = new URL(request.url);
         let response: Response;
         const metadata = await this.getMetadata(fpath);
         if (metadata) {
@@ -441,9 +441,9 @@ class GDrive {
                         return Response.redirect(redirectUrl.toString(), 301);
                     }
                     const objects = await this.getObjects(metadata.id);
-                    let files: Partial<DriveFile>[] = [];
+                    const files: Partial<DriveFile>[] = [];
                     for (let i = 0; i < objects.length; i++) {
-                        let object = objects[i];
+                        const object = objects[i];
                         files.push({ name: trimString(object.name, '/'), dir: object.mimeType === FOLDER_MIME, lastmodified: new Date(object.modifiedTime).toISOString().split('T')[0], size: object.size ? object.size : 0, iconLink: object.iconLink });
                     }
                     return new Response(arrayToHtml(rpath, files, this.config), { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8' } });
@@ -520,7 +520,7 @@ class GDrive {
             } catch { return this.tusError('Invalid Upload-Metadata', 400); }
         }
         const filename = metadata.get('filename');
-        if (filename !== undefined && (!filename || filename === '.' || filename === '..' || /[\/\\\x00-\x1f\x7f]/.test(filename))) {
+        if (filename !== undefined && (!filename || filename === '.' || filename === '..' || /[/\\\x00-\x1f\x7f]/.test(filename))) {
             return this.tusError('Invalid filename', 400);
         }
         const mimeType = metadata.get('filetype') || 'application/octet-stream';
@@ -700,7 +700,7 @@ class GDrive {
     }
 
     async PUT(request: Request): Promise<Response> {
-        let { fpath } = this.url(request.url);
+        const { fpath } = this.url(request.url);
         if (fpath.slice(-1) === '/') return new Response(null, { status: 405 });
         const mimeType = request.headers.get('Content-Type') || 'application/octet-stream';
 
@@ -722,14 +722,13 @@ class GDrive {
         if (contentLength <= 5 * 1024 * 1024) {
             const reader = body.getReader();
             if (existingFileId) {
-                // @ts-ignore
                 const { readable, writable } = new FixedLengthStream(contentLength);
                 const writer = writable.getWriter();
                 const uploadPromise = fetch(`${api}/${existingFileId}?uploadType=media`, {
                     method: 'PATCH',
                     headers: { 'Content-Type': mimeType, Authorization: 'Bearer ' + (await this.getAccessToken()) },
                     body: readable,
-                    // @ts-ignore
+                    // @ts-expect-error RequestInit lacks Fetch half-duplex typing
                     duplex: 'half'
                 });
                 try {
@@ -739,7 +738,7 @@ class GDrive {
                         await writer.write(value);
                     }
                     await writer.close();
-                } catch (err) { try { await reader.cancel(); } catch (e) { } await writer.abort(err); } finally { reader.releaseLock(); }
+                } catch (err) { try { await reader.cancel(); } catch { } await writer.abort(err); } finally { reader.releaseLock(); }
                 const res = await uploadPromise;
                 if (res.ok) {
                     await this.cache.invalidateFileAndParent(fpath, parentMetadata.id);
@@ -759,7 +758,7 @@ class GDrive {
                     method: 'POST',
                     headers: { 'Content-Type': `multipart/related; boundary=${boundary}`, Authorization: 'Bearer ' + (await this.getAccessToken()) },
                     body: readable,
-                    // @ts-ignore
+                    // @ts-expect-error RequestInit lacks Fetch half-duplex typing
                     duplex: 'half'
                 });
 
@@ -772,7 +771,7 @@ class GDrive {
                     }
                     await writer.write(postArray);
                     await writer.close();
-                } catch (err) { try { await reader.cancel(); } catch (e) { } await writer.abort(err); } finally { reader.releaseLock(); }
+                } catch (err) { try { await reader.cancel(); } catch { } await writer.abort(err); } finally { reader.releaseLock(); }
 
                 const res = await uploadPromise;
                 if (res.ok) {
@@ -809,7 +808,6 @@ class GDrive {
         try {
             while (offset < contentLength) {
                 const currentChunkSize = Math.min(CHUNK_SIZE, contentLength - offset);
-                // @ts-ignore
                 const { readable, writable } = new FixedLengthStream(currentChunkSize);
                 const writer = writable.getWriter();
 
@@ -820,7 +818,7 @@ class GDrive {
                         'Content-Range': `bytes ${offset}-${offset + currentChunkSize - 1}/${contentLength}`
                     },
                     body: readable,
-                    // @ts-ignore
+                    // @ts-expect-error RequestInit lacks Fetch half-duplex typing
                     duplex: 'half'
                 });
 
@@ -850,6 +848,7 @@ class GDrive {
                 const chunkRes = await uploadPromise;
 
                 if (chunkRes.status === 308) {
+                    // Intermediate chunk accepted (strict Range verification tracked in todo.md).
                 } else if (chunkRes.status === 200 || chunkRes.status === 201) {
                     // completed; offset advances and loop exits
                 } else {
@@ -863,7 +862,7 @@ class GDrive {
 
         } catch (err: any) {
             console.error('Upload Failed:', err);
-            try { await reader.cancel(); } catch (e) { }
+            try { await reader.cancel(); } catch { }
             return new Response(err?.message || 'Upload Failed', { status: errorStatus(err) });
         } finally {
             if (reader) reader.releaseLock();
@@ -995,7 +994,7 @@ class GDrive {
     }
 
     async DELETE(request: Request): Promise<Response> {
-        let { fpath } = this.url(request.url);
+        const { fpath } = this.url(request.url);
         if (fpath === '/') return new Response(null, { status: 403 });
         const metadata = await this.getMetadata(fpath);
         if (metadata) {
@@ -1013,10 +1012,10 @@ class GDrive {
     }
 
     async HEAD(request: Request): Promise<Response> {
-        let url = new URL(request.url);
+        const url = new URL(request.url);
         if (url.pathname.startsWith(this.config.basePath + 'tus_uploads/')) return this.tusRequest(request);
 
-        let { fpath } = this.url(request.url);
+        const { fpath } = this.url(request.url);
         const metadata = await this.getMetadata(fpath);
         if (metadata) {
             const size = metadata.size ? metadata.size.toString() : '0';
@@ -1152,7 +1151,7 @@ class GDrive {
 
         const fragments = trimString(path, '/').split('/');
 
-        for (let name of fragments) {
+        for (const name of fragments) {
             if (!name) continue;
             fullpath += name + '/';
             meta = await this.cache.get(fullpath, 'meta');
@@ -1178,7 +1177,7 @@ class GDrive {
     }
 
     async getObjects(id: string): Promise<any[]> {
-        let cachedList = await this.cache.get(id, 'objects');
+        const cachedList = await this.cache.get(id, 'objects');
         if (cachedList) return cachedList;
 
         let pageToken: string | undefined; const list: any[] = [];
@@ -1280,7 +1279,7 @@ function arrayToHtml(rpath: string, files: Partial<DriveFile>[], config: Runtime
     const isRoot = rpath === basePath || rpath + '/' === basePath;
     const title = isRoot ? '' : ' - ' + rpath;
     const tpl = `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"/><link rel="icon" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAMAAABEpIrGAAAApVBMVEUAAAD///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////+4/eNVAAAANnRSTlMA9isRpA3y8NfOoQjl3amJgVcX2sm/cUAw+MO6s5ttOhsU+urfrZB6dWZQRCPSlUsyBeueYCQaPAIhAAABdUlEQVQ4y23S2WKCQAwF0EsRkMWyivvWqrVqF7vc//+0mjhQRM9TkoEZJgENi/l34bp+UB5wx6n0WesmDlrSiFe+XnEl0OoTG6bNTcZUh4eLF81yG5VCC7vZtCp0tdALTdrR1AK4N5UhVR9qT5UCCXH1DktNXI0LCbnFRTiiks+YUx2lfuAKqqrG57Cn0QzKL2CsteyFWGgwcszWHOBiQLVHSVH3bdSrook5Y6Y3bnT0w4SZuamOaGGKD+f4GUYsKxGk/3UH9emkyjxpnz5Q3S2lyhrfaUnbX2Dwws9WK9t2HPTliOD/0He6lmCe592zN58cY0drUU1o4NgiO098OPz8/J2SWzkogvI2uBZ6OsKI3En6SrSMScsB5PeRRnPeWv+QEZnJboDARcszyaUEPxpw2FpPtGfVWMb9bWt9SfLNxCf5JTadThB0xKNak14Gw855h3dEzZnwRrFEU2m11hO0ZHHU2P39iFthGk96rrvux6mN2h80rVPh8HjxPAAAAABJRU5ErkJggg=="/><title>${config.name}{{title}}</title><style>*{box-sizing:border-box}body{font:15px/1.3 Helvetica,Arial;background:#0E1117;color:#CAD1D9}h1,main{background:#0E1117;max-width:960px;margin:10px auto;border-radius:5px}h1{font-size:18px;padding:15px;border:#22262D 1px solid;color:#DDD;background:#171b22}a{color:inherit;text-decoration:none}h1 a,main a{display:flex;align-items:center}main a:first-child{border-top-left-radius:5px;border-top-right-radius:5px}main a:last-child{border-bottom-left-radius:5px;border-bottom-right-radius:5px}svg{margin-right:15px;fill:#F1F6FC}h1:hover{color:#BABBBD}main{border:#22262D 1px solid}main img{margin-right:10px}main a{padding:12px 15px;border-bottom:#22262D 1px solid;transition:all .3s}main a:last-child{border:0}main a:hover{background:#171B22;color:#58a6ff}main a>div{margin-left:10px}main a>div:first-child{flex:1;margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:flex;align-items:center}main a>div:not(:first-child){color:#8C949E;font-size:13px}footer{text-align:center;color:#8C949E;font-size:13px}footer a:hover{text-decoration:underline}@media (max-width:640px){main a>div:last-child{display:none}}</style></head><body><h1><a href="${basePath}"><svg width="32" height="32" viewBox="0 0 320 320"><path d="M95 304 c-47 -24 -71 -51 -84 -95 -26 -87 20 -173 107 -199 145 -44 262 135 165 251 -48 56 -128 75 -188 43z m168 -73 c9 -16 17 -32 17 -35 0 -3 -35 -6 -78 -6 -85 0 -78 -4 -110 63 -2 4 32 7 75 7 76 0 79 -1 96 -29z m-149 -46 c38 -65 38 -65 16 -100 -22 -36 -22 -36 -62 32 -40 68 -40 68 -22 101 9 17 20 32 23 32 4 0 24 -29 45 -65z m166 -9 c0 -12 -75 -129 -86 -133 -7 -2 -26 -3 -42 -1 -30 3 -30 3 9 71 39 65 41 67 79 67 22 0 40 -2 40 -4z" /></svg>${config.name}</a></h1><main>{{content}}</main><footer><a target="_blank" href="${config.copyright_link}">${config.copyright}</a></footer></body></html>`;
-    let frag: string[] = [];
+    const frag: string[] = [];
     if (!isRoot) frag.push(`<a href="../"><div><img src="/_/16/type/application/vnd.google-apps.folder"><b>../</b></div></a>`);
     if (files) {
         for (let i = 0; i < files.length; i++) {

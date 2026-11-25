@@ -219,7 +219,7 @@ export class MockDrive {
 		return this.add({ appProperties, description: meta.description ?? undefined, starred: meta.starred, createdTime: meta.createdTime, id: crypto.randomUUID(), name: meta.name || 'Untitled', mimeType: meta.mimeType || mimeType || 'application/octet-stream',
 			parents, content: content.slice(), size: content.length, trashed: meta.trashed ?? false, modifiedTime: meta.modifiedTime === undefined ? new Date().toISOString() : new Date(meta.modifiedTime).toISOString() });
 	}
-	private update(file: DriveFile, meta: Metadata, url: URL, content?: Uint8Array, mimeType?: string): Response | undefined {
+	private update(file: DriveFile, meta: Metadata, url: URL, content?: Uint8Array): Response | undefined {
 		if (file === this.root) unsupported('writing My Drive root metadata');
 		if (meta.createdTime !== undefined) return apiError(403, 'fieldNotWritable', 'The resource body includes fields which are not directly writable.');
 		const appProperties = this.properties(file.appProperties, meta.appProperties);
@@ -373,7 +373,7 @@ export class MockDrive {
 		if (session.id) {
 			const existing = this.findById(session.id);
 			if (!existing) return notFound(session.id);
-			const error = this.update(existing, session.metadata, url, accumulated, session.mimeType);
+			const error = this.update(existing, session.metadata, url, accumulated);
 			if (error) return error;
 			file = existing;
 		} else file = this.create(session.metadata, accumulated, session.mimeType);
@@ -438,7 +438,7 @@ export class MockDrive {
 				const parsed = multipart(bytes, mimeType); if (parsed instanceof Response) return parsed;
 				meta = parsed.metadata; content = parsed.content; mimeType = meta.mimeType ?? parsed.mimeType;
 			} else if (type !== 'media') unsupported(`uploadType ${type}`);
-			if (file) { const error = this.update(file, meta, url, content, mimeType); return error ?? fileResponse(file, fields); }
+			if (file) { const error = this.update(file, meta, url, content); return error ?? fileResponse(file, fields); }
 			const created = this.create(meta, content, mimeType);
 			return created instanceof Response ? created : fileResponse(created, fields);
 		}

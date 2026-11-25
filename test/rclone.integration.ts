@@ -36,23 +36,25 @@ test('real rclone uploads more than the simulated ingress limit using bounded TU
             return new Response(response.body, { status: response.status, headers: response.headers });
         },
     });
-    const server = createServer(async (req, res) => {
-        let size = 0;
-        const chunks: Buffer[] = [];
-        try {
-            for await (const chunk of req) {
-                size += chunk.length;
-                if (size > ingressLimit) { requests.push({ method: req.method!, size, status: 413 }); res.writeHead(413).end(); return; }
-                chunks.push(chunk);
-            }
-            const url = `http://${req.headers.host}${req.url}`;
-            const headers = new Headers();
-            for (const [key, value] of Object.entries(req.headers)) if (value) headers.set(key, Array.isArray(value) ? value.join(', ') : value);
-            const response = await mf.dispatchFetch(url, { method: req.method, headers, body: ['GET', 'HEAD'].includes(req.method!) || size === 0 ? undefined : Buffer.concat(chunks) });
-            requests.push({ method: req.method!, size, status: response.status });
-            res.writeHead(response.status, Object.fromEntries(response.headers));
-            res.end(Buffer.from(await response.arrayBuffer()));
-        } catch (error) { res.writeHead(500).end(String(error)); }
+    const server = createServer((req, res) => {
+        void (async () => {
+            let size = 0;
+            const chunks: Buffer[] = [];
+            try {
+                for await (const chunk of req) {
+                    size += chunk.length;
+                    if (size > ingressLimit) { requests.push({ method: req.method!, size, status: 413 }); res.writeHead(413).end(); return; }
+                    chunks.push(chunk);
+                }
+                const url = `http://${req.headers.host}${req.url}`;
+                const headers = new Headers();
+                for (const [key, value] of Object.entries(req.headers)) if (value) headers.set(key, Array.isArray(value) ? value.join(', ') : value);
+                const response = await mf.dispatchFetch(url, { method: req.method, headers, body: ['GET', 'HEAD'].includes(req.method!) || size === 0 ? undefined : Buffer.concat(chunks) });
+                requests.push({ method: req.method!, size, status: response.status });
+                res.writeHead(response.status, Object.fromEntries(response.headers));
+                res.end(Buffer.from(await response.arrayBuffer()));
+            } catch (error) { res.writeHead(500).end(String(error)); }
+        })();
     });
     try {
         await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));

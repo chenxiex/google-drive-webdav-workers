@@ -29,6 +29,9 @@
 		"forceConsistentCasingInFileNames": true,
 		/* Enable all strict type-checking options. */
 		"strict": true,
+		"noUnusedLocals": true,
+		"noUnusedParameters": true,
+		"noFallthroughCasesInSwitch": true,
 		/* Skip type checking all .d.ts files. */
 		"skipLibCheck": true,
 		"types": [

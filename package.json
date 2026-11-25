@@ -8,12 +8,18 @@
     "dev": "wrangler dev",
     "start": "wrangler dev",
     "test": "vitest",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit && tsc -p test/tsconfig.json --noEmit",
+    "check": "pnpm typecheck && pnpm lint && pnpm test --run",
     "cf-typegen": "wrangler types"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.16.3",
+    "@eslint/js": "^10.0.1",
     "@types/node": "^25.6.2",
+    "eslint": "^10.15.0",
     "typescript": "^6.0.3",
+    "typescript-eslint": "^8.74.0",
     "vitest": "~4.1.5",
     "wrangler": "^4.90.0"
   },

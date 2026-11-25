@@ -14,8 +14,6 @@ declare namespace Cloudflare {
 		ROOT_ID: string;
 		USERS: string;
 		NAME: string;
-		COPYRIGHT: string;
-		COPYRIGHT_LINK: string;
 	}
 }
 interface Env extends Cloudflare.Env {}

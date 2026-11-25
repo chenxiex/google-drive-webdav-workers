@@ -1,8 +1,8 @@
 {
 	"extends": "../tsconfig.json",
 	"compilerOptions": {
-		"types": ["../worker-configuration.d.ts", "../types.d.ts", "node", "@cloudflare/vitest-pool-workers/types"]
+		"types": ["../worker-configuration.d.ts", "node", "@cloudflare/vitest-pool-workers/types"]
 	},
-	"include": ["./*.ts", "../worker-configuration.d.ts", "../types.d.ts"],
+	"include": ["./*.ts", "../worker-configuration.d.ts"],
 	"exclude": []
 }

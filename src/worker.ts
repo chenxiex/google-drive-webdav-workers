@@ -10,8 +10,6 @@ interface RuntimeConfig {
     basePath: string;
     rootId: string;
     name: string;
-    copyright: string;
-    copyright_link: string;
     users: Record<string, string>;
 }
 
@@ -38,8 +36,6 @@ function resolveConfig(env?: Partial<Env>): RuntimeConfig {
         basePath: path.endsWith('/') ? path : path + '/',
         rootId: env?.ROOT_ID || 'root',
         name: env?.NAME || 'My Cloud Drive',
-        copyright: env?.COPYRIGHT || '@ixiumu',
-        copyright_link: env?.COPYRIGHT_LINK || 'https://github.com/ixiumu/google-drive-webdav-workers',
         users: parseUsers(env?.USERS),
     };
 }
@@ -47,12 +43,6 @@ function resolveConfig(env?: Partial<Env>): RuntimeConfig {
 const pathJoin = (...args: string[]): string => args.join('/').replace(/\\/g, '/').replace(/(?<!^)\/+/g, '/').replace(/\/\//g, '/');
 const encodeQueryString = (data: Record<string, string>): string => Object.keys(data).map(k => encodeURIComponent(k) + '=' + encodeURIComponent(data[k])).join('&');
 const trimString = (string: string, char?: string): string => char ? string.replace(new RegExp('^\\' + char + '+|\\' + char + '+$', 'g'), '') : string.replace(/^\s+|\s+$/g, '');
-const formatSize = (n: number | string): string => {
-    const num = typeof n === 'string' ? parseFloat(n) : Math.round(n);
-    if (num === 0 || isNaN(num)) return '';
-    if (num < 1024) return num + 'B'; if (num < 1024 * 1024) return Math.round(num / 1024) + 'K';
-    return parseFloat((num / 1024 / 1024).toFixed(1)) + 'M';
-};
 
 const FOLDER_MIME = 'application/vnd.google-apps.folder';
 
@@ -425,28 +415,17 @@ class GDrive {
     }
 
     async GET(request: Request): Promise<Response> {
-        const { rpath, fpath } = this.url(request.url);
+        const { fpath } = this.url(request.url);
         const url = new URL(request.url);
         let response: Response;
         const metadata = await this.getMetadata(fpath);
         if (metadata) {
             try {
                 if (metadata.mimeType === FOLDER_MIME) {
-                    // The listing below is built from relative links, so a
-                    // collection URL without a trailing slash would resolve every
-                    // child link against the wrong parent directory.
-                    if (!url.pathname.endsWith('/')) {
-                        const redirectUrl = new URL(request.url);
-                        redirectUrl.pathname += '/';
-                        return Response.redirect(redirectUrl.toString(), 301);
-                    }
-                    const objects = await this.getObjects(metadata.id);
-                    const files: Partial<DriveFile>[] = [];
-                    for (let i = 0; i < objects.length; i++) {
-                        const object = objects[i];
-                        files.push({ name: trimString(object.name, '/'), dir: object.mimeType === FOLDER_MIME, lastmodified: new Date(object.modifiedTime).toISOString().split('T')[0], size: object.size ? object.size : 0, iconLink: object.iconLink });
-                    }
-                    return new Response(arrayToHtml(rpath, files, this.config), { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+                    return new Response('Method Not Allowed', {
+                        status: 405,
+                        headers: { Allow: 'HEAD, OPTIONS, PROPFIND, PROPPATCH, DELETE, MOVE, POST' }
+                    });
                 }
                 const abuse = url.searchParams.get('abuse') === 'true';
                 const range = request.headers.get('Range');
@@ -1162,7 +1141,7 @@ class GDrive {
                     includeItemsFromAllDrives: true,
                     supportsAllDrives: true,
                     q: `'${metadata.id}' in parents and name = '${escapeQuery(name)}' and trashed = false`,
-                    fields: `files(${PROPERTY_FIELDS},iconLink,thumbnailLink,imageMediaMetadata)`,
+                    fields: `files(${PROPERTY_FIELDS},thumbnailLink,imageMediaMetadata)`,
                 });
                 if (result.files && result.files.length > 0) {
                     await this.cache.put(fullpath, result.files[0], 'meta');
@@ -1186,7 +1165,7 @@ class GDrive {
             includeItemsFromAllDrives: true,
             supportsAllDrives: true,
             q: `'${id}' in parents and trashed = false AND name != '.password'`,
-            fields: `nextPageToken, files(${PROPERTY_FIELDS},iconLink,thumbnailLink,imageMediaMetadata)`,
+            fields: `nextPageToken, files(${PROPERTY_FIELDS},thumbnailLink,imageMediaMetadata)`,
             orderBy: 'folder, name'
         };
         do {
@@ -1274,36 +1253,6 @@ class GDrive {
     }
 }
 
-function arrayToHtml(rpath: string, files: Partial<DriveFile>[], config: RuntimeConfig): string {
-    const basePath = config.basePath;
-    const isRoot = rpath === basePath || rpath + '/' === basePath;
-    const title = isRoot ? '' : ' - ' + rpath;
-    const tpl = `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"/><link rel="icon" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAMAAABEpIrGAAAApVBMVEUAAAD///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////+4/eNVAAAANnRSTlMA9isRpA3y8NfOoQjl3amJgVcX2sm/cUAw+MO6s5ttOhsU+urfrZB6dWZQRCPSlUsyBeueYCQaPAIhAAABdUlEQVQ4y23S2WKCQAwF0EsRkMWyivvWqrVqF7vc//+0mjhQRM9TkoEZJgENi/l34bp+UB5wx6n0WesmDlrSiFe+XnEl0OoTG6bNTcZUh4eLF81yG5VCC7vZtCp0tdALTdrR1AK4N5UhVR9qT5UCCXH1DktNXI0LCbnFRTiiks+YUx2lfuAKqqrG57Cn0QzKL2CsteyFWGgwcszWHOBiQLVHSVH3bdSrook5Y6Y3bnT0w4SZuamOaGGKD+f4GUYsKxGk/3UH9emkyjxpnz5Q3S2lyhrfaUnbX2Dwws9WK9t2HPTliOD/0He6lmCe592zN58cY0drUU1o4NgiO098OPz8/J2SWzkogvI2uBZ6OsKI3En6SrSMScsB5PeRRnPeWv+QEZnJboDARcszyaUEPxpw2FpPtGfVWMb9bWt9SfLNxCf5JTadThB0xKNak14Gw855h3dEzZnwRrFEU2m11hO0ZHHU2P39iFthGk96rrvux6mN2h80rVPh8HjxPAAAAABJRU5ErkJggg=="/><title>${config.name}{{title}}</title><style>*{box-sizing:border-box}body{font:15px/1.3 Helvetica,Arial;background:#0E1117;color:#CAD1D9}h1,main{background:#0E1117;max-width:960px;margin:10px auto;border-radius:5px}h1{font-size:18px;padding:15px;border:#22262D 1px solid;color:#DDD;background:#171b22}a{color:inherit;text-decoration:none}h1 a,main a{display:flex;align-items:center}main a:first-child{border-top-left-radius:5px;border-top-right-radius:5px}main a:last-child{border-bottom-left-radius:5px;border-bottom-right-radius:5px}svg{margin-right:15px;fill:#F1F6FC}h1:hover{color:#BABBBD}main{border:#22262D 1px solid}main img{margin-right:10px}main a{padding:12px 15px;border-bottom:#22262D 1px solid;transition:all .3s}main a:last-child{border:0}main a:hover{background:#171B22;color:#58a6ff}main a>div{margin-left:10px}main a>div:first-child{flex:1;margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:flex;align-items:center}main a>div:not(:first-child){color:#8C949E;font-size:13px}footer{text-align:center;color:#8C949E;font-size:13px}footer a:hover{text-decoration:underline}@media (max-width:640px){main a>div:last-child{display:none}}</style></head><body><h1><a href="${basePath}"><svg width="32" height="32" viewBox="0 0 320 320"><path d="M95 304 c-47 -24 -71 -51 -84 -95 -26 -87 20 -173 107 -199 145 -44 262 135 165 251 -48 56 -128 75 -188 43z m168 -73 c9 -16 17 -32 17 -35 0 -3 -35 -6 -78 -6 -85 0 -78 -4 -110 63 -2 4 32 7 75 7 76 0 79 -1 96 -29z m-149 -46 c38 -65 38 -65 16 -100 -22 -36 -22 -36 -62 32 -40 68 -40 68 -22 101 9 17 20 32 23 32 4 0 24 -29 45 -65z m166 -9 c0 -12 -75 -129 -86 -133 -7 -2 -26 -3 -42 -1 -30 3 -30 3 9 71 39 65 41 67 79 67 22 0 40 -2 40 -4z" /></svg>${config.name}</a></h1><main>{{content}}</main><footer><a target="_blank" href="${config.copyright_link}">${config.copyright}</a></footer></body></html>`;
-    const frag: string[] = [];
-    if (!isRoot) frag.push(`<a href="../"><div><img src="/_/16/type/application/vnd.google-apps.folder"><b>../</b></div></a>`);
-    if (files) {
-        for (let i = 0; i < files.length; i++) {
-            const entry = files[i];
-            const rawName = entry.name || '';
-            const iconLink = entry.iconLink ? entry.iconLink.replace('https://drive-thirdparty.googleusercontent.com/', '/_/') : '';
-            const modTime = entry.lastmodified ? `<div>${escapeXml(new Date(entry.lastmodified).toISOString().split('T')[0])}</div>` : '';
-            // Names come from Drive and are fully attacker controlled: escape them
-            // for HTML text and percent-encode them for the href.
-            const name = escapeXml(rawName);
-            const href = encodeURIComponent(rawName);
-            if (entry.dir) {
-                frag.push(`<a href="${href}/"><div><img src="${escapeXml(iconLink)}"/><b>${name}</b></div>${modTime}</a>`);
-            } else {
-                frag.push(`<a href="${href}" target="_blank"><div><img src="${escapeXml(iconLink)}"/>${name}</div><div>${formatSize(entry.size || 0)}</div>${modTime}</a>`);
-            }
-        }
-    }
-    const content = frag.join('');
-    // Replacer functions: substitution patterns such as `$&` in a file name
-    // would otherwise be expanded by `String.prototype.replace`.
-    return tpl.trim().replace(/{{content}}/, () => content).replace(/{{title}}/, () => escapeXml(title));
-}
-
 export default {
     async fetch(request: Request, env: Env, _ctx?: ExecutionContext): Promise<Response> {
         const { pathname } = new URL(request.url);
@@ -1314,20 +1263,6 @@ export default {
         if (pathname.indexOf('/desktop.ini') !== -1) return new Response(null, { status: 404 });
 
         try {
-            // Static
-            if (pathname.startsWith('/_/')) {
-                const url = new URL(request.url);
-                url.hostname = 'drive-thirdparty.googleusercontent.com';
-                url.pathname = url.pathname.slice(2);
-                // Plain fetch: do not forward the client's credentials to a
-                // third-party host.
-                let response = await fetch(url.toString());
-                response = new Response(response.body, response);
-                response.headers.set('Access-Control-Allow-Origin', '*');
-                response.headers.set('Cache-Control', 'public, max-age=16768000');
-                return response;
-            }
-
             const config = resolveConfig(env);
             const basePath = config.basePath;
             if (basePath !== '/') {

@@ -36,7 +36,6 @@
 		"skipLibCheck": true,
 		"types": [
 			"./worker-configuration.d.ts",
-			"./types.d.ts",
 			"node"
 		]
 	},
@@ -45,7 +44,6 @@
 	],
 	"include": [
 		"worker-configuration.d.ts",
-		"types.d.ts",
 		"src/*.ts"
 	]
 }

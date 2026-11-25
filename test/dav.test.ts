@@ -72,9 +72,11 @@ describe('server metadata', () => {
 		expect(res.headers.get('Allow')).toContain('MOVE');
 	});
 
-	it('returns 404 for paths outside the base path', async () => {
-		const res = await request('/other');
+	it.each(['/other', '/_/16/type/application/vnd.google-apps.folder'])('returns 404 for paths outside the base path (%s)', async path => {
+		const spy = vi.spyOn(drive, 'handle');
+		const res = await SELF.fetch(ORIGIN + path);
 		expect(res.status).toBe(404);
+		expect(spy).not.toHaveBeenCalled();
 	});
 
 	it('rejects invalid percent-encoding with a 400, not a 500', async () => {
@@ -562,7 +564,7 @@ describe('unknown-length PUT', () => {
 	});
 });
 
-describe('HEAD and folder redirects', () => {
+describe('HEAD and collection GET', () => {
 	it('HEAD reports the file size', async () => {
 		const res = await request('/dav/a.txt', { method: 'HEAD' });
 		expect(res.status).toBe(200);
@@ -570,10 +572,15 @@ describe('HEAD and folder redirects', () => {
 		expect(res.headers.get('Content-Type')).toBe('text/plain');
 	});
 
-	it('redirects a folder URL to the trailing-slash variant', async () => {
-		const res = await request('/dav/docs', { method: 'GET', redirect: 'manual' });
-		expect(res.status).toBe(301);
-		expect(res.headers.get('Location')).toBe(ORIGIN + '/dav/docs/');
+	it.each(['/dav/', '/dav/docs', '/dav/docs/'])('rejects GET on collection %s with 405 without listing children', async path => {
+		const spy = vi.spyOn(drive, 'handle');
+		const res = await request(path, { method: 'GET', redirect: 'manual' });
+		expect(res.status).toBe(405);
+		expect(res.headers.get('Allow')).toContain('PROPFIND');
+		expect(res.headers.get('Allow')).not.toContain('GET');
+		expect(res.headers.get('Content-Type')).not.toMatch(/html/i);
+		const listCalls = spy.mock.calls.filter(([input]) => String(input).includes('orderBy='));
+		expect(listCalls).toEqual([]);
 	});
 });
 // Fault injection wraps the verified mock rather than extending its API contract.

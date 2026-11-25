@@ -86,6 +86,7 @@ Verified with rclone v1.76.0: uploading a 26,214,523-byte file produced `PATCH` 
 
 ## File downloads and validators
 
+- `GET` on a collection returns `405 Method Not Allowed` with an `Allow` header; HTML directory listings are not served.
 - Ordinary file `GET` downloads from Drive **v2** `files.get?alt=media` (metadata and writes remain on **v3**). Images with `thumbnailLink` download their original bytes rather than a preview CDN, and the legacy `param` query parameter is ignored. `?abuse=true` redirects (`302`) when Drive rejects abusive downloads unless already set.
 - `GET` passes through upstream content headers, `Accept-Ranges: bytes`, and the **media response's strong HTTP `ETag`** (not v2 JSON `etag` or v3 `version`).
 - `HEAD` remains a metadata lookup: it returns `Content-Length`, `Content-Type`, `Last-Modified` (falling back to current UTC time if `modifiedTime` is null), and `Accept-Ranges: bytes` for files, while omitting `ETag` rather than synthesizing a media validator from cached metadata.

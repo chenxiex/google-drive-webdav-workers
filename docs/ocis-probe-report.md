@@ -39,7 +39,7 @@ Inspected source modules:
 Captured in [ocis-reference-observations.json](ocis-reference-observations.json) and [probes/2026-11-17/http/validation.json](probes/2026-11-17/http/validation.json):
 - **Bootstrap**: OCS user/capabilities, Graph `/me/drives`, OIDC discovery JSON, unauthenticated DAV `401`. Wait for Graph/services beyond `status.php` at startup (early requests returned transient `502`).
 - **DAV & preconditions**: `PROPFIND` `207` mixed `200`/`404` propstat; `Range` `206` and out-of-range `416`; missing file `404`; missing-parent `MKCOL` `409`; `COPY` `Overwrite: F` `412`; stale `If-Match` `PUT` returned **`409`** (preserving target bytes; differs from `412`); `COPY`/`MOVE` content checks.
-- **TUS lifecycle**: data-bearing `POST` accepted `3/6` bytes; `HEAD` returned offset `3`; stale `PATCH` offset returned `409`; final `PATCH` returned `204` (`Upload-Offset: 6`); completion returned `OC-FileID` without `ETag`/`OC-Perm`; **completed `HEAD` returned `404`** (our Worker intentionally keeps a `200` completion receipt). Zero-length `POST` created an empty readable file; `filename` `probe-run/path-file.txt` at Space root resolved to the nested path.
+- **TUS lifecycle**: data-bearing `POST` accepted `3/6` bytes; `HEAD` returned offset `3`; stale `PATCH` offset returned `409`; final `PATCH` returned `204` (`Upload-Offset: 6`); completion returned `OC-FileID` without `ETag`/`OC-Perm`; **completed `HEAD` returned `404`** (matching our target `13B` immediate-cleanup design; current `dev` still retains a 24h `200` receipt until migrated). Zero-length `POST` created an empty readable file; `filename` `probe-run/path-file.txt` at Space root resolved to the nested path.
 - **Restart recovery**: terminating and restarting the local oCIS process mid-upload preserved offset `3`, resumed via `HEAD`, and completed `abcdef`.
 - **Previews**: `96×64` PNG (207 B) with `preview=1&x=32&y=32` returned a `32×32` PNG (103 B) while original `GET` stayed 207 B; plain text returned a generated JPEG (`200`); opaque binary returned `404`.
 - **Sync root ETag**: uploading a descendant changed Graph personal `root.eTag`.
@@ -98,7 +98,7 @@ All 12 uploads downloaded with matching SHA-256. Note:
 
 Open gates tracked in [todo.md](../todo.md#ocis-兼容层实施计划):
 - Real 7.1.1 GUI OAuth/sync, OpenCloud Android 1.3.1, and Windows Desktop execution (`OC-02`, `OC-10`).
-- Minimal-capability fallbacks, conditional TUS overwrite with pre-commit checksum verification, Drive `changes.list` sync strategy (`OC-03`–`OC-08`).
+- Minimal-capability fallbacks, conditional TUS overwrite with Drive-digest checksum verification, Drive `changes.list` sync strategy (`OC-03`–`OC-08`).
 - Worker-to-Drive cross-boundary recovery under fault injection and live Cloudflare ingress limits (`OC-09`, `OC-10`).
 
 Retained probe artifacts:

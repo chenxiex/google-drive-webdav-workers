@@ -46,6 +46,8 @@ pnpm run build
 - Unverified `folderColorRgb` values, `createdTime`/`folderColorRgb` on `create`, writes to `root`, Workspace conversions, nested non-`files` `fields` selectors, and unmodeled `q` operators or `orderBy` keys
 - Moving items from/into Trash, changing trash state under a trashed ancestor, and folder cycles
 - `changes.list` / `getStartPageToken` (not yet implemented; must be audited and modeled before `OC-05`)
+- `POST /batch/drive/v3` (`multipart/mixed`) is not yet modeled and must be audited/added before implementing `8B` folder `COPY`.
+- `headRevisionId`, `revisions.get?alt=media` (including immutable post-overwrite `Range` reads), and `sha1Checksum`/`sha256Checksum` (including the metadata-only empty-file exception where only `md5Checksum` is populated) were live-verified on 2026-11-24 and remain to be modeled in `MockDrive` when migrating away from v2 downloads and implementing `OC-06`.
 - Shared-drive permissions, cross-app 100-property aggregate quotas, real OAuth token expiry/revocation, network/rate-limit retries, and asynchronous trash propagation delays (covered via fault injection in tests).
 
 ## Official Google Drive references

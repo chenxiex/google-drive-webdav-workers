@@ -8,6 +8,13 @@ export interface DavProperty {
     removed?: true;
 }
 
+export interface PatchOperation {
+    action: 'set' | 'remove';
+    property: DavProperty;
+    text: string;
+    hasElements: boolean;
+}
+
 export class PropertyError extends Error {
     constructor(message: string, public status: number) { super(message); }
 }
@@ -21,59 +28,38 @@ const forbiddenCharacters = /[^\u0009\u000a\u000d\u0020-\ud7ff\ue000-\ufffd\u{10
 const invalid = (message = 'Invalid WebDAV XML'): never => { throw new PropertyError(message, 400); };
 const escape = (value: string): string => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
 
-export const key = (property: Pick<DavProperty, 'namespace' | 'name'> & { xml?: string }): string => JSON.stringify([property.namespace, property.name]);
+export const key = (property: Pick<DavProperty, 'namespace' | 'name'>): string => JSON.stringify([property.namespace, property.name]);
 
 function parseXml(text: string): Element {
     if (encoder.encode(text).length > 65536) throw new PropertyError('Property XML exceeds 64 KiB', 413);
     const markup = text.replace(/<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>/g, value => ' '.repeat(value.length));
     if (/<!\s*(?:DOCTYPE|ENTITY)\b/i.test(markup)) invalid('DTD and entity declarations are not supported');
-    const version = /^\s*<\?xml\s[^?]*?\bversion\s*=\s*(['"])(.*?)\1/.exec(markup);
-    if (version && version[2] !== '1.0') invalid('Only XML 1.0 is supported');
-    if (markup.replace(/<\?[\s\S]*?\?>|<[^\s/>!?]+(?:"[^"]*"|'[^']*'|[^'">])*>/g, '').includes(']]>')) invalid();
-    // XML 1.0 characters. In particular, do not silently replace lone surrogates.
     if (forbiddenCharacters.test(text)) invalid();
     try {
         const document = new DOMParser({
             onError: () => { throw new Error('Malformed XML'); },
-            // XML 1.0 normalizes CR/CRLF, not U+0085 or U+2028 in property values.
             normalizeLineEndings: value => value.replace(/\r\n?/g, '\n'),
         }).parseFromString(text, 'application/xml');
-        if (!document.documentElement || document.doctype) invalid();
-        const tags = markup.match(/<[^\s/>!?]+(?:"[^"]*"|'[^']*'|[^'">])*>/g) || [];
-        let tagIndex = 0;
-        const stack: [Node, number][] = [[document.documentElement!, 0]];
+        const root = document.documentElement;
+        if (!root || document.doctype) return invalid();
+        const stack: [Node, number][] = [[root, 0]];
         while (stack.length) {
             const [node, depth] = stack.pop()!;
             if (depth > 128) invalid('Property XML is too deeply nested');
             if (node.nodeType === 1) {
                 const element = node as Element;
-                const tag = tags[tagIndex++];
-                if (!tag) invalid();
-                const attributeNames = [...tag.matchAll(/([^\s=]+)\s*=\s*(?:"[^"]*"|'[^']*')/g)].map(match => match[1]);
-                const expandedNames = new Set<string>();
-                for (const name of attributeNames) {
-                    const colon = name.indexOf(':');
-                    const namespace = colon < 0 ? '' : element.lookupNamespaceURI(name.slice(0, colon));
-                    const expanded = JSON.stringify([namespace, name.slice(colon + 1)]);
-                    if (expandedNames.has(expanded)) invalid('Duplicate expanded XML attribute name');
-                    expandedNames.add(expanded);
-                }
                 if (element.prefix && !element.namespaceURI) invalid('Unbound XML prefix');
                 for (let i = 0; i < element.attributes.length; i++) {
                     const attribute = element.attributes.item(i)!;
                     if (forbiddenCharacters.test(attribute.value)) invalid();
-                    if (attribute.namespaceURI === XMLNS && (
-                        attribute.value === XMLNS || attribute.name === 'xmlns:xmlns' ||
-                        (attribute.name === 'xmlns:xml' ? attribute.value !== XML : attribute.value === XML) ||
-                        (attribute.prefix === 'xmlns' && !attribute.value)
-                    )) invalid('Invalid namespace binding');
                     if (attribute.prefix && !attribute.namespaceURI) invalid('Unbound XML prefix');
                 }
+            } else if (node.nodeValue && forbiddenCharacters.test(node.nodeValue)) {
+                invalid();
             }
-            if (node.nodeValue && forbiddenCharacters.test(node.nodeValue)) invalid();
             for (let child = node.lastChild; child; child = child.previousSibling) stack.push([child, depth + 1]);
         }
-        return document.documentElement!;
+        return root;
     } catch (error) {
         if (error instanceof PropertyError) throw error;
         return invalid();
@@ -110,19 +96,23 @@ function property(element: Element): DavProperty {
     for (const [name, value] of inherited) copy.setAttributeNS(XMLNS, name, value);
     if (language !== undefined) copy.setAttributeNS(XML, 'xml:lang', language);
     if (space !== undefined) copy.setAttributeNS(XML, 'xml:space', space);
-    return { namespace: element.namespaceURI || '', name: element.localName || element.nodeName, xml: serializer.serializeToString(copy).replace(/\r/g, '&#13;') };
+    return {
+        namespace: element.namespaceURI || '',
+        name: element.localName || element.nodeName,
+        xml: serializer.serializeToString(copy).replace(/\r/g, '&#13;'),
+    };
 }
 
-export function propertyNameXml(property: Pick<DavProperty, 'namespace' | 'name'> & { xml?: string }): string {
+export function propertyNameXml(property: Pick<DavProperty, 'namespace' | 'name'>): string {
     return property.namespace
         ? `<P:${property.name} xmlns:P="${escape(property.namespace)}"/>`
         : `<${property.name} xmlns=""/>`;
 }
 
-export function parsePatch(text: string): { action: 'set' | 'remove'; property: DavProperty }[] {
+export function parsePatch(text: string): PatchOperation[] {
     const root = parseXml(text);
     if (!isDav(root, 'propertyupdate')) invalid();
-    const operations: { action: 'set' | 'remove'; property: DavProperty }[] = [];
+    const operations: PatchOperation[] = [];
     // RFC 4918 section 17: ignore unexpected envelope elements together with
     // their subtrees. Inside DAV:prop every element is a property, not an extension.
     for (const operation of elements(root).filter(child => isDav(child, 'set') || isDav(child, 'remove'))) {
@@ -133,7 +123,12 @@ export function parsePatch(text: string): { action: 'set' | 'remove'; property: 
         for (const element of properties) {
             const action = operation.localName as 'set' | 'remove';
             if (action === 'remove' && element.hasChildNodes()) invalid('Removed property must be empty');
-            operations.push({ action, property: property(element) });
+            operations.push({
+                action,
+                property: property(element),
+                text: element.textContent || '',
+                hasElements: Array.from(element.childNodes).some(node => node.nodeType === 1),
+            });
         }
     }
     if (!operations.length) invalid('Property update must contain at least one property');
@@ -172,11 +167,11 @@ export function readDeadProperties(current: Record<string, string> = {}): Map<st
         if (stored?.v !== 1 || !Array.isArray(stored.properties)) return corrupt();
         const result = new Map<string, DavProperty>();
         for (const value of stored.properties) {
-            if (!value || typeof value.namespace !== 'string' || typeof value.name !== 'string' || typeof value.xml !== 'string') return corrupt();
-            const element = parseXml(value.xml);
-            if ((element.namespaceURI || '') !== value.namespace || element.localName !== value.name || result.has(key(value))) return corrupt();
+            if (!value || typeof value.namespace !== 'string' || typeof value.name !== 'string' || !value.name || typeof value.xml !== 'string' || !value.xml) return corrupt();
+            const propKey = key(value);
+            if (result.has(propKey)) return corrupt();
             if (value.removed !== undefined && (value.removed !== true || value.namespace !== DAV || value.name !== 'displayname')) return corrupt();
-            result.set(key(value), { namespace: value.namespace, name: value.name, xml: value.xml, ...(value.removed ? { removed: true as const } : {}) });
+            result.set(propKey, { namespace: value.namespace, name: value.name, xml: value.xml, ...(value.removed ? { removed: true as const } : {}) });
         }
         return result;
     } catch { return corrupt(); }

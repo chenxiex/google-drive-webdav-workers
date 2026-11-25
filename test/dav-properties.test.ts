@@ -137,7 +137,7 @@ describe('Drive-backed dead property payload', () => {
         { wdp01: 'missing first chunk' },
         { wdp00: 'not JSON' },
         { wdp00: '{"v":2,"properties":[]}' },
-        { wdp00: '{"v":1,"properties":[{"namespace":"urn:test","name":"p","xml":"<different/>"}]}' },
+        { wdp00: '{"v":1,"properties":[{"namespace":"urn:test","name":"p"}]}' },
     ])('refuses corrupted or unsupported storage without overwriting: %s', current => {
         expect(() => readDeadProperties(current as unknown as Record<string, string>)).toThrowError(expect.objectContaining({ status: 500 }));
         expect(() => writeDeadProperties(new Map(), current as unknown as Record<string, string>)).toThrowError(expect.objectContaining({ status: 500 }));

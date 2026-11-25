@@ -1,34 +1,48 @@
 export { TusUpload } from './tus-upload';
 import { uploadChunks } from './upload-stream';
-import { DOMParser } from '@xmldom/xmldom';
 import { DavProperty, key as propertyKey, parsePatch, parseFind, readDeadProperties, writeDeadProperties, propertyNameXml } from './dav-properties';
 
-var config: AppConfig = {
-    client_id: '', // Configure your own Google OAuth client through bindings
-    client_secret: '', // No shared OAuth credentials are bundled
-    refresh_token: '', // Google Drive API Refresh Token
+interface RuntimeConfig {
+    client_id: string;
+    client_secret: string;
+    refresh_token: string;
+    path: string;
+    basePath: string;
+    rootId: string;
+    name: string;
+    copyright: string;
+    copyright_link: string;
+    users: Record<string, string>;
+}
 
-    path: '/dav/',
-    name: 'My Cloud Drive', // Display name for the web interface
-    copyright: '@ixiumu', // Copyright text displayed in the footer
-    copyright_link: 'https://github.com/ixiumu/google-drive-webdav-workers', // URL link for the footer
-
-    users: {
-        'user': 'password' // Global Authentication credentials (username: password)
-    },
-
-    env: false,
-    working_dir: '/', // Root directory path for the drive mapping
-    cache: {
-        meta: {
-            '/': { data: { id: 'root', mimeType: 'application/vnd.google-apps.folder', size: 0, modifiedTime: null }, expire: Infinity }
-        },
-        putUrl: {},
-        config: {}
+function parseUsers(raw: unknown): Record<string, string> {
+    if (typeof raw === 'string' && raw.length > 0) {
+        try {
+            const parsed = JSON.parse(raw);
+            return parsed && typeof parsed === 'object' ? parsed : {};
+        } catch {
+            console.error('USERS is not valid JSON');
+            return {};
+        }
     }
-};
+    return raw && typeof raw === 'object' ? raw as Record<string, string> : {};
+}
 
-if (typeof CONFIG !== 'undefined') Object.assign(config, CONFIG);
+function resolveConfig(env?: Partial<Env>): RuntimeConfig {
+    const path = env?.PATH || '/dav/';
+    return {
+        client_id: env?.CLIENT_ID?.trim() || '',
+        client_secret: env?.CLIENT_SECRET?.trim() || '',
+        refresh_token: env?.REFRESH_TOKEN?.trim() || '',
+        path,
+        basePath: path.endsWith('/') ? path : path + '/',
+        rootId: env?.ROOT_ID || 'root',
+        name: env?.NAME || 'My Cloud Drive',
+        copyright: env?.COPYRIGHT || '@ixiumu',
+        copyright_link: env?.COPYRIGHT_LINK || 'https://github.com/ixiumu/google-drive-webdav-workers',
+        users: parseUsers(env?.USERS),
+    };
+}
 
 const pathJoin = (...args: string[]): string => args.join('/').replace(/\\/g, '/').replace(/(?<!^)\/+/g, '/').replace(/\/\//g, '/');
 const encodeQueryString = (data: Record<string, string>): string => Object.keys(data).map(k => encodeURIComponent(k) + '=' + encodeURIComponent(data[k])).join('&');
@@ -71,16 +85,12 @@ const decodePath = (url: string): string => {
     }
 };
 
-const getUrl = (url: string): { rpath: string; fpath: string } => {
+const getUrl = (url: string, basePath: string): { rpath: string; fpath: string } => {
     const rpath = decodePath(url);
-    let fpath_relative = rpath;
-    const basePath = config.path.endsWith('/') ? config.path : config.path + '/';
-    if (basePath !== '/' && fpath_relative.startsWith(basePath)) {
-        fpath_relative = '/' + fpath_relative.substring(basePath.length);
-    }
+    const relative = basePath !== '/' && rpath.startsWith(basePath) ? '/' + rpath.substring(basePath.length) : rpath;
     return {
         rpath,
-        fpath: pathJoin(config.working_dir, fpath_relative)
+        fpath: pathJoin('/', relative),
     };
 };
 
@@ -132,8 +142,10 @@ const CACHE_ENTRIES = 128;
 const CACHE_ENTRY_BYTES = 64 * 1024;
 
 class MemoryCache {
+    private store: Record<string, Record<string, { data: any; expire: number }>> = {};
+
     async get(k: string, ns: string): Promise<any> {
-        const entries = config.cache[ns];
+        const entries = this.store[ns];
         const entry = entries?.[k];
         if (entry && entry.expire > Date.now()) return entry.data;
         if (entries) delete entries[k];
@@ -141,14 +153,14 @@ class MemoryCache {
     }
 
     async put(k: string, v: any, ns: string, ttl = 300000): Promise<void> {
-        const entries = config.cache[ns] ??= {};
+        const entries = this.store[ns] ??= {};
         const now = Date.now();
         for (const key of Object.keys(entries)) {
             if (entries[key].expire <= now) delete entries[key];
         }
         delete entries[k];
         if (!v || new TextEncoder().encode(k + JSON.stringify(v)).byteLength > CACHE_ENTRY_BYTES) return;
-        const keys = Object.keys(entries).filter(key => !(ns === 'meta' && key === '/'));
+        const keys = Object.keys(entries);
         if (keys.length >= CACHE_ENTRIES) delete entries[keys[0]];
         entries[k] = { data: v, expire: now + ttl };
     }
@@ -156,7 +168,7 @@ class MemoryCache {
     async delete(k: string, ns: string): Promise<void> {
         if (ns === 'meta' && !k.endsWith('/')) k += '/';
         if (ns === 'meta' && k === '/') return;
-        if (config.cache[ns]) delete config.cache[ns]![k];
+        if (this.store[ns]) delete this.store[ns][k];
     }
 
     async invalidateFileAndParent(fpath: string, parentId?: string | null): Promise<void> {
@@ -168,14 +180,16 @@ class MemoryCache {
 
     async invalidateTransferPath(path: string, parentId?: string, tree = false): Promise<void> {
         const prefix = path.replace(/\/+$/, '') + '/';
-        if (tree) {
-            for (const key of Object.keys(config.cache.meta)) {
-                if (key.startsWith(prefix)) delete config.cache.meta[key];
+        if (tree && this.store.meta) {
+            for (const key of Object.keys(this.store.meta)) {
+                if (key.startsWith(prefix)) delete this.store.meta[key];
             }
         }
         await this.invalidateFileAndParent(path, parentId);
     }
 }
+
+const isolateCache = new MemoryCache();
 
 class StatusError extends Error {
     status: number;
@@ -194,7 +208,7 @@ class TransferError extends StatusError {
 }
 
 // The OAuth access token has its own short-lived isolate-local cache.
-let tokenCache: { access_token: string; expires: number } | null = null;
+let tokenCache: { key: string; access_token: string; expires: number } | null = null;
 
 async function readPropertyBody(request: Request): Promise<string> {
     if (!request.body) return '';
@@ -244,7 +258,7 @@ function isProtectedProperty(property: DavProperty): boolean {
     return property.namespace === DAV_NAMESPACE && ['creationdate', 'getcontentlength', 'getcontenttype', 'getetag', 'resourcetype', 'supportedlock', 'lockdiscovery', 'quota-used-bytes', 'quota-available-bytes'].includes(property.name)
         || property.namespace === DRIVE_NAMESPACE && !['description', 'starred', 'modifiedTime', 'folderColorRgb'].includes(property.name);
 }
-function applyNativeProperty(patch: Record<string, unknown>, property: DavProperty, action: 'set' | 'remove', metadata: any): void {
+function applyNativeProperty(patch: Record<string, unknown>, property: DavProperty, action: 'set' | 'remove', metadata: any, text: string, hasElements: boolean): void {
     const field = property.namespace === DAV_NAMESPACE ? 'modifiedTime' : property.name;
     if (action === 'remove') {
         if (metadata[field] === undefined && patch[field] === undefined) return;
@@ -252,11 +266,8 @@ function applyNativeProperty(patch: Record<string, unknown>, property: DavProper
         // live property itself. Do not report a false successful REMOVE.
         throw new StatusError('This Drive live property cannot be removed; set an appropriate value instead', 409);
     }
-    const element = new DOMParser().parseFromString(property.xml, 'application/xml').documentElement!;
-    for (let node = element.firstChild; node; node = node.nextSibling) {
-        if (node.nodeType === 1) throw new StatusError('This property requires a text value', 409);
-    }
-    const value = element.textContent || '';
+    if (hasElements) throw new StatusError('This property requires a text value', 409);
+    const value = text;
     // ownCloud/rclone's writable DAV alias uses Unix seconds, not HTTP-date.
     if (property.namespace === DAV_NAMESPACE && property.name === 'lastmodified') {
         const seconds = Number(value);
@@ -326,16 +337,26 @@ function davProperties(file: any, quota?: { used: string; available?: string }):
 class GDrive {
     cache: MemoryCache;
     env: Env;
+    config: RuntimeConfig;
     owner: string;
-    static fetchingTokenPromise: Promise<string> | null = null;
+    static fetchingTokens = new Map<string, Promise<string>>();
 
-    constructor(env: Env, ctx: ExecutionContext<unknown>, owner = '') {
+    constructor(env: Env, config: RuntimeConfig, owner = '') {
         this.owner = owner;
         this.env = env;
-        this.cache = new MemoryCache();
+        this.config = config;
+        this.cache = isolateCache;
     }
 
-    async OPTIONS(request: Request): Promise<Response> {
+    private url(raw: string): { rpath: string; fpath: string } {
+        return getUrl(raw, this.config.basePath);
+    }
+
+    private rootMetadata() {
+        return { id: this.config.rootId, mimeType: FOLDER_MIME, size: 0, modifiedTime: null };
+    }
+
+    async OPTIONS(): Promise<Response> {
         // Locking (Class 2) is not implemented.
         let allowed_methods = ['GET', 'HEAD', 'OPTIONS', 'PUT', 'PROPFIND', 'PROPPATCH', 'MKCOL', 'DELETE', 'MOVE', 'COPY', 'POST', 'PATCH'].join(',');
         return new Response(null, { status: 200, headers: { 'Allow': allowed_methods, 'DAV': '1', 'MS-Author-Via': 'DAV', 'Accept-Ranges': 'bytes', 'Tus-Version': '1.0.0', 'Tus-Extension': 'creation' } });
@@ -343,7 +364,7 @@ class GDrive {
 
     async PROPFIND(request: Request): Promise<Response> {
         const selection = parseFind(await readPropertyBody(request));
-        const { rpath, fpath } = getUrl(request.url);
+        const { rpath, fpath } = this.url(request.url);
         let metadata = await this.getMetadata(fpath);
         if (!metadata) return new Response(null, { status: 404 });
         // The mapping root is otherwise synthetic; properties belong to the
@@ -381,7 +402,7 @@ class GDrive {
     }
 
     async MKCOL(request: Request): Promise<Response> {
-        let { rpath, fpath } = getUrl(request.url);
+        let { fpath } = this.url(request.url);
 
         let metadata = await this.getMetadata(fpath);
         if (metadata) return new Response('<D:error xmlns:D="DAV:"><D:exception>MethodNotAllowed</D:exception><D:message>The resource you tried to create already exists</D:message></D:error>', { status: 405 });
@@ -404,7 +425,7 @@ class GDrive {
     }
 
     async GET(request: Request): Promise<Response> {
-        let { rpath, fpath } = getUrl(request.url);
+        let { rpath, fpath } = this.url(request.url);
         let url = new URL(request.url);
         let response: Response;
         const metadata = await this.getMetadata(fpath);
@@ -425,7 +446,7 @@ class GDrive {
                         let object = objects[i];
                         files.push({ name: trimString(object.name, '/'), dir: object.mimeType === FOLDER_MIME, lastmodified: new Date(object.modifiedTime).toISOString().split('T')[0], size: object.size ? object.size : 0, iconLink: object.iconLink });
                     }
-                    return new Response(arrayToHtml(rpath, files), { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+                    return new Response(arrayToHtml(rpath, files, this.config), { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8' } });
                 }
                 const abuse = url.searchParams.get('abuse') === 'true';
                 const range = request.headers.get('Range');
@@ -484,7 +505,7 @@ class GDrive {
             } finally { reader.releaseLock(); }
         }
         const totalSize = Number(rawLength);
-        const { fpath } = getUrl(request.url);
+        const { fpath } = this.url(request.url);
         const metadata = new Map<string, string>();
         const header = request.headers.get('Upload-Metadata');
         if (header) {
@@ -549,10 +570,9 @@ class GDrive {
             method: 'POST', body: JSON.stringify({ uploadUrl, totalSize, targetPath, parentId: parentMetadata.id, owner: this.owner, completed: totalSize === 0 })
         });
         if (!initialized.ok) return this.tusError('Upload session could not be persisted', 503);
-        const basePath = config.path.endsWith('/') ? config.path : config.path + '/';
         return new Response(null, { status: 201, headers: {
             'Tus-Resumable': '1.0.0',
-            Location: `${new URL(request.url).origin}${basePath}tus_uploads/${sessionId}`,
+            Location: `${new URL(request.url).origin}${this.config.basePath}tus_uploads/${sessionId}`,
         } });
     }
 
@@ -569,7 +589,7 @@ class GDrive {
     private async tusRequest(request: Request): Promise<Response> {
         const version = this.tusVersion(request);
         if (version) return version;
-        const basePath = config.path.endsWith('/') ? config.path : config.path + '/';
+        const basePath = this.config.basePath;
         const path = new URL(request.url).pathname;
         const sessionId = path.slice((basePath + 'tus_uploads/').length);
         if (!path.startsWith(basePath + 'tus_uploads/') || !/^[0-9a-f-]{36}$/.test(sessionId)) return this.tusError('Session not found', 404);
@@ -680,7 +700,7 @@ class GDrive {
     }
 
     async PUT(request: Request): Promise<Response> {
-        let { fpath } = getUrl(request.url);
+        let { fpath } = this.url(request.url);
         if (fpath.slice(-1) === '/') return new Response(null, { status: 405 });
         const mimeType = request.headers.get('Content-Type') || 'application/octet-stream';
 
@@ -863,10 +883,10 @@ class GDrive {
     // already have succeeded even when its response was lost.
     async transfer(request: Request, copy: boolean): Promise<Response> {
         const canonical = (path: string) => path.replace(/\/+$/, '') || '/';
-        const fpath = canonical(getUrl(request.url).fpath);
+        const fpath = canonical(this.url(request.url).fpath);
         const destination = request.headers.get('Destination');
         if (!destination) return new Response(null, { status: 403 });
-        const destPath = canonical(getUrl(destination).fpath);
+        const destPath = canonical(this.url(destination).fpath);
         if (fpath === '/' || destPath === '/') return new Response(null, { status: 403 });
 
         const source = await this.getMetadata(fpath);
@@ -975,7 +995,7 @@ class GDrive {
     }
 
     async DELETE(request: Request): Promise<Response> {
-        let { fpath } = getUrl(request.url);
+        let { fpath } = this.url(request.url);
         if (fpath === '/') return new Response(null, { status: 403 });
         const metadata = await this.getMetadata(fpath);
         if (metadata) {
@@ -994,10 +1014,9 @@ class GDrive {
 
     async HEAD(request: Request): Promise<Response> {
         let url = new URL(request.url);
-        const basePath = config.path.endsWith('/') ? config.path : config.path + '/';
-        if (url.pathname.startsWith(basePath + 'tus_uploads/')) return this.tusRequest(request);
+        if (url.pathname.startsWith(this.config.basePath + 'tus_uploads/')) return this.tusRequest(request);
 
-        let { fpath } = getUrl(request.url);
+        let { fpath } = this.url(request.url);
         const metadata = await this.getMetadata(fpath);
         if (metadata) {
             const size = metadata.size ? metadata.size.toString() : '0';
@@ -1022,7 +1041,7 @@ class GDrive {
     async UNLOCK(): Promise<Response> { return this.LOCK(); }
     async PROPPATCH(request: Request): Promise<Response> {
         const operations = parsePatch(await readPropertyBody(request));
-        const { rpath, fpath } = getUrl(request.url);
+        const { rpath, fpath } = this.url(request.url);
         const resolved = await this.getMetadata(fpath);
         if (!resolved) return new Response(null, { status: 404 });
         // Read the current property document, not the path cache: this is the
@@ -1033,17 +1052,16 @@ class GDrive {
         const errors = new Map<string, { status: number; protected?: boolean }>();
         let deadChanged = false;
         for (const operation of operations) {
-            const { property, action } = operation;
+            const { property, action, text, hasElements } = operation;
             const key = propertyKey(property);
             try {
                 if (isProtectedProperty(property)) {
                     errors.set(key, { status: 403, protected: true });
                 } else if (isNativeProperty(property)) {
-                    applyNativeProperty(patch, property, action, metadata);
+                    applyNativeProperty(patch, property, action, metadata, text, hasElements);
                 } else {
-                    if (action === 'set' && property.namespace === DAV_NAMESPACE && property.name === 'displayname') {
-                        const element = new DOMParser().parseFromString(property.xml, 'application/xml').documentElement!;
-                        if (Array.from(element.childNodes).some(node => node.nodeType === 1)) throw new StatusError('Display name requires text', 409);
+                    if (action === 'set' && property.namespace === DAV_NAMESPACE && property.name === 'displayname' && hasElements) {
+                        throw new StatusError('Display name requires text', 409);
                     }
                     if (action === 'remove') {
                         if (property.namespace === DAV_NAMESPACE && property.name === 'displayname') dead.set(key, { ...property, removed: true });
@@ -1125,12 +1143,12 @@ class GDrive {
     async getMetadata(path: string): Promise<any> {
         path = path.startsWith('/') ? path : '/' + path;
         path = path.endsWith('/') ? path : path + '/';
+        if (path === '/') return this.rootMetadata();
         let meta = await this.cache.get(path, 'meta');
         if (meta) return meta;
 
         let fullpath = '/';
-        let metadata = (config.cache.meta['/'] && config.cache.meta['/'].data) || null;
-        if (!metadata) return null;
+        let metadata: any = this.rootMetadata();
 
         const fragments = trimString(path, '/').split('/');
 
@@ -1226,19 +1244,19 @@ class GDrive {
     }
 
     async getAccessToken(): Promise<string> {
-        if (tokenCache && tokenCache.expires > Date.now()) return tokenCache.access_token;
-        if (GDrive.fetchingTokenPromise) {
-            return await GDrive.fetchingTokenPromise;
-        }
-        GDrive.fetchingTokenPromise = (async () => {
+        const cacheKey = `${this.config.client_id}\0${this.config.refresh_token}`;
+        if (tokenCache && tokenCache.key === cacheKey && tokenCache.expires > Date.now()) return tokenCache.access_token;
+        const inflight = GDrive.fetchingTokens.get(cacheKey);
+        if (inflight) return await inflight;
+        const promise = (async () => {
             try {
                 const response = await fetch('https://www.googleapis.com/oauth2/v4/token', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                     body: encodeQueryString({
-                        client_id: config.client_id,
-                        client_secret: config.client_secret,
-                        refresh_token: config.refresh_token,
+                        client_id: this.config.client_id,
+                        client_secret: this.config.client_secret,
+                        refresh_token: this.config.refresh_token,
                         grant_type: 'refresh_token'
                     })
                 });
@@ -1246,18 +1264,19 @@ class GDrive {
                 if (result.error) {
                     throw new StatusError(result.error_description, response.status);
                 }
-                tokenCache = { expires: Date.now() + 3500 * 1000, access_token: result.access_token };
+                tokenCache = { key: cacheKey, expires: Date.now() + 3500 * 1000, access_token: result.access_token };
                 return result.access_token;
             } finally {
-                GDrive.fetchingTokenPromise = null;
+                GDrive.fetchingTokens.delete(cacheKey);
             }
         })();
-        return await GDrive.fetchingTokenPromise;
+        GDrive.fetchingTokens.set(cacheKey, promise);
+        return await promise;
     }
 }
 
-function arrayToHtml(rpath: string, files: Partial<DriveFile>[]): string {
-    const basePath = config.path.endsWith('/') ? config.path : config.path + '/';
+function arrayToHtml(rpath: string, files: Partial<DriveFile>[], config: RuntimeConfig): string {
+    const basePath = config.basePath;
     const isRoot = rpath === basePath || rpath + '/' === basePath;
     const title = isRoot ? '' : ' - ' + rpath;
     const tpl = `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"/><link rel="icon" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAMAAABEpIrGAAAApVBMVEUAAAD///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////+4/eNVAAAANnRSTlMA9isRpA3y8NfOoQjl3amJgVcX2sm/cUAw+MO6s5ttOhsU+urfrZB6dWZQRCPSlUsyBeueYCQaPAIhAAABdUlEQVQ4y23S2WKCQAwF0EsRkMWyivvWqrVqF7vc//+0mjhQRM9TkoEZJgENi/l34bp+UB5wx6n0WesmDlrSiFe+XnEl0OoTG6bNTcZUh4eLF81yG5VCC7vZtCp0tdALTdrR1AK4N5UhVR9qT5UCCXH1DktNXI0LCbnFRTiiks+YUx2lfuAKqqrG57Cn0QzKL2CsteyFWGgwcszWHOBiQLVHSVH3bdSrook5Y6Y3bnT0w4SZuamOaGGKD+f4GUYsKxGk/3UH9emkyjxpnz5Q3S2lyhrfaUnbX2Dwws9WK9t2HPTliOD/0He6lmCe592zN58cY0drUU1o4NgiO098OPz8/J2SWzkogvI2uBZ6OsKI3En6SrSMScsB5PeRRnPeWv+QEZnJboDARcszyaUEPxpw2FpPtGfVWMb9bWt9SfLNxCf5JTadThB0xKNak14Gw855h3dEzZnwRrFEU2m11hO0ZHHU2P39iFthGk96rrvux6mN2h80rVPh8HjxPAAAAABJRU5ErkJggg=="/><title>${config.name}{{title}}</title><style>*{box-sizing:border-box}body{font:15px/1.3 Helvetica,Arial;background:#0E1117;color:#CAD1D9}h1,main{background:#0E1117;max-width:960px;margin:10px auto;border-radius:5px}h1{font-size:18px;padding:15px;border:#22262D 1px solid;color:#DDD;background:#171b22}a{color:inherit;text-decoration:none}h1 a,main a{display:flex;align-items:center}main a:first-child{border-top-left-radius:5px;border-top-right-radius:5px}main a:last-child{border-bottom-left-radius:5px;border-bottom-right-radius:5px}svg{margin-right:15px;fill:#F1F6FC}h1:hover{color:#BABBBD}main{border:#22262D 1px solid}main img{margin-right:10px}main a{padding:12px 15px;border-bottom:#22262D 1px solid;transition:all .3s}main a:last-child{border:0}main a:hover{background:#171B22;color:#58a6ff}main a>div{margin-left:10px}main a>div:first-child{flex:1;margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:flex;align-items:center}main a>div:not(:first-child){color:#8C949E;font-size:13px}footer{text-align:center;color:#8C949E;font-size:13px}footer a:hover{text-decoration:underline}@media (max-width:640px){main a>div:last-child{display:none}}</style></head><body><h1><a href="${basePath}"><svg width="32" height="32" viewBox="0 0 320 320"><path d="M95 304 c-47 -24 -71 -51 -84 -95 -26 -87 20 -173 107 -199 145 -44 262 135 165 251 -48 56 -128 75 -188 43z m168 -73 c9 -16 17 -32 17 -35 0 -3 -35 -6 -78 -6 -85 0 -78 -4 -110 63 -2 4 32 7 75 7 76 0 79 -1 96 -29z m-149 -46 c38 -65 38 -65 16 -100 -22 -36 -22 -36 -62 32 -40 68 -40 68 -22 101 9 17 20 32 23 32 4 0 24 -29 45 -65z m166 -9 c0 -12 -75 -129 -86 -133 -7 -2 -26 -3 -42 -1 -30 3 -30 3 9 71 39 65 41 67 79 67 22 0 40 -2 40 -4z" /></svg>${config.name}</a></h1><main>{{content}}</main><footer><a target="_blank" href="${config.copyright_link}">${config.copyright}</a></footer></body></html>`;
@@ -1287,8 +1306,8 @@ function arrayToHtml(rpath: string, files: Partial<DriveFile>[]): string {
 }
 
 export default {
-    async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-        const { protocol, pathname } = new URL(request.url);
+    async fetch(request: Request, env: Env, _ctx?: ExecutionContext): Promise<Response> {
+        const { pathname } = new URL(request.url);
         let method = request.method.toUpperCase();
 
         if (pathname === '/robots.txt') return new Response('User-agent: *\nDisallow: /', { status: 200 });
@@ -1310,41 +1329,8 @@ export default {
                 return response;
             }
 
-            // Env
-            if (env && !config.env) {
-                if (typeof env.USERS === 'string' && env.USERS.length > 0) {
-                    try {
-                        const users = JSON.parse(env.USERS);
-                        // Silently keeping the placeholder credentials below
-                        // would leave the server reachable as user/password.
-                        config.users = users && typeof users === 'object' ? users : {};
-                    } catch (error) {
-                        console.error('USERS is not valid JSON');
-                        config.users = {};
-                    }
-                } else if (typeof env.USERS === 'object' && env.USERS) {
-                    config.users = env.USERS as Record<string, string>;
-                } else {
-                    // Fail closed: when running from bindings, a missing USERS
-                    // variable must never fall back to the static placeholder
-                    // credentials shipped in the default config.
-                    config.users = {};
-                }
-                // Bindings must supply the complete OAuth configuration. Never
-                // combine a partial binding with credentials from static CONFIG.
-                config.client_id = env.CLIENT_ID?.trim() || '';
-                config.client_secret = env.CLIENT_SECRET?.trim() || '';
-                config.refresh_token = env.REFRESH_TOKEN?.trim() || '';
-                if (env.ROOT_ID) config.cache.meta['/']!.data.id = env.ROOT_ID;
-                if (env.PATH) config.path = env.PATH;
-                if (env.NAME) config.name = env.NAME;
-                if (env.COPYRIGHT) config.copyright = env.COPYRIGHT;
-                if (env.COPYRIGHT_LINK) config.copyright_link = env.COPYRIGHT_LINK;
-                config.env = true;
-            }
-
-            // Routing must use the binding on the first request, not CONFIG defaults.
-            let basePath = config.path.endsWith('/') ? config.path : config.path + '/';
+            const config = resolveConfig(env);
+            const basePath = config.basePath;
             if (basePath !== '/') {
                 if (pathname + '/' === basePath) {
                     const u = new URL(request.url);
@@ -1383,7 +1369,7 @@ export default {
                 return new Response('Server not configured: missing ' + missing.join(', '), { status: 500 });
             }
 
-            const drive = new GDrive(env, ctx, auth.user);
+            const drive = new GDrive(env, config, auth.user);
 
             // Method Routing
             if (method === 'PATCH' && !pathname.startsWith(basePath + 'tus_uploads/')) {

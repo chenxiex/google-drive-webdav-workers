@@ -25,14 +25,24 @@
   - 移除 `OCIS_ENABLED` 开关与新旧双轨语义：oCIS WebDAV 与发现路由（`/dav/spaces/<spaceId>/`、`/remote.php/webdav/`、`/remote.php/dav/files/<username>/`、`/status.php`、`/ocs/*`、`/graph/*`、`/.well-known/*`）常驻同一 Drive/WebDAV 处理器；OIDC `/oauth/*` 按是否配置 Cloudflare Access 自动启用（未配置时仅运行 HTTP Basic `USERS`）。
   - 将通用 WebDAV 默认 `PATH` 从 `/dav/` 调整为 `/webdav/`（保留 `PATH` 可配置），并对 `/` 或与 oCIS 保留前缀（`/dav/spaces/`、`/remote.php/`、`/ocs/`、`/graph/`、`/oauth/`、`/status.php`、`/.well-known/`）冲突的配置返回 `500` 配置错误；实现时同步更新 [README.md](README.md)、[.env.example](.env.example) 与 [docs/webdav-behavior.md](docs/webdav-behavior.md)。
 
-- [ ] **保留 WebDAV 自定义属性并精简 `src/dav-properties.ts`（`10.1A`）**
-  - 保留基于 Drive `appProperties`（`wdp00`–`wdp29`）的通用 XML dead properties 与 `DAV:displayname` tombstone，以满足 RFC 4918 `SHOULD` 兼容度；精简 [src/dav-properties.ts](src/dav-properties.ts) 中的过度正则/标签配对校验与读取已存 `wdp*` 时的重复 `parseXml`，并合并冗余属性测试。
+- [x] **保留 WebDAV 自定义属性并精简 `src/dav-properties.ts`（`10.1A`）**
+  - 保留基于 Drive `appProperties`（`wdp00`–`wdp29`）的通用 XML dead properties 与 `DAV:displayname` tombstone，以满足 RFC 4918 `SHOULD` 兼容度；精简 [src/dav-properties.ts](src/dav-properties.ts) 中的过度正则/标签配对校验与读取已存 `wdp*` 时的重复 `parseXml`，去除 `src/worker.ts` 二次 `DOMParser` 解析并合并冗余属性测试。
 
 - [ ] **`oc:checksums` 只读动态计算且 `PROPPATCH` 静默忽略（`10.2A`）**
   - `PROPFIND` 中的 `{http://owncloud.org/ns}checksums` 始终基于 Google Drive 真实返回的 `md5Checksum` / `sha1Checksum` / `sha256Checksum` 动态拼装；对 `PROPPATCH` 写入 `oc:checksums`（如 `rclone` 与 `DAV:lastmodified` 同批发送）不落盘至 `appProperties`，直接作为空操作返回 `200`，避免污染摘要或因 `403`/`424` 阻断 `mtime` 更新。
 
 - [ ] **对齐已知长度大文件 PUT 的校验逻辑**
-  - 目前仅未知长度流式 `PUT`（`putUnknownLength`）严格校验分块响应状态、308 `Range` 及最终完成状态；已知长度大文件 `PUT`（`> 5 MiB` 分块路径）尚未检查初始化响应状态码、308 `Range` 偏移或末块是否真实完成，且非法/负 `Content-Length` 会误走空上传或跳过循环返回假成功。
+  - 目前仅未知长度流式 `PUT`（`putUnknownLength`）严格校验分块响应状态、308 `Range` 及最终完成状态；已知长度 `PUT` 路径存在四处缺陷：
+    - 使用 `parseInt` 解析 `Content-Length`，非法或负值会绕过循环返回假成功 `201`/`204`（应严格校验非负安全整数并在非法时返回 `400`）；
+    - 无尾斜杠路径覆盖已有目录（`metadata?.mimeType === FOLDER_MIME`）未提前返回 `405`/`409`；
+    - `> 5 MiB` 分块路径未先检查初始化 `!initRes.ok` 透传上游状态码，把失败全折叠成 `500`；
+    - 分块循环未校验 `308` `Range`、末块收 `308` 报假成功，且输入流提前 `done` 时会静默提交截断体。
+
+- [ ] **修复顶层异常捕获复用 `errorStatus()`**
+  - [src/worker.ts](src/worker.ts) 顶层 `catch` 直接读取 `e.status || e.code || 500`，若异常带非 HTTP 数字或字符串的 `e.code` 会导致 `new Response` 再抛出 `RangeError`；应统一改用已定义的 `errorStatus(e)`。
+
+- [ ] **修复 HTML 目录页缺失 `modifiedTime` 崩溃**
+  - [src/worker.ts](src/worker.ts) 浏览文件夹渲染 HTML 列表时 `new Date(object.modifiedTime).toISOString()` 未判空，遇缺失或非法 `modifiedTime` 会抛 `RangeError`；应判空兜底。
 
 - [ ] **将下载与 ETag 从 Drive v2 迁移至统一的 Drive v3（`4A-1`）**
   - 已于 2026-11-24 实测验证 Drive v3：`headRevisionId` 在 `multipart`/`media`/`resumable` 终块 `200`/空创建/`files.get`/`files.list` 均立即可用（仅改 `appProperties` 时保持不变、覆写内容时变化）；`revisions/{headRevisionId}?alt=media` 支持 `200`/`Range 206`/越界 `416`/空文件 `200`，且在文件被覆写为 `rev2` 后仍可从旧 `rev1` 不可变读取 `206`。

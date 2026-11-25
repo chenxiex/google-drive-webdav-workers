@@ -1,6 +1,7 @@
 import { SELF, env, abortAllDurableObjects, runInDurableObject } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { AUTH, FOLDER, MockDrive, ORIGIN, installDriveMock } from './helpers';
+import { AUTH, FOLDER, ORIGIN, installDriveMock } from '../support/client';
+import { MockDrive } from '../support/mock-drive';
 
 let drive: MockDrive;
 const TUS = { 'Tus-Resumable': '1.0.0' };

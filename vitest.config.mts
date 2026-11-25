@@ -16,19 +16,12 @@ const davBindings = {
 export default defineConfig({
 	test: {
 		projects: [
-			{ test: { name: 'unit', include: ['test/dav-properties.test.ts'] } },
+			{ test: { name: 'unit', include: ['test/unit/**/*.test.ts'] } },
 			{
-				plugins: [cloudflareTest({ main: 'src/worker.ts', miniflare: { ...compat, bindings: davBindings } })],
+				plugins: [cloudflareTest({ main: 'src/index.ts', miniflare: { ...compat, bindings: davBindings } })],
 				test: {
 					name: 'worker',
-					include: [
-						'test/dav.test.ts',
-						'test/properties.test.ts',
-						'test/tus.test.ts',
-						'test/auth.test.ts',
-						'test/oauth-config.test.ts',
-						'test/routing.test.ts',
-					],
+					include: ['test/worker/**/*.test.ts'],
 				},
 			},
 		],

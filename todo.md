@@ -16,17 +16,17 @@
   - 统一单文件与文件夹 `COPY` 的暂存失败清理策略：在暂存复制阶段失败、旧目标移入回收站失败、或末步发布重命名遇确定性 `4xx`（非 `408`）拒绝并还原旧目标后，顺手将未发布的 `.webdav-copy-<UUID>` 移入回收站清理并返回单一明确错误码（仅末步重命名遇 `5xx`/`408`/断连等不确定失败时不自动清理或还原）。
 
 - [ ] **移除全站非 TUS `PATCH` 转发 `COPY` 的遗留路由（`9.1A`）**
-  - 删除 [src/worker.ts](src/worker.ts) 中非 `tus_uploads/` 路径将 `PATCH` 改写为 `COPY` 的遗留代码，全站对非 TUS `PATCH` 统一返回 `405 Method Not Allowed`。
+  - 删除 [src/router.ts](src/router.ts) 中非 `tus_uploads/` 路径将 `PATCH` 改写为 `COPY` 的遗留代码，全站对非 TUS `PATCH` 统一返回 `405 Method Not Allowed`。
 
 - [ ] **全站移除 `ensureDir` 自动建父目录，统一按 RFC 4918 返回 `409`（`9.2B`）**
-  - 移除 [src/worker.ts](src/worker.ts) 中 `MKCOL`、`PUT` 与 TUS `POST` 的 `ensureDir` 调用，父目录缺失或非文件夹时全站统一返回 `409 Conflict`（与 `MOVE`/`COPY` 一致，防止同步场景复活已删/改名父目录）；同步更新 [test/dav.test.ts](test/dav.test.ts) 中依赖自动建父目录的用例。
+  - 移除 [src/webdav/handler.ts](src/webdav/handler.ts)、[src/webdav/upload.ts](src/webdav/upload.ts) 与 [src/tus/handler.ts](src/tus/handler.ts) 中 `MKCOL`、`PUT` 与 TUS `POST` 的 `ensureDir` 调用，父目录缺失或非文件夹时全站统一返回 `409 Conflict`（与 `MOVE`/`COPY` 一致，防止同步场景复活已删/改名父目录）；同步更新 [test/worker/dav-write.test.ts](test/worker/dav-write.test.ts) 中依赖自动建父目录的用例。
 
 - [ ] **统一路由并调整通用 WebDAV 默认路径为 `/webdav/`（`9.3`）**
   - 移除 `OCIS_ENABLED` 开关与新旧双轨语义：oCIS WebDAV 与发现路由（`/dav/spaces/<spaceId>/`、`/remote.php/webdav/`、`/remote.php/dav/files/<username>/`、`/status.php`、`/ocs/*`、`/graph/*`、`/.well-known/*`）常驻同一 Drive/WebDAV 处理器；OIDC `/oauth/*` 按是否配置 Cloudflare Access 自动启用（未配置时仅运行 HTTP Basic `USERS`）。
   - 将通用 WebDAV 默认 `PATH` 从 `/dav/` 调整为 `/webdav/`（保留 `PATH` 可配置），并对 `/` 或与 oCIS 保留前缀（`/dav/spaces/`、`/remote.php/`、`/ocs/`、`/graph/`、`/oauth/`、`/status.php`、`/.well-known/`）冲突的配置返回 `500` 配置错误；实现时同步更新 [README.md](README.md)、[.env.example](.env.example) 与 [docs/webdav-behavior.md](docs/webdav-behavior.md)。
 
-- [x] **保留 WebDAV 自定义属性并精简 `src/dav-properties.ts`（`10.1A`）**
-  - 保留基于 Drive `appProperties`（`wdp00`–`wdp29`）的通用 XML dead properties 与 `DAV:displayname` tombstone，以满足 RFC 4918 `SHOULD` 兼容度；精简 [src/dav-properties.ts](src/dav-properties.ts) 中的过度正则/标签配对校验与读取已存 `wdp*` 时的重复 `parseXml`，去除 `src/worker.ts` 二次 `DOMParser` 解析并合并冗余属性测试。
+- [x] **保留 WebDAV 自定义属性并精简 `src/webdav/property-xml.ts`（`10.1A`）**
+  - 保留基于 Drive `appProperties`（`wdp00`–`wdp29`）的通用 XML dead properties 与 `DAV:displayname` tombstone，以满足 RFC 4918 `SHOULD` 兼容度；精简 [src/webdav/property-xml.ts](src/webdav/property-xml.ts) 中的过度正则/标签配对校验与读取已存 `wdp*` 时的重复 `parseXml`，去除 [src/webdav/properties.ts](src/webdav/properties.ts) 二次 `DOMParser` 解析并合并冗余属性测试。
 
 - [ ] **`oc:checksums` 只读动态计算且 `PROPPATCH` 静默忽略（`10.2A`）**
   - `PROPFIND` 中的 `{http://owncloud.org/ns}checksums` 始终基于 Google Drive 真实返回的 `md5Checksum` / `sha1Checksum` / `sha256Checksum` 动态拼装；对 `PROPPATCH` 写入 `oc:checksums`（如 `rclone` 与 `DAV:lastmodified` 同批发送）不落盘至 `appProperties`，直接作为空操作返回 `200`，避免污染摘要或因 `403`/`424` 阻断 `mtime` 更新。
@@ -39,7 +39,7 @@
     - 分块循环未校验 `308` `Range`、末块收 `308` 报假成功，且输入流提前 `done` 时会静默提交截断体。
 
 - [ ] **修复顶层异常捕获复用 `errorStatus()`**
-  - [src/worker.ts](src/worker.ts) 顶层 `catch` 直接读取 `e.status || e.code || 500`，若异常带非 HTTP 数字或字符串的 `e.code` 会导致 `new Response` 再抛出 `RangeError`；应统一改用已定义的 `errorStatus(e)`。
+  - [src/router.ts](src/router.ts) 顶层 `catch` 直接读取 `e.status || e.code || 500`，若异常带非 HTTP 数字或字符串的 `e.code` 会导致 `new Response` 再抛出 `RangeError`；应统一改用已定义的 `errorStatus(e)`。
 
 - [ ] **将下载与 ETag 从 Drive v2 迁移至统一的 Drive v3（`4A-1`）**
   - 已于 2026-11-24 实测验证 Drive v3：`headRevisionId` 在 `multipart`/`media`/`resumable` 终块 `200`/空创建/`files.get`/`files.list` 均立即可用（仅改 `appProperties` 时保持不变、覆写内容时变化）；`revisions/{headRevisionId}?alt=media` 支持 `200`/`Range 206`/越界 `416`/空文件 `200`，且在文件被覆写为 `rev2` 后仍可从旧 `rev1` 不可变读取 `206`。

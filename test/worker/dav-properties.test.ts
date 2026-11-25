@@ -1,7 +1,8 @@
 import { SELF } from 'cloudflare:test';
 import { DOMParser } from '@xmldom/xmldom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { AUTH, FOLDER, MockDrive, ORIGIN, installDriveMock } from './helpers';
+import { AUTH, FOLDER, ORIGIN, installDriveMock } from '../support/client';
+import { MockDrive } from '../support/mock-drive';
 
 const DAV = 'DAV:';
 let drive: MockDrive;

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DOMParser } from '@xmldom/xmldom';
-import { key, parseFind, parsePatch, propertyNameXml, readDeadProperties, writeDeadProperties, type DavProperty } from '../src/dav-properties';
+import { key, parseFind, parsePatch, propertyNameXml, readDeadProperties, writeDeadProperties, type DavProperty } from '../../src/webdav/property-xml';
 
 const patch = (inner: string): string => `<d:propertyupdate xmlns:d="DAV:" xmlns:x="urn:test">${inner}</d:propertyupdate>`;
 const set = (inner: string): string => `<d:set><d:prop>${inner}</d:prop></d:set>`;

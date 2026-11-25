@@ -36,7 +36,7 @@ See [WebDAV behavior details](docs/webdav-behavior.md) for protocol semantics an
 
 ## Environment Variables
 
-Instead of editing [src/worker.ts](src/worker.ts), configure variables via Cloudflare secrets or the Dashboard (**Settings -> Variables -> Environment Variables**):
+Instead of editing [src/config.ts](src/config.ts), configure variables via Cloudflare secrets or the Dashboard (**Settings -> Variables -> Environment Variables**):
 
 | Variable | Required | Description | Example |
 | :--- | :---: | :--- | :--- |

@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { execFile } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { MockDrive } from './helpers';
+import { MockDrive } from '../support/mock-drive';
 
 // Use the versions already installed by Wrangler, not an additional runtime.
 const requireWrangler = createRequire(createRequire(import.meta.url).resolve('wrangler/package.json'));
@@ -25,7 +25,7 @@ test('real rclone uploads more than the simulated ingress limit using bounded TU
     const ingressLimit = 12 * 1024 * 1024;
     const bytes = randomBytes(25 * 1024 * 1024 + 123);
     const requests: { method: string; size: number; status: number }[] = [];
-    const bundle = await build({ entryPoints: ['src/worker.ts'], bundle: true, write: false, format: 'esm', external: ['cloudflare:workers'] });
+    const bundle = await build({ entryPoints: ['src/index.ts'], bundle: true, write: false, format: 'esm', external: ['cloudflare:workers'] });
     const mf = new Miniflare({
         modules: true, script: bundle.outputFiles[0].text, compatibilityDate: '2026-04-15',
         durableObjects: { TUS_UPLOADS: { className: 'TusUpload', useSQLite: true } },

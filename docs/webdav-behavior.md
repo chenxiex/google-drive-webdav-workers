@@ -79,7 +79,7 @@ Use `rclone config` to obscure the password and `rclone copy /path/to/file worke
 An opt-in test runs an installed `rclone` binary against a local Worker with SQLite Durable Objects, `MockDrive`, and a simulated 12 MiB ingress cap:
 
 ```bash
-RCLONE_BIN=/path/to/rclone pnpm exec vitest run --config test/rclone.config.mts
+RCLONE_BIN=/path/to/rclone pnpm test:e2e
 ```
 
 Verified with rclone v1.76.0: uploading a 26,214,523-byte file produced `PATCH` bodies of 10,485,760, 10,485,760, and 5,243,003 bytes (matching SHA-256 and `mtime`), while an oversized single `PUT` received `413`.
@@ -109,6 +109,6 @@ Verified with rclone v1.76.0: uploading a 26,214,523-byte file produced `PATCH` 
 - Each cache namespace holds at most 128 entries (excluding the fixed `/` root mapping). Expired entries are purged on write, and the oldest inserted entry is evicted at capacity. Entries whose key plus serialized JSON value exceed 64 KiB are not cached.
 - There is no Workers KV binding or shared cache across isolates; external Drive edits or mutations handled by another isolate remain stale locally until expiry. TUS upload sessions remain durable in Durable Objects.
 
-See [test/mock-drive.md](../test/mock-drive.md) for the Drive mock contract and verified API behavior.
+See [test/support/mock-drive.md](../test/support/mock-drive.md) for the Drive mock contract and verified API behavior.
 
 [Back to README](../README.md)

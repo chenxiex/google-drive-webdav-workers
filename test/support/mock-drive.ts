@@ -1,9 +1,4 @@
-import { vi } from 'vitest';
-
-export const ORIGIN = 'https://example.com';
 export const FOLDER = 'application/vnd.google-apps.folder';
-export const basic = (username: string, password: string): string => 'Basic ' + btoa(`${username}:${password}`);
-export const AUTH = { Authorization: basic('test', 'pass') };
 
 export interface DriveFile {
 	id: string;
@@ -469,18 +464,18 @@ export class MockDrive {
 			if (file.mimeType.startsWith('application/vnd.google-apps.')) unsupported('media downloads of folders/native documents');
 			const content = file.content;
 			if (!content || Number(file.size) !== content.length) unsupported('media fixture without explicit bytes and matching size');
-            // v2 media ETag is an opaque strong representation validator, not
-            // the v2 JSON etag or v3 metadata version. If-Range is ignored.
-            const digest = await crypto.subtle.digest('SHA-256', content);
-            const etag = '"' + Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, '0')).join('') + '"';
-            const mediaHeaders = { 'Content-Type': file.mimeType, ...(url.pathname.includes('/v2/') ? { ETag: etag } : {}) };
+			// v2 media ETag is an opaque strong representation validator, not
+			// the v2 JSON etag or v3 metadata version. If-Range is ignored.
+			const digest = await crypto.subtle.digest('SHA-256', content);
+			const etag = '"' + Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, '0')).join('') + '"';
+			const mediaHeaders = { 'Content-Type': file.mimeType, ...(url.pathname.includes('/v2/') ? { ETag: etag } : {}) };
 			const range = headers.get('Range');
 			if (!range) return new Response(content.slice(), { headers: { ...mediaHeaders, 'Content-Length': String(content.length) } });
 			const parsed = range.match(/^bytes=(\d+)-(\d+)$/);
 			if (!parsed) unsupported('unverified media range syntax');
 			const start = Number(parsed[1]), end = Number(parsed[2]);
 			if (url.pathname.includes('/v2/') && start >= content.length) return new Response(null, { status: 416, headers: { 'Content-Range': `bytes */${content.length}` } });
-            if (start > end || end >= content.length) unsupported('unverified media range bounds');
+			if (start > end || end >= content.length) unsupported('unverified media range bounds');
 			return new Response(content.slice(start, end + 1), {
 				status: 206, headers: { ...mediaHeaders, 'Content-Length': String(end - start + 1), 'Content-Range': `bytes ${start}-${end}/${content.length}` },
 			});
@@ -500,8 +495,4 @@ export class MockDrive {
 		}
 		unsupported(`${method} ${url.pathname}`);
 	}
-}
-
-export function installDriveMock(drive: MockDrive): void {
-	vi.stubGlobal('fetch', (input: FetchInput, init?: FetchInit): Promise<Response> => drive.handle(input, init));
 }

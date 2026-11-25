@@ -4,9 +4,9 @@
 
 ## 现有 WebDAV 待决项与已知缺口
 
-- [ ] **将普通 DELETE 改为移入回收站（`6A`）**
+- [x] **将普通 DELETE 改为移入回收站（`6A`）**
   - 当前 `MOVE`/`COPY` 覆盖流程已改用回收站（`trashed: true`）并支持失败恢复，但普通 `DELETE` 仍直接调用 Drive 永久删除接口（`DELETE /drive/v3/files/{id}`）。
-  - 将普通 `DELETE` 改为 `PATCH { trashed: true }`（可选保留配置开关支持永久删除），统一覆盖与删除的回收站语义，并验证目录删除、权限要求与恢复语义。
+  - 将普通 `DELETE` 改为 `PATCH { trashed: true }`（不保留永久删除开关），统一覆盖与删除的回收站语义，并验证目录删除、权限要求与恢复语义。
 
 - [ ] **过滤隐藏 Google Workspace 原生文档与 Shortcut（`7A`）**
   - 在目录列举（`getObjects`）与路径解析（`getMetadata`）中过滤除文件夹外的所有 `application/vnd.google-apps.*` 项（含 Docs/Sheets/Slides 与 Shortcut），避免客户端下载报错或双向同步死循环。

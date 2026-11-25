@@ -188,21 +188,38 @@ describe('unknown-length PUT', () => {
 	});
 });
 
-describe('DELETE cache invalidation', () => {
+describe('DELETE trash, cache invalidation, and restore semantics', () => {
 	let path: string;
 	const head = (suffix = '/nested/leaf.txt') => request('/dav' + path + suffix, { method: 'HEAD' });
+	const propfind = (suffix = '/nested/leaf.txt', depth = '0') =>
+		request('/dav' + path + suffix, { method: 'PROPFIND', headers: { Depth: depth } });
+
 	beforeEach(() => {
 		path = '/delete-' + crypto.randomUUID();
 		drive.add({ id: 'delete-tree', name: path.slice(1), mimeType: FOLDER, parents: ['root'] });
 		drive.add({ id: 'delete-sub', name: 'nested', mimeType: FOLDER, parents: ['delete-tree'] });
-		drive.add({ id: 'delete-leaf', name: 'leaf.txt', mimeType: 'text/plain', size: 3, parents: ['delete-sub'] });
+		drive.add({
+			id: 'delete-leaf',
+			name: 'leaf.txt',
+			mimeType: 'text/plain',
+			size: 3,
+			content: new TextEncoder().encode('abc'),
+			modifiedTime: '2024-02-03T04:05:06.000Z',
+			parents: ['delete-sub'],
+		});
 	});
 
-	it.each(['', '/'])('evicts cached descendants with directory suffix "%s" and resolves recreated names to new IDs', async suffix => {
+	it.each(['', '/'])('moves folder tree to Trash with suffix "%s", evicts descendants, and resolves recreated names to new IDs', async suffix => {
 		expect((await head()).status).toBe(200);
 		expect((await head('/nested/')).status).toBe(200);
+		const calls = recordMutations(drive);
 		expect((await request('/dav' + path + suffix, { method: 'DELETE' })).status).toBe(204);
-		expect(drive.findById('delete-leaf')).toBeUndefined();
+		expect(calls).toHaveLength(1);
+		expect(calls[0]).toMatchObject({ method: 'PATCH', path: '/drive/v3/files/delete-tree', body: { trashed: true } });
+		expect(calls[0].url.searchParams.get('supportsAllDrives')).toBe('true');
+		expect(drive.findById('delete-tree')).toMatchObject({ trashed: true, explicitlyTrashed: true });
+		expect(drive.findById('delete-sub')?.trashed).toBe(true);
+		expect(drive.findById('delete-leaf')).toMatchObject({ trashed: true, content: new TextEncoder().encode('abc') });
 		expect((await head()).status).toBe(404);
 		expect((await head('/nested/')).status).toBe(404);
 		expect((await head('/')).status).toBe(404);
@@ -211,38 +228,97 @@ describe('DELETE cache invalidation', () => {
 		const recreated = await head();
 		expect(recreated.status).toBe(200);
 		expect(recreated.headers.get('Content-Length')).toBe('11');
-		const calls = recordMutations(drive);
+		calls.length = 0;
 		expect((await request('/dav' + path + '/nested/leaf.txt', { method: 'DELETE' })).status).toBe(204);
 		expect(calls).toHaveLength(1);
+		expect(calls[0].method).toBe('PATCH');
+		expect(calls[0].body).toEqual({ trashed: true });
 		expect(calls[0].path).not.toBe('/drive/v3/files/delete-leaf');
+		expect(drive.findById('delete-leaf')?.content).toEqual(new TextEncoder().encode('abc'));
 	});
 
-	it.each([403, 500])('preserves upstream %s without deleting the live subtree', async status => {
-		expect((await head()).status).toBe(200);
-		const calls = recordMutations(drive, async call => call.method === 'DELETE' ? new Response(null, { status }) : undefined);
-		expect((await request('/dav' + path, { method: 'DELETE' })).status).toBe(status);
-		expect(calls).toHaveLength(1);
-		expect(drive.findById('delete-leaf')).toBeDefined();
-		expect((await head()).status).toBe(200);
-	});
-
-	it('evicts descendants even when the upstream deletion commits then loses its response', async () => {
+	it('hides deleted folder descendants immediately even while Drive trash flags lag', async () => {
 		expect((await head()).status).toBe(200);
 		recordMutations(drive, async (call, commit) => {
-			if (call.method === 'DELETE') { await commit(); throw new Error('Injected lost DELETE response'); }
+			if (call.body.trashed !== true) return;
+			const response = await commit();
+			for (const id of ['delete-sub', 'delete-leaf']) drive.findById(id)!.trashed = false;
+			return response;
+		});
+		expect((await request('/dav' + path, { method: 'DELETE' })).status).toBe(204);
+		expect((await head()).status).toBe(404);
+		expect((await head('/nested/')).status).toBe(404);
+	});
+
+	it.each([
+		['file', '/nested/leaf.txt', 'delete-leaf'],
+		['folder', '/', 'delete-tree'],
+	] as const)('preserves %s content, timestamps, and dead properties in Trash and supports Drive restore', async (_, suffix, targetId) => {
+		const proppatch = await request('/dav' + path + '/nested/leaf.txt', {
+			method: 'PROPPATCH',
+			body: '<D:propertyupdate xmlns:D="DAV:" xmlns:X="urn:test"><D:set><D:prop><X:label>kept</X:label></D:prop></D:set></D:propertyupdate>',
+		});
+		expect(proppatch.status).toBe(207);
+		const before = drive.findById('delete-leaf')!.modifiedTime;
+		expect((await request('/dav' + path + suffix, { method: 'DELETE' })).status).toBe(204);
+		expect((await head()).status).toBe(404);
+		expect(drive.findById(targetId)?.trashed).toBe(true);
+		expect(drive.findById('delete-leaf')?.modifiedTime).toBe(before);
+
+		const restore = await drive.handle('https://www.googleapis.com/drive/v3/files/' + targetId + '?supportsAllDrives=true', {
+			method: 'PATCH',
+			headers: { Authorization: 'Bearer test-access-token', 'Content-Type': 'application/json' },
+			body: JSON.stringify({ trashed: false }),
+		});
+		expect(restore.status).toBe(200);
+		expect((await head()).status).toBe(200);
+		const get = await request('/dav' + path + '/nested/leaf.txt');
+		expect(get.status).toBe(200);
+		expect(await get.text()).toBe('abc');
+		const propXml = await (await propfind()).text();
+		expect(propXml).toContain('kept');
+	});
+
+	it.each([
+		[403, 'insufficientFilePermissions'],
+		[404, 'notFound'],
+		[500, 'internalError'],
+	] as const)('preserves upstream %i (%s) without trashing the live subtree', async (status, reason) => {
+		expect((await head()).status).toBe(200);
+		const calls = recordMutations(drive, async call => call.method === 'PATCH'
+			? new Response(JSON.stringify({ error: { code: status, message: 'Drive rejection', errors: [{ reason }] } }), { status })
+			: undefined);
+		const res = await request('/dav' + path, { method: 'DELETE' });
+		expect(res.status).toBe(status);
+		expect(await res.text()).toContain(reason);
+		expect(calls).toHaveLength(1);
+		expect(drive.findById('delete-tree')?.trashed).not.toBe(true);
+		expect(drive.findById('delete-leaf')?.trashed).not.toBe(true);
+		expect((await head()).status).toBe(200);
+	});
+
+	it('evicts descendants even when the upstream trash request commits then loses its response', async () => {
+		expect((await head()).status).toBe(200);
+		recordMutations(drive, async (call, commit) => {
+			if (call.method === 'PATCH' && call.body.trashed === true) {
+				await commit();
+				throw new Error('Injected lost DELETE response');
+			}
 		});
 		expect((await request('/dav' + path, { method: 'DELETE' })).status).toBe(500);
-		expect(drive.findById('delete-leaf')).toBeUndefined();
+		expect(drive.findById('delete-leaf')?.trashed).toBe(true);
 		expect((await head()).status).toBe(404);
 	});
 
 	it('keeps file DELETE non-recursive and refreshes the parent listing', async () => {
 		expect((await head()).status).toBe(200);
-		await request('/dav' + path + '/nested/', { method: 'PROPFIND', headers: { Depth: '1' } });
+		await propfind('/nested/', '1');
 		expect((await request('/dav' + path + '/nested/leaf.txt', { method: 'DELETE' })).status).toBe(204);
+		expect(drive.findById('delete-leaf')?.trashed).toBe(true);
+		expect(drive.findById('delete-sub')?.trashed).not.toBe(true);
 		expect((await head()).status).toBe(404);
 		expect((await head('/nested/')).status).toBe(200);
-		const listing = await request('/dav' + path + '/nested/', { method: 'PROPFIND', headers: { Depth: '1' } });
+		const listing = await propfind('/nested/', '1');
 		expect(await listing.text()).not.toContain('leaf.txt');
 	});
 

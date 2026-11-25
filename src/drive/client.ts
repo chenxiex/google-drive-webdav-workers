@@ -72,11 +72,8 @@ export class DriveClient {
         });
     }
 
-    async deleteFile(id: string): Promise<Response> {
-        return fetch('https://www.googleapis.com/drive/v3/files/' + id + '?supportsAllDrives=true', {
-            method: 'DELETE',
-            headers: { Authorization: 'Bearer ' + (await this.getAccessToken()) },
-        });
+    async trashFile(id: string): Promise<Response> {
+        return this.updateFileMetadata(id, { trashed: true }, 'supportsAllDrives=true&fields=id');
     }
 
     async initResumableUpload(options: {

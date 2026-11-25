@@ -101,7 +101,14 @@ Verified with rclone v1.76.0: uploading a 26,214,523-byte file produced `PATCH` 
 - `MOVE` trashes the previous destination, then renames/moves the source by ID. `COPY` stages a uniquely named `.webdav-copy-<UUID>` copy in the destination folder, trashes the previous destination, then renames the staged copy to its final name (`COPY` to a new path uses one copy request). Collection `COPY` (`403`), overlapping trees, and same-ID targets are rejected before any mutation.
 - Replacement never permanently deletes the previous destination. If the final rename/move fails with a definitive `4xx` (other than `408`), the worker attempts to restore the trashed destination (`trashed: false`) and reports whether restore succeeded or failed. Restoring a replaced folder also restores descendants that had been explicitly trashed prior to replacement.
 - Ambiguous errors (network errors, `5xx`, `408`, or unreadable/mismatched `id` responses) return an error without retry or rollback, including the known target/stage IDs and `.webdav-copy-<UUID>` recovery name in the response text. Inspect Drive before retrying or deleting staged copies.
-- This is a multi-request workflow, not an atomic transaction. Local metadata and descendant caches are evicted in `finally`. Ordinary `DELETE` still permanently deletes resources in Drive.
+- This is a multi-request workflow, not an atomic transaction. Local metadata and descendant caches are evicted in `finally`. Ordinary `DELETE` likewise moves resources to Drive Trash (see [DELETE](#delete)).
+
+## DELETE
+
+- `DELETE` moves the target file or folder to Google Drive Trash via `PATCH /drive/v3/files/{id}?supportsAllDrives=true&fields=id` with `{ trashed: true }` (never permanently deleting items), returning `204 No Content` on success (`403` on the mount root `/`, `404` when missing or already trashed, and preserving upstream Drive error statuses such as `403`).
+- Trashing a folder moves the entire folder tree to Trash while preserving content, `modifiedTime`, and `appProperties` (dead properties); local metadata, descendant, and parent listing caches are evicted in `finally`, so deleted paths return `404` immediately even while Drive propagates descendant `trashed` flags asynchronously.
+- Trashed items and folders can be restored in Google Drive (`trashed: false`) with their original Drive IDs, bytes, timestamps, and dead properties intact (note Drive's settled folder-restore behavior also clears `explicitlyTrashed` on previously trashed descendants).
+- Permissions: trashing requires `supportsAllDrives=true` and owner permission in My Drive or Content Manager / Manager permissions in a Shared Drive.
 
 ## Metadata and listing caches
 

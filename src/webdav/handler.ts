@@ -98,8 +98,12 @@ export async function handleDelete(drive: DriveClient, request: Request): Promis
     const metadata = await drive.getMetadata(fpath);
     if (metadata) {
         try {
-            const response = await drive.deleteFile(metadata.id);
-            return new Response(null, { status: response.status });
+            const response = await drive.trashFile(metadata.id);
+            if (response.ok) {
+                await response.body?.cancel();
+                return new Response(null, { status: 204 });
+            }
+            return new Response(await response.text(), { status: response.status });
         } finally {
             // Evict even after an ambiguous upstream failure. Clear local paths
             // first, and never replace the Drive outcome with a cache error.

@@ -31,7 +31,7 @@
 - [ ] **`oc:checksums` 只读动态计算且 `PROPPATCH` 静默忽略（`10.2A`）**
   - `PROPFIND` 中的 `{http://owncloud.org/ns}checksums` 始终基于 Google Drive 真实返回的 `md5Checksum` / `sha1Checksum` / `sha256Checksum` 动态拼装；对 `PROPPATCH` 写入 `oc:checksums`（如 `rclone` 与 `DAV:lastmodified` 同批发送）不落盘至 `appProperties`，直接作为空操作返回 `200`，避免污染摘要或因 `403`/`424` 阻断 `mtime` 更新。
 
-- [ ] **对齐已知长度大文件 PUT 的校验逻辑**
+- [x] **对齐已知长度大文件 PUT 的校验逻辑**
   - 目前仅未知长度流式 `PUT`（`putUnknownLength`）严格校验分块响应状态、308 `Range` 及最终完成状态；已知长度 `PUT` 路径存在四处缺陷：
     - 使用 `parseInt` 解析 `Content-Length`，非法或负值会绕过循环返回假成功 `201`/`204`（应严格校验非负安全整数并在非法时返回 `400`）；
     - 无尾斜杠路径覆盖已有目录（`metadata?.mimeType === FOLDER_MIME`）未提前返回 `405`/`409`；

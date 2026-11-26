@@ -15,6 +15,35 @@ const request = (path: string, init: RequestInit = {}): Promise<Response> =>
 		headers: { ...AUTH, ...(init.headers as Record<string, string> | undefined) },
 	});
 
+// Use the handler directly for framing/disconnect tests: SELF's HTTP bridge
+// can reject malformed Content-Length headers or turn producer errors into EOF.
+async function directPut(path: string, body: BodyInit | null, headers: Record<string, string> = {}): Promise<Response> {
+	const ctx = createExecutionContext();
+	const response = await worker.fetch(new Request(ORIGIN + path, {
+		method: 'PUT',
+		headers: { ...AUTH, ...headers },
+		body,
+	}), env as Env, ctx);
+	await waitOnExecutionContext(ctx);
+	return response;
+}
+
+// Zero queueing makes the producer's reads observable independently of
+// the request transport's own buffering.
+function stream(size: number, onPull = () => {}, onCancel = () => {}): ReadableStream<Uint8Array> {
+	let offset = 0;
+	return new ReadableStream({
+		pull(controller) {
+			onPull();
+			if (offset === size) { controller.close(); return; }
+			const length = Math.min(256 * 1024, size - offset);
+			controller.enqueue(new Uint8Array(length).fill(97));
+			offset += length;
+		},
+		cancel: onCancel,
+	}, { highWaterMark: 0 });
+}
+
 beforeEach(() => {
 	drive = new MockDrive();
 	seedStandardDrive(drive);
@@ -108,33 +137,164 @@ describe('PUT and MKCOL', () => {
 		expect(drive.children('root').some(f => f.name === 'missing')).toBe(false);
 		expect(drive.findById('file-a')?.size).toBe(123);
 	});
+
+	it.each([
+		['single-chunk new', '/webdav/resumable-single.dat', 6 * MEGA, 201],
+		['exact-chunk new', '/webdav/resumable-exact.dat', UPLOAD_CHUNK_SIZE, 201],
+		['overwrite existing', '/webdav/a.txt', 6 * MEGA, 204],
+	] as const)('PUT with known Content-Length > 5 MiB (%s) completes with %i', async (_, path, size, expectedStatus) => {
+		const res = await request(path, {
+			method: 'PUT',
+			headers: { 'Content-Type': 'application/octet-stream' },
+			body: 'x'.repeat(size),
+		});
+		expect(res.status).toBe(expectedStatus);
+		const file = drive.children('root').find(f => f.name === path.split('/').at(-1));
+		expect(Number(file?.size)).toBe(size);
+		expect(file?.content?.every(byte => byte === 120)).toBe(true);
+	});
+
+	it.each(['-1', 'abc', '12abc', '1.5', '', String(Number.MAX_SAFE_INTEGER + 1)])(
+		'rejects invalid Content-Length (%j) with 400 before calling Drive',
+		async contentLength => {
+			const spy = vi.spyOn(drive, 'handle');
+			const res = await directPut('/webdav/invalid-len.txt', 'hello', { 'Content-Length': contentLength });
+			expect(res.status).toBe(400);
+			expect(spy).not.toHaveBeenCalled();
+			expect(drive.children('root').some(f => f.name === 'invalid-len.txt')).toBe(false);
+		},
+	);
+
+	it.each([
+		['/webdav/docs', 'empty', '', {}],
+		['/webdav/docs', 'small', 'hello', { 'Content-Type': 'text/plain' }],
+		['/webdav/docs', 'unknown-length', () => stream(3), {}],
+		['/webdav/docs', 'large-resumable', () => stream(6 * MEGA), { 'Content-Length': String(6 * MEGA) }],
+		['/webdav/docs/', 'trailing-slash', 'hello', { 'Content-Type': 'text/plain' }],
+	] as const)('rejects PUT overwriting existing folder %s (%s) with 405 without mutating Drive', async (path, _kind, payload, headers) => {
+		const methods: string[] = [];
+		const original = drive.handle.bind(drive);
+		vi.spyOn(drive, 'handle').mockImplementation((input, init) => {
+			methods.push(new Request(input, init).method);
+			return original(input, init);
+		});
+		const body = typeof payload === 'function' ? payload() : payload;
+		const res = path.endsWith('/') || typeof payload === 'string'
+			? await request(path, { method: 'PUT', headers, body })
+			: await directPut(path, body, headers);
+		expect(res.status).toBe(405);
+		if (!path.endsWith('/')) {
+			const allow = res.headers.get('Allow')!.split(',').map(m => m.trim());
+			expect(allow).not.toContain('PUT');
+			expect(allow).toContain('PROPFIND');
+		}
+		expect(methods.every(method => method === 'GET')).toBe(true);
+		expect(drive.findById('folder-docs')?.trashed).not.toBe(true);
+	});
+});
+
+describe('known-length PUT validation', () => {
+	it.each(['init', 'init-403', 'missing-location', 'chunk', 'range', 'early-complete', 'final-incomplete'] as const)(
+		'stops without reporting false success after %s failure on > 5 MiB PUT',
+		async failure => {
+			let chunks = 0;
+			let produced = 0;
+			const cancel = vi.fn();
+			const original = drive.handle.bind(drive);
+			vi.spyOn(drive, 'handle').mockImplementation((input, init) => {
+				const url = String(input);
+				if (!url.includes('uploadType=resumable')) return original(input, init);
+				if (init?.method !== 'PUT') {
+					if (failure === 'init') return Promise.resolve(new Response('injected', { status: 503 }));
+					if (failure === 'init-403') return Promise.resolve(new Response('forbidden', { status: 403 }));
+					if (failure === 'missing-location') return Promise.resolve(new Response(null, { status: 200 }));
+					return original(input, init);
+				}
+				chunks++;
+				if (failure === 'chunk') return Promise.resolve(new Response('injected', { status: 503 }));
+				if (failure === 'range') return Promise.resolve(new Response(null, { status: 308, headers: { Range: 'bytes=0-2' } }));
+				if (failure === 'early-complete') return Promise.resolve(new Response('{}', { status: 200 }));
+				return Promise.resolve(new Response(null, { status: 308, headers: { Range: `bytes=0-${6 * MEGA - 1}` } }));
+			});
+			const size = failure === 'final-incomplete' ? 6 * MEGA : 2 * UPLOAD_CHUNK_SIZE + 3;
+			const result = await directPut('/webdav/known-failed.dat', stream(size, () => produced++, cancel), {
+				'Content-Length': String(size),
+			});
+			const expectedStatus = failure === 'init' || failure === 'chunk' ? 503 : failure === 'init-403' ? 403 : 502;
+			expect(result.status).toBe(expectedStatus);
+			const expectedChunks = failure === 'init' || failure === 'init-403' || failure === 'missing-location' ? 0 : 1;
+			expect(chunks).toBe(expectedChunks);
+			expect(drive.children('root').some(file => file.name === 'known-failed.dat')).toBe(false);
+			if (failure !== 'final-incomplete') {
+				expect(produced).toBeLessThan(size / (256 * 1024));
+				expect(cancel).toHaveBeenCalledOnce();
+			}
+		},
+	);
+
+	it.each([
+		['null-body-nonzero', 10, null],
+		['empty-stream-large', 6 * MEGA, () => stream(0)],
+		['zero-length-nonempty-body', 0, () => stream(3)],
+		['small-truncated', 10, () => stream(3)],
+		['small-oversized', 10, () => stream(15)],
+		['resumable-single-truncated', 6 * MEGA, () => stream(3)],
+		['chunk-boundary-truncated', 11 * MEGA, () => stream(UPLOAD_CHUNK_SIZE)],
+		['resumable-second-chunk-truncated', 11 * MEGA, () => stream(UPLOAD_CHUNK_SIZE + 3)],
+		['resumable-oversized', UPLOAD_CHUNK_SIZE, () => stream(UPLOAD_CHUNK_SIZE + 1)],
+	] as const)(
+		'rejects Content-Length mismatch (%s) with 400 without committing a file',
+		async (_label, declaredLength, makeBody) => {
+			const original = drive.handle.bind(drive);
+			const ranges: string[] = [];
+			vi.spyOn(drive, 'handle').mockImplementation((input, init) => {
+				const range = new Headers(init?.headers).get('Content-Range');
+				if (range) ranges.push(range);
+				return original(input, init);
+			});
+			const body = makeBody ? makeBody() : null;
+			const res = await directPut('/webdav/bad-body.dat', body, { 'Content-Length': String(declaredLength) });
+			expect(res.status).toBe(400);
+			expect(drive.children('root').some(file => file.name === 'bad-body.dat')).toBe(false);
+			if (declaredLength === 11 * MEGA) {
+				expect(ranges.length).toBeLessThanOrEqual(1);
+			}
+		},
+	);
+
+	it.each([10, 11 * MEGA])(
+		'returns 502 without committing when incoming stream errors for Content-Length %i',
+		async declaredLength => {
+			let pulls = 0;
+			const failAfter = declaredLength <= 5 * MEGA ? 1 : 43;
+			const body = new ReadableStream<Uint8Array>({
+				pull(controller) {
+					if (++pulls > failAfter) { controller.error(new Error('injected input failure')); return; }
+					controller.enqueue(new Uint8Array(declaredLength <= 5 * MEGA ? 4 : 256 * 1024));
+				},
+			}, { highWaterMark: 0 });
+			const res = await directPut('/webdav/input-error.dat', body, { 'Content-Length': String(declaredLength) });
+			expect(res.status).toBe(502);
+			expect(drive.children('root').some(file => file.name === 'input-error.dat')).toBe(false);
+		},
+	);
+
+	it('forwards upstream error without deadlocking when <= 5 MiB upload rejects before consuming body', async () => {
+		const size = 5 * MEGA;
+		const original = drive.handle.bind(drive);
+		vi.spyOn(drive, 'handle').mockImplementation((input, init) => {
+			if (String(input).includes('uploadType=multipart')) {
+				return Promise.resolve(new Response('forbidden', { status: 403 }));
+			}
+			return original(input, init);
+		});
+		const res = await directPut('/webdav/early-reject.dat', stream(size), { 'Content-Length': String(size) });
+		expect(res.status).toBe(403);
+		expect(drive.children('root').some(file => file.name === 'early-reject.dat')).toBe(false);
+	});
 });
 
 describe('unknown-length PUT', () => {
-	// Use the handler directly for disconnect/error tests: SELF's HTTP bridge
-	// can turn a producer error into EOF before the handler sees it.
-	async function directPut(path: string, body: ReadableStream<Uint8Array>): Promise<Response> {
-		const ctx = createExecutionContext();
-		const response = await worker.fetch(new Request(ORIGIN + path, { method: 'PUT', headers: AUTH, body }), env as Env, ctx);
-		await waitOnExecutionContext(ctx);
-		return response;
-	}
-
-	// Zero queueing makes the producer's reads observable independently of
-	// the request transport's own buffering.
-	function stream(size: number, onPull = () => {}, onCancel = () => {}): ReadableStream<Uint8Array> {
-		let offset = 0;
-		return new ReadableStream({
-			pull(controller) {
-				onPull();
-				if (offset === size) { controller.close(); return; }
-				const length = Math.min(256 * 1024, size - offset);
-				controller.enqueue(new Uint8Array(length).fill(97));
-				offset += length;
-			},
-			cancel: onCancel,
-		}, { highWaterMark: 0 });
-	}
 
 	it.each([
 		['partial', 2 * UPLOAD_CHUNK_SIZE + 3, '/webdav/stream.dat', 201],

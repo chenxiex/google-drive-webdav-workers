@@ -1,6 +1,13 @@
 import { type DriveClient } from '../drive/client';
-import { StatusError, errorStatus, getUrl, splitPath } from '../http';
+import { FOLDER_MIME } from '../drive/types';
+import { StatusError, getUrl, splitPath } from '../http';
 import { uploadChunks } from './upload-stream';
+
+function parseContentLength(value: string | null): number | null {
+    if (value === null || !/^\d+$/.test(value)) return null;
+    const parsed = Number(value);
+    return Number.isSafeInteger(parsed) ? parsed : null;
+}
 
 export async function putEmpty(
     drive: DriveClient,
@@ -32,7 +39,7 @@ export async function putEmpty(
     return new Response(null, { status: response.status });
 }
 
-async function putUnknownLength(
+async function putSmallKnownLength(
     drive: DriveClient,
     body: ReadableStream<Uint8Array>,
     fpath: string,
@@ -40,25 +47,134 @@ async function putUnknownLength(
     parentId: string,
     existingFileId: string | null,
     mimeType: string,
+    contentLength: number,
+): Promise<Response> {
+    const boundary = '-------webdav_boundary';
+    let prefix: Uint8Array | null = null;
+    let suffix: Uint8Array | null = null;
+    let totalLength = contentLength;
+    if (!existingFileId) {
+        const fileMetadata = JSON.stringify({ name, parents: [parentId], mimeType });
+        const encoder = new TextEncoder();
+        prefix = encoder.encode(`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${fileMetadata}\r\n--${boundary}\r\nContent-Type: ${mimeType}\r\n\r\n`);
+        suffix = encoder.encode(`\r\n--${boundary}--`);
+        totalLength += prefix.byteLength + suffix.byteLength;
+    }
+
+    const { readable, writable } = new FixedLengthStream(totalLength);
+    const writer = writable.getWriter();
+    const uploadPromise = existingFileId
+        ? drive.uploadMediaStream(existingFileId, mimeType, readable)
+        : drive.uploadMultipartStream(boundary, readable);
+    // Unblock writer backpressure if the upstream request rejects without consuming the stream.
+    void uploadPromise.then(
+        res => (!res.ok ? readable.cancel().catch(() => undefined) : undefined),
+        () => readable.cancel().catch(() => undefined),
+    );
+
+    const reader = body.getReader();
+    let clientError: StatusError | null = null;
+    let finishedReading = false;
+    try {
+        if (prefix) await writer.write(prefix);
+        let received = 0;
+        while (true) {
+            let next: ReadableStreamReadResult<Uint8Array>;
+            try {
+                next = await reader.read();
+            } catch {
+                clientError = new StatusError('Upload failed', 502);
+                throw clientError;
+            }
+            if (next.done) {
+                finishedReading = true;
+                break;
+            }
+            const value = next.value;
+            if (!value.length) continue;
+            if (value.length > contentLength - received) {
+                clientError = new StatusError('Request body exceeds Content-Length', 400);
+                throw clientError;
+            }
+            await writer.write(value);
+            received += value.length;
+        }
+        if (received !== contentLength) {
+            clientError = new StatusError('Incomplete request body', 400);
+            throw clientError;
+        }
+        if (suffix) await writer.write(suffix);
+        await writer.close();
+    } catch (err) {
+        if (!finishedReading) {
+            try { await reader.cancel(); } catch {}
+        }
+        try { await writer.abort(err); } catch {}
+        if (clientError) {
+            await uploadPromise.catch(() => undefined);
+            return new Response(clientError.message, { status: clientError.status });
+        }
+    } finally {
+        reader.releaseLock();
+    }
+
+    let res: Response;
+    try {
+        res = await uploadPromise;
+    } catch {
+        return new Response('Upload failed', { status: 502 });
+    }
+    if (res.ok) {
+        await res.body?.cancel().catch(() => undefined);
+        await drive.cache.invalidateFileAndParent(fpath, parentId);
+        return new Response(null, { status: existingFileId ? 204 : 201 });
+    }
+    return new Response(await res.text(), { status: res.status });
+}
+
+async function putResumable(
+    drive: DriveClient,
+    body: ReadableStream<Uint8Array>,
+    fpath: string,
+    name: string,
+    parentId: string,
+    existingFileId: string | null,
+    mimeType: string,
+    contentLength?: number,
 ): Promise<Response> {
     let uploadUrl: string | null = null;
     let offset = 0;
     try {
         for await (const { bytes, final } of uploadChunks(body)) {
-            if (!bytes.length) return putEmpty(drive, fpath, name, parentId, existingFileId, mimeType);
+            if (!bytes.length) {
+                if (contentLength !== undefined) {
+                    return new Response('Incomplete request body', { status: 400 });
+                }
+                return putEmpty(drive, fpath, name, parentId, existingFileId, mimeType);
+            }
+            const end = offset + bytes.length;
+            if (contentLength !== undefined && (end > contentLength || (final ? end !== contentLength : end === contentLength))) {
+                return new Response('Request body does not match Content-Length', { status: 400 });
+            }
             if (!uploadUrl) {
-                const init = await drive.initResumableUpload({ existingFileId, name, parentId, mimeType });
-                if (!init.ok) return new Response('Failed to initiate Google Drive upload', { status: init.status });
+                const init = await drive.initResumableUpload({ existingFileId, name, parentId, mimeType, contentLength });
+                await init.body?.cancel().catch(() => undefined);
+                if (!init.ok) {
+                    return new Response('Failed to initiate Google Drive upload', {
+                        status: init.status >= 400 && init.status <= 599 ? init.status : 502,
+                    });
+                }
                 uploadUrl = init.headers.get('Location');
                 if (!uploadUrl) return new Response('Failed to get Resumable Upload URL', { status: 502 });
             }
-            const end = offset + bytes.length;
+            const total = contentLength ?? (final ? end : '*');
             const response = await drive.uploadResumableChunk(
                 uploadUrl,
                 bytes.length,
-                `bytes ${offset}-${end - 1}/${final ? end : '*'}`,
+                `bytes ${offset}-${end - 1}/${total}`,
                 bytes,
             );
+            await response.body?.cancel().catch(() => undefined);
             // Never report success or continue from an unconfirmed offset.
             // Ambiguous failures are not retried: the upload may have committed.
             if (final ? response.status !== 200 && response.status !== 201 : response.status !== 308) {
@@ -82,140 +198,54 @@ async function putUnknownLength(
 export async function handlePut(drive: DriveClient, request: Request): Promise<Response> {
     const { fpath } = getUrl(request.url, drive.config.basePath);
     if (fpath.slice(-1) === '/') return new Response(null, { status: 405 });
+    const rawContentLength = request.headers.get('Content-Length');
+    const contentLength = parseContentLength(rawContentLength);
+    if (rawContentLength !== null && contentLength === null) {
+        return new Response('Content-Length must be a nonnegative safe integer', { status: 400 });
+    }
     const mimeType = request.headers.get('Content-Type') || 'application/octet-stream';
-
-    const contentLength = parseInt(request.headers.get('Content-Length') || '0', 10);
     const body: ReadableStream<Uint8Array> | null = request.body;
 
     const { name, parent } = splitPath(fpath);
     const parentMetadata = await drive.getFolderMetadata(parent);
     if (!parentMetadata) return new Response('Parent collection is missing or not a collection', { status: 409 });
     const metadata = await drive.getMetadata(fpath);
-    const existingFileId = metadata?.id || null;
-    if (body && !request.headers.has('Content-Length')) {
-        return putUnknownLength(drive, body, fpath, name, parentMetadata.id, existingFileId, mimeType);
+    if (metadata?.mimeType === FOLDER_MIME) {
+        return new Response('Cannot overwrite a collection', {
+            status: 405,
+            headers: { Allow: 'HEAD, OPTIONS, PROPFIND, PROPPATCH, DELETE, MOVE, COPY, POST' },
+        });
     }
-    if (contentLength === 0 || !body) {
+    const existingFileId = metadata?.id || null;
+
+    if (contentLength === null) {
+        if (!body) return putEmpty(drive, fpath, name, parentMetadata.id, existingFileId, mimeType);
+        return putResumable(drive, body, fpath, name, parentMetadata.id, existingFileId, mimeType);
+    }
+    if (contentLength === 0) {
+        if (body) {
+            const reader = body.getReader();
+            let done = false;
+            try {
+                while (true) {
+                    const next = await reader.read();
+                    if (next.done) { done = true; break; }
+                    if (next.value.length) return new Response('Request body exceeds Content-Length', { status: 400 });
+                }
+            } catch {
+                return new Response('Upload failed', { status: 502 });
+            } finally {
+                if (!done) { try { await reader.cancel(); } catch {} }
+                reader.releaseLock();
+            }
+        }
         return putEmpty(drive, fpath, name, parentMetadata.id, existingFileId, mimeType);
     }
+    if (!body) {
+        return new Response('Incomplete request body', { status: 400 });
+    }
     if (contentLength <= 5 * 1024 * 1024) {
-        const reader = body.getReader();
-        if (existingFileId) {
-            const { readable, writable } = new FixedLengthStream(contentLength);
-            const writer = writable.getWriter();
-            const uploadPromise = drive.uploadMediaStream(existingFileId, mimeType, readable);
-            try {
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) break;
-                    await writer.write(value);
-                }
-                await writer.close();
-            } catch (err) { try { await reader.cancel(); } catch { } await writer.abort(err); } finally { reader.releaseLock(); }
-            const res = await uploadPromise;
-            if (res.ok) {
-                await drive.cache.invalidateFileAndParent(fpath, parentMetadata.id);
-                return new Response(null, { status: 204 });
-            }
-            return new Response(await res.text(), { status: res.status });
-        } else {
-            const boundary = '-------webdav_boundary';
-            const fileMetadata = JSON.stringify({ name: name, parents: [parentMetadata.id], mimeType: mimeType });
-            const encoder = new TextEncoder();
-            const preArray = encoder.encode(`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${fileMetadata}\r\n--${boundary}\r\nContent-Type: ${mimeType}\r\n\r\n`);
-            const postArray = encoder.encode(`\r\n--${boundary}--`);
-            const totalLength = preArray.byteLength + contentLength + postArray.byteLength;
-            const { readable, writable } = new FixedLengthStream(totalLength);
-            const writer = writable.getWriter();
-            const uploadPromise = drive.uploadMultipartStream(boundary, readable);
-
-            try {
-                await writer.write(preArray);
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) break;
-                    await writer.write(value);
-                }
-                await writer.write(postArray);
-                await writer.close();
-            } catch (err) { try { await reader.cancel(); } catch { } await writer.abort(err); } finally { reader.releaseLock(); }
-
-            const res = await uploadPromise;
-            if (res.ok) {
-                await drive.cache.invalidateFileAndParent(fpath, parentMetadata.id);
-                return new Response(null, { status: 201 });
-            }
-            return new Response(await res.text(), { status: res.status });
-        }
+        return putSmallKnownLength(drive, body, fpath, name, parentMetadata.id, existingFileId, mimeType, contentLength);
     }
-
-    const initRes = await drive.initResumableUpload({ existingFileId, name, parentId: parentMetadata.id, mimeType, contentLength });
-
-    const uploadUrl = initRes.headers.get('Location');
-    if (!uploadUrl) return new Response('Failed to get Resumable Upload URL', { status: 500 });
-
-    const reader = body.getReader();
-    const CHUNK_SIZE = 10 * 1024 * 1024;
-    let offset = 0;
-    let residualBuffer: Uint8Array | null = null;
-
-    try {
-        while (offset < contentLength) {
-            const currentChunkSize = Math.min(CHUNK_SIZE, contentLength - offset);
-            const { readable, writable } = new FixedLengthStream(currentChunkSize);
-            const writer = writable.getWriter();
-
-            const uploadPromise = drive.uploadResumableChunk(
-                uploadUrl,
-                currentChunkSize,
-                `bytes ${offset}-${offset + currentChunkSize - 1}/${contentLength}`,
-                readable,
-                true,
-            );
-
-            let bytesSentInChunk = 0;
-            while (bytesSentInChunk < currentChunkSize) {
-                let data: Uint8Array;
-                if (residualBuffer) {
-                    data = residualBuffer;
-                    residualBuffer = null;
-                } else {
-                    const { done, value } = await reader.read();
-                    if (done) break;
-                    data = value;
-                }
-
-                const remaining = currentChunkSize - bytesSentInChunk;
-                if (data.length <= remaining) {
-                    await writer.write(data);
-                    bytesSentInChunk += data.length;
-                } else {
-                    await writer.write(data.subarray(0, remaining));
-                    residualBuffer = data.subarray(remaining);
-                    bytesSentInChunk += remaining;
-                }
-            }
-            await writer.close();
-            const chunkRes = await uploadPromise;
-
-            if (chunkRes.status === 308) {
-                // Intermediate chunk accepted (strict Range verification tracked in todo.md).
-            } else if (chunkRes.status === 200 || chunkRes.status === 201) {
-                // completed; offset advances and loop exits
-            } else {
-                throw new StatusError(`Google Drive chunk failed: ${await chunkRes.text()}`, chunkRes.status);
-            }
-            offset += currentChunkSize;
-        }
-
-        await drive.cache.invalidateFileAndParent(fpath, parentMetadata.id);
-        return new Response(null, { status: existingFileId ? 204 : 201 });
-
-    } catch (err: any) {
-        console.error('Upload Failed:', err);
-        try { await reader.cancel(); } catch { }
-        return new Response(err?.message || 'Upload Failed', { status: errorStatus(err) });
-    } finally {
-        if (reader) reader.releaseLock();
-    }
+    return putResumable(drive, body, fpath, name, parentMetadata.id, existingFileId, mimeType, contentLength);
 }

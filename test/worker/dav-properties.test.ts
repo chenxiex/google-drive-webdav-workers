@@ -7,10 +7,10 @@ import { MockDrive } from '../support/mock-drive';
 const DAV = 'DAV:';
 let drive: MockDrive;
 const request = (path: string, init: RequestInit = {}) => SELF.fetch(ORIGIN + path, { ...init, headers: { ...AUTH, ...(init.headers as Record<string, string>) } });
-const patch = (operations: string, path = '/dav/a.txt') => request(path, { method: 'PROPPATCH', body: `<D:propertyupdate xmlns:D="DAV:" xmlns:X="urn:test" xmlns:G="urn:google:drive">${operations}</D:propertyupdate>` });
+const patch = (operations: string, path = '/webdav/a.txt') => request(path, { method: 'PROPPATCH', body: `<D:propertyupdate xmlns:D="DAV:" xmlns:X="urn:test" xmlns:G="urn:google:drive">${operations}</D:propertyupdate>` });
 const set = (properties: string) => `<D:set><D:prop>${properties}</D:prop></D:set>`;
 const remove = (properties: string) => `<D:remove><D:prop>${properties}</D:prop></D:remove>`;
-const find = (properties?: string, path = '/dav/a.txt') => request(path, { method: 'PROPFIND', headers: { Depth: '0' }, ...(properties !== undefined ? { body: `<D:propfind xmlns:D="DAV:" xmlns:X="urn:test" xmlns:G="urn:google:drive"><D:prop>${properties}</D:prop></D:propfind>` } : {}) });
+const find = (properties?: string, path = '/webdav/a.txt') => request(path, { method: 'PROPFIND', headers: { Depth: '0' }, ...(properties !== undefined ? { body: `<D:propfind xmlns:D="DAV:" xmlns:X="urn:test" xmlns:G="urn:google:drive"><D:prop>${properties}</D:prop></D:propfind>` } : {}) });
 const xml = (text: string) => new DOMParser().parseFromString(text, 'application/xml');
 const value = (text: string, namespace: string, name: string) => xml(text).getElementsByTagNameNS(namespace, name)[0]?.textContent;
 function propStatus(text: string, namespace: string, name: string): string | null | undefined {
@@ -46,7 +46,7 @@ describe('persisted WebDAV properties', () => {
     it('returns dead properties in allprop, propname, allprop/include and deduplicates by expanded name', async () => {
         await patch(set('<X:label>secret-value</X:label>'));
         expect(value(await (await find()).text(), 'urn:test', 'label')).toBe('secret-value');
-        const names = await request('/dav/a.txt', { method: 'PROPFIND', headers: { Depth: '0' }, body: '<propfind xmlns="DAV:"><propname/></propfind>' });
+        const names = await request('/webdav/a.txt', { method: 'PROPFIND', headers: { Depth: '0' }, body: '<propfind xmlns="DAV:"><propname/></propfind>' });
         const namesBody = await names.text();
         expect(value(namesBody, 'urn:test', 'label')).toBe('');
         expect(namesBody).not.toContain('secret-value');
@@ -55,27 +55,27 @@ describe('persisted WebDAV properties', () => {
         expect(explicit.getElementsByTagNameNS('urn:test', 'label').length).toBe(1);
         expect(explicit.getElementsByTagNameNS('urn:test', 'missing').length).toBe(1);
 
-        const included = await request('/dav/a.txt', { method: 'PROPFIND', headers: { Depth: '0' }, body: '<D:propfind xmlns:D="DAV:" xmlns:X="urn:test" xmlns:Y="urn:test"><D:allprop/><D:include><X:label/><Y:label/><X:missing/><Y:missing/></D:include></D:propfind>' });
+        const included = await request('/webdav/a.txt', { method: 'PROPFIND', headers: { Depth: '0' }, body: '<D:propfind xmlns:D="DAV:" xmlns:X="urn:test" xmlns:Y="urn:test"><D:allprop/><D:include><X:label/><Y:label/><X:missing/><Y:missing/></D:include></D:propfind>' });
         const includeDocument = xml(await included.text());
         expect(includeDocument.getElementsByTagNameNS('urn:test', 'label').length).toBe(1);
         expect(includeDocument.getElementsByTagNameNS('urn:test', 'missing').length).toBe(1);
-        expect(value(await (await request('/dav/a.txt', { method: 'PROPFIND', headers: { Depth: '0' }, body: '<D:propfind xmlns:D="DAV:" xmlns:X="urn:test"><D:allprop/><D:include><X:missing/></D:include></D:propfind>' })).text(), 'urn:test', 'label')).toBe('secret-value');
+        expect(value(await (await request('/webdav/a.txt', { method: 'PROPFIND', headers: { Depth: '0' }, body: '<D:propfind xmlns:D="DAV:" xmlns:X="urn:test"><D:allprop/><D:include><X:missing/></D:include></D:propfind>' })).text(), 'urn:test', 'label')).toBe('secret-value');
     });
 
     it('manages displayname without renaming and preserves absence tombstone across COPY', async () => {
         await patch(set('<D:displayname>Friendly title</D:displayname>'));
         expect(source().name).toBe('a.txt');
         expect(value(await (await find()).text(), DAV, 'displayname')).toBe('Friendly title');
-        expect((await find(undefined, '/dav/Friendly%20title')).status).toBe(404);
+        expect((await find(undefined, '/webdav/Friendly%20title')).status).toBe(404);
 
         await patch(remove('<D:displayname/>'));
         expect(propStatus(await (await find('<D:displayname/>')).text(), DAV, 'displayname')).toBe('HTTP/1.1 404 Not Found');
         expect(xml(await (await find()).text()).getElementsByTagNameNS(DAV, 'displayname').length).toBe(0);
-        const names = await request('/dav/a.txt', { method: 'PROPFIND', headers: { Depth: '0' }, body: '<propfind xmlns="DAV:"><propname/></propfind>' });
+        const names = await request('/webdav/a.txt', { method: 'PROPFIND', headers: { Depth: '0' }, body: '<propfind xmlns="DAV:"><propname/></propfind>' });
         expect(xml(await names.text()).getElementsByTagNameNS(DAV, 'displayname').length).toBe(0);
 
-        const destination = '/dav/displayname-absent-copy.txt';
-        expect((await request('/dav/a.txt', { method: 'COPY', headers: { Destination: ORIGIN + destination } })).status).toBe(201);
+        const destination = '/webdav/displayname-absent-copy.txt';
+        expect((await request('/webdav/a.txt', { method: 'COPY', headers: { Destination: ORIGIN + destination } })).status).toBe(201);
         expect(propStatus(await (await find('<D:displayname/>', destination)).text(), DAV, 'displayname')).toBe('HTTP/1.1 404 Not Found');
         expect(xml(await (await find(undefined, destination)).text()).getElementsByTagNameNS(DAV, 'displayname').length).toBe(0);
 
@@ -111,12 +111,12 @@ describe('persisted WebDAV properties', () => {
         expect(propStatus(absentBody, 'urn:google:drive', 'folderColorRgb')).toBe('HTTP/1.1 200 OK');
         for (const [input, init] of mutationCalls(spy)) expect(await new Request(input, init).json()).toEqual({});
 
-        await patch(set('<G:folderColorRgb>#ff0000</G:folderColorRgb>'), '/dav/docs/');
+        await patch(set('<G:folderColorRgb>#ff0000</G:folderColorRgb>'), '/webdav/docs/');
         expect(drive.findById('folder-docs')!.folderColorRgb).toBe('#f83a22');
 
         const tags: (string | null | undefined)[] = [];
         for (const content of ['abcd', 'efgh']) {
-            expect((await request('/dav/a.txt', { method: 'PUT', body: content })).status).toBe(204);
+            expect((await request('/webdav/a.txt', { method: 'PUT', body: content })).status).toBe(204);
             const patchBody = await (await patch(set('<D:lastmodified>1577836800</D:lastmodified>'))).text();
             expect(propStatus(patchBody, DAV, 'lastmodified')).toBe('HTTP/1.1 200 OK');
             expect(source().size).toBe(4);
@@ -168,25 +168,25 @@ describe('persisted WebDAV properties', () => {
         await patch(set('<X:label>carried</X:label>'));
         // Worker in-memory caches outlive test fixtures. Use distinct targets
         // so the MOVE fixture cannot see the prior COPY fixture's cached ID.
-        const destination = '/dav/destination-' + method.toLowerCase() + '.txt';
-        expect((await request('/dav/a.txt', { method, headers: { Destination: ORIGIN + destination } })).status).toBe(201);
+        const destination = '/webdav/destination-' + method.toLowerCase() + '.txt';
+        expect((await request('/webdav/a.txt', { method, headers: { Destination: ORIGIN + destination } })).status).toBe(201);
         expect(value(await (await find(undefined, destination)).text(), 'urn:test', 'label')).toBe('carried');
     });
 
     it('invalidates cached property values and parent listings', async () => {
         await find();
-        await request('/dav/', { method: 'PROPFIND', headers: { Depth: '1' } });
+        await request('/webdav/', { method: 'PROPFIND', headers: { Depth: '1' } });
         await patch(set('<X:label>fresh</X:label>'));
         expect(value(await (await find()).text(), 'urn:test', 'label')).toBe('fresh');
-        const listing = await request('/dav/', { method: 'PROPFIND', headers: { Depth: '1' } });
+        const listing = await request('/webdav/', { method: 'PROPFIND', headers: { Depth: '1' } });
         expect(value(await listing.text(), 'urn:test', 'label')).toBe('fresh');
     });
 
     it('writes collection properties and reads actual My Drive root metadata', async () => {
-        await patch(set('<X:label>folder</X:label>'), '/dav/docs/');
-        expect(value(await (await find(undefined, '/dav/docs/')).text(), 'urn:test', 'label')).toBe('folder');
+        await patch(set('<X:label>folder</X:label>'), '/webdav/docs/');
+        expect(value(await (await find(undefined, '/webdav/docs/')).text(), 'urn:test', 'label')).toBe('folder');
         const spy = vi.spyOn(drive, 'handle');
-        const root = await find('<D:resourcetype/><D:displayname/>', '/dav/');
+        const root = await find('<D:resourcetype/><D:displayname/>', '/webdav/');
         expect(spy.mock.calls.some(([input]) => new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url).pathname === '/drive/v3/files/root')).toBe(true);
         expect(root.status).toBe(207);
         const document = xml(await root.text());
@@ -199,19 +199,19 @@ describe('persisted WebDAV properties', () => {
         ['malformed-utf8', new Uint8Array([0xc3, 0x28])],
     ] as const)('returns HTTP 400 for %s without writing to Drive', async (_, body) => {
         const spy = vi.spyOn(drive, 'handle');
-        expect((await request('/dav/a.txt', { method: 'PROPPATCH', body })).status).toBe(400);
+        expect((await request('/webdav/a.txt', { method: 'PROPPATCH', body })).status).toBe(400);
         expect(mutationCalls(spy)).toHaveLength(0);
     });
 
     it('returns 404 for a missing target without creating it', async () => {
         const spy = vi.spyOn(drive, 'handle');
-        expect((await patch(set('<X:label>new</X:label>'), '/dav/missing.txt')).status).toBe(404);
+        expect((await patch(set('<X:label>new</X:label>'), '/webdav/missing.txt')).status).toBe(404);
         expect(mutationCalls(spy)).toHaveLength(0);
     });
 
     it.each(['PROPPATCH', 'PROPFIND'])('rejects oversized %s bodies without Drive writes', async method => {
         const spy = vi.spyOn(drive, 'handle');
-        const response = await request('/dav/a.txt', { method, body: 'x'.repeat(64 * 1024 + 1) });
+        const response = await request('/webdav/a.txt', { method, body: 'x'.repeat(64 * 1024 + 1) });
         expect(response.status).toBe(413);
         expect(mutationCalls(spy)).toHaveLength(0);
     });

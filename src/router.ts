@@ -18,15 +18,13 @@ export async function handleRequest(request: Request, env: Env, _ctx?: Execution
     try {
         const config = resolveConfig(env);
         const basePath = config.basePath;
-        if (basePath !== '/') {
-            if (pathname + '/' === basePath) {
-                const u = new URL(request.url);
-                u.pathname += '/';
-                return Response.redirect(u.toString(), 301);
-            }
-            if (!pathname.startsWith(basePath)) {
-                return new Response('404 Not Found', { status: 404 });
-            }
+        if (pathname + '/' === basePath) {
+            const u = new URL(request.url);
+            u.pathname += '/';
+            return Response.redirect(u.toString(), 301);
+        }
+        if (!pathname.startsWith(basePath)) {
+            return new Response('404 Not Found', { status: 404 });
         }
 
         // Global Basic Authentication

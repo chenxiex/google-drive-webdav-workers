@@ -1,5 +1,10 @@
 # WebDAV behavior
 
+## Routing and mount path
+
+- Generic WebDAV is mounted at `PATH` (default `/webdav/`). Requests to `<basePath without trailing slash>` redirect (`301`) to `<basePath>`, and requests outside `<basePath>` return `404 Not Found`.
+- There is no `OCIS_ENABLED` switch. To avoid shadowing oCIS endpoints, `PATH` cannot be `/`, contain query/fragment/dot/empty/percent-encoded/whitespace segments, or overlap reserved oCIS prefixes (`/dav/spaces/`, `/remote.php/`, `/ocs/`, `/graph/`, `/oauth/`, `/status.php`, `/.well-known/`), including `/dav/` (which overlaps `/dav/spaces/`). Misconfigured `PATH` values fail closed with `500`.
+
 ## Locking
 
 - WebDAV locking is not supported. `OPTIONS` advertises `DAV: 1` (not Class 2) and omits `LOCK`/`UNLOCK` from `Allow`. `PROPFIND` returns an empty `<D:supportedlock/>` element for files and collections.
@@ -67,7 +72,7 @@ For rclone, configure its WebDAV remote with `vendor = infinitescale` to use TUS
 ```ini
 [worker]
 type = webdav
-url = https://YOUR-WORKER/dav/
+url = https://YOUR-WORKER/webdav/
 vendor = infinitescale
 user = YOUR-WEBDAV-USER
 pass = YOUR-RCLONE-OBSCURED-PASSWORD

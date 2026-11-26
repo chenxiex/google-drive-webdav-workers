@@ -45,7 +45,7 @@ Instead of editing [src/config.ts](src/config.ts), configure variables via Cloud
 | `REFRESH_TOKEN` | **Yes** | Your Google Drive API Refresh Token. | `1//04x...` |
 | `USERS` | **Yes** | A JSON formatted string containing your WebDAV usernames and passwords. | `{"admin": "mypassword"}` |
 | `ROOT_ID` | No | Specific Google Drive Folder ID to mount as root. Defaults to your entire drive (`root`). | `1B2a_xYz...` |
-| `PATH` | No | Mount path prefix (defaults to `/dav/`). | `/dav/` |
+| `PATH` | No | Mount path prefix (defaults to `/webdav/`; cannot be `/` or overlap reserved oCIS prefixes). | `/webdav/` |
 | `NAME` | No | Server name used in the HTTP Basic authentication realm. | `My Cloud Drive` |
 
 `CLIENT_ID` and `CLIENT_SECRET` must belong to the same OAuth client, and `REFRESH_TOKEN` must have been issued to that client (tokens obtained with shared rclone credentials will not work). There are no built-in OAuth defaults: missing or whitespace-only OAuth bindings fail closed with a `500` configuration error after WebDAV authentication without contacting Google. `.env.example` contains placeholders only.

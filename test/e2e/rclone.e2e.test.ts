@@ -59,7 +59,7 @@ test('real rclone uploads more than the simulated ingress limit using bounded TU
     try {
         await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
         const address = server.address() as { port: number };
-        const url = `http://127.0.0.1:${address.port}/dav/`;
+        const url = `http://127.0.0.1:${address.port}/webdav/`;
         await writeFile(join(dir, 'payload.bin'), bytes);
         const modifiedTime = new Date('2025-01-02T03:04:05Z');
         await utimes(join(dir, 'payload.bin'), modifiedTime, modifiedTime);

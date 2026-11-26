@@ -21,13 +21,14 @@ describe('env config without USERS binding', () => {
 	});
 
 	it('refuses to serve the webdav root with a 500, not the placeholder creds', async () => {
-		const res = await runEmptyEnv('/dav/');
+		const res = await runEmptyEnv('/webdav/');
 		expect(res.status).toBe(500);
 		expect(await res.text()).toContain('USERS');
+		expect((await runEmptyEnv('/dav/')).status).toBe(404);
 	});
 
 	it('rejects even the default placeholder credentials', async () => {
-		const res = await runEmptyEnv('/dav/', { Authorization: basic('user', 'password') });
+		const res = await runEmptyEnv('/webdav/', { Authorization: basic('user', 'password') });
 		expect(res.status).toBe(500);
 	});
 });
@@ -42,7 +43,7 @@ describe('explicit OAuth bindings', () => {
 		for (const key of missing) bindings[key] = mask === 7 ? '   ' : '';
 
 		const ctx = createExecutionContext();
-		const response = await worker.fetch(new Request(ORIGIN + '/dav/', { headers: AUTH }), bindings as unknown as Env, ctx);
+		const response = await worker.fetch(new Request(ORIGIN + '/webdav/', { headers: AUTH }), bindings as unknown as Env, ctx);
 		await waitOnExecutionContext(ctx);
 
 		expect(response.status).toBe(500);
@@ -52,7 +53,17 @@ describe('explicit OAuth bindings', () => {
 });
 
 describe('path routing', () => {
-	it.each([undefined, '/custom/', '/custom', '/'])('routes from bindings per request (%s) and preserves authentication', async path => {
+	it.each([
+		undefined,
+		'/webdav/',
+		'/webdav',
+		'/custom/',
+		'/custom',
+		'/files/dav/',
+		'/dav/other/',
+		'/dav-legacy/',
+		'/status.php-alt/',
+	])('routes from bindings per request (%s) and preserves authentication', async path => {
 		const fetch = vi.fn(() => { throw new Error('Unexpected external request'); });
 		vi.stubGlobal('fetch', fetch);
 		const bindings: Record<string, unknown> = { ...env };
@@ -66,7 +77,7 @@ describe('path routing', () => {
 			return response;
 		};
 
-		const effectivePath = path ?? '/dav/';
+		const effectivePath = path ?? '/webdav/';
 		const base = effectivePath.endsWith('/') ? effectivePath : effectivePath + '/';
 
 		if (!effectivePath.endsWith('/')) {
@@ -78,13 +89,13 @@ describe('path routing', () => {
 		expect(unauthenticated.status).toBe(401);
 		expect(unauthenticated.headers.get('WWW-Authenticate')).toContain('Basic realm=');
 
-		if (base !== '/') {
-			const redirect = await run(base.slice(0, -1));
-			expect(redirect.status).toBe(301);
-			expect(redirect.headers.get('Location')).toBe(ORIGIN + base);
-			expect((await run(base.slice(0, -1) + '-other/')).status).toBe(404);
-			if (base !== '/dav/') expect((await run('/dav/')).status).toBe(404);
-		}
+		const redirect = await run(base.slice(0, -1));
+		expect(redirect.status).toBe(301);
+		expect(redirect.headers.get('Location')).toBe(ORIGIN + base);
+		expect((await run(base.slice(0, -1) + '-other/')).status).toBe(404);
+		expect((await run('/dav/')).status).toBe(404);
+		if (base !== '/webdav/') expect((await run('/webdav/')).status).toBe(404);
+
 		expect((await run(base, {
 			headers: { Authorization: basic('test', 'wrong') },
 		})).status).toBe(401);
@@ -99,6 +110,61 @@ describe('path routing', () => {
 		expect((await run(base + 'tus_uploads/' + crypto.randomUUID(), { method: 'PATCH', headers: AUTH })).status).toBe(412);
 		expect((await run('/robots.txt')).status).toBe(200);
 		expect((await run('/favicon.ico')).status).toBe(204);
+		expect(fetch).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		'/',
+		'/dav/',
+		'/dav',
+		'/dav/spaces/',
+		'/dav/spaces',
+		'/dav/spaces/personal/',
+		'/remote.php/',
+		'/remote.php',
+		'/remote.php/webdav/',
+		'/remote.php/dav/files/test/',
+		'/ocs/',
+		'/ocs',
+		'/ocs/v2.php/cloud/capabilities',
+		'/graph/',
+		'/graph',
+		'/graph/v1.0/me/drives',
+		'/oauth/',
+		'/oauth',
+		'/oauth/authorize',
+		'/status.php',
+		'/status.php/',
+		'/status.php/sub',
+		'/.well-known/',
+		'/.well-known',
+		'/.well-known/openid-configuration',
+		'webdav',
+		'   ',
+		'//',
+		'/./',
+		'/custom/../ocs/',
+		'/webdav?x=1',
+		'/webdav#frag',
+		'/%64av/',
+	])('rejects invalid or conflicting PATH (%s) with a 500 configuration error', async invalidPath => {
+		const fetch = vi.fn(() => { throw new Error('Unexpected external request'); });
+		vi.stubGlobal('fetch', fetch);
+		const bindings = { ...env, PATH: invalidPath } as unknown as Env;
+
+		const run = async (urlPath: string, headers?: HeadersInit) => {
+			const ctx = createExecutionContext();
+			const response = await worker.fetch(new Request(ORIGIN + urlPath, { headers }), bindings, ctx);
+			await waitOnExecutionContext(ctx);
+			return response;
+		};
+
+		const probePath = invalidPath.startsWith('/') && !/[?#\s]/.test(invalidPath) ? invalidPath : '/webdav/';
+		for (const res of [await run('/webdav/', AUTH), await run(probePath)]) {
+			expect(res.status).toBe(500);
+			expect(await res.text()).toContain('Server not configured: PATH');
+		}
+		expect((await run('/robots.txt')).status).toBe(200);
 		expect(fetch).not.toHaveBeenCalled();
 	});
 });

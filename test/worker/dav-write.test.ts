@@ -28,7 +28,7 @@ afterEach(() => {
 
 describe('PUT and MKCOL', () => {
 	it.each([11, 5 * MEGA])('PUT creates a %i-byte multipart file', async (size) => {
-		const res = await request('/dav/put-new.txt', {
+		const res = await request('/webdav/put-new.txt', {
 			method: 'PUT',
 			headers: { 'Content-Type': 'text/plain' },
 			body: 'x'.repeat(size),
@@ -40,7 +40,7 @@ describe('PUT and MKCOL', () => {
 	});
 
 	it('PUT over an existing file returns 204', async () => {
-		const res = await request('/dav/a.txt', {
+		const res = await request('/webdav/a.txt', {
 			method: 'PUT',
 			headers: { 'Content-Type': 'text/plain' },
 			body: 'hello world',
@@ -50,7 +50,7 @@ describe('PUT and MKCOL', () => {
 	});
 
 	it('PUT larger than one chunk persists the complete resumable upload', async () => {
-		const res = await request('/dav/big.dat', {
+		const res = await request('/webdav/big.dat', {
 			method: 'PUT',
 			headers: { 'Content-Type': 'application/octet-stream' },
 			body: 'x'.repeat(11 * MEGA),
@@ -62,26 +62,26 @@ describe('PUT and MKCOL', () => {
 	});
 
 	it('MKCOL on an existing resource returns 405', async () => {
-		const res = await request('/dav/a.txt', { method: 'MKCOL' });
+		const res = await request('/webdav/a.txt', { method: 'MKCOL' });
 		expect(res.status).toBe(405);
 	});
 
 	it('MKCOL creates a folder and returns 201', async () => {
-		const res = await request('/dav/new-folder', { method: 'MKCOL' });
+		const res = await request('/webdav/new-folder', { method: 'MKCOL' });
 		expect(res.status).toBe(201);
 		const created = drive.children('root').find((f) => f.name === 'new-folder');
 		expect(created?.mimeType).toBe(FOLDER);
 	});
 
 	it.each([
-		['MKCOL', '/dav/missing/new-folder', undefined],
-		['MKCOL', '/dav/missing/nested/new-folder/', undefined],
-		['MKCOL', '/dav/a.txt/new-folder', undefined],
-		['PUT', '/dav/missing/file.txt', 'hello'],
-		['PUT', '/dav/missing/empty.txt', ''],
-		['PUT', '/dav/a.txt/file.txt', 'hello'],
-		['PUT-stream', '/dav/missing/stream.dat', 'stream'],
-		['PUT-stream', '/dav/a.txt/stream.dat', 'stream'],
+		['MKCOL', '/webdav/missing/new-folder', undefined],
+		['MKCOL', '/webdav/missing/nested/new-folder/', undefined],
+		['MKCOL', '/webdav/a.txt/new-folder', undefined],
+		['PUT', '/webdav/missing/file.txt', 'hello'],
+		['PUT', '/webdav/missing/empty.txt', ''],
+		['PUT', '/webdav/a.txt/file.txt', 'hello'],
+		['PUT-stream', '/webdav/missing/stream.dat', 'stream'],
+		['PUT-stream', '/webdav/a.txt/stream.dat', 'stream'],
 	] as const)('%s on %s rejects missing or non-folder parent with 409 without mutating Drive', async (kind, path, payload) => {
 		const methods: string[] = [];
 		const original = drive.handle.bind(drive);
@@ -137,8 +137,8 @@ describe('unknown-length PUT', () => {
 	}
 
 	it.each([
-		['partial', 2 * UPLOAD_CHUNK_SIZE + 3, '/dav/stream.dat', 201],
-		['exact', UPLOAD_CHUNK_SIZE, '/dav/a.txt', 204],
+		['partial', 2 * UPLOAD_CHUNK_SIZE + 3, '/webdav/stream.dat', 201],
+		['exact', UPLOAD_CHUNK_SIZE, '/webdav/a.txt', 204],
 	] as const)('uploads %s EOF with a known final total, preserving bytes', async (_, size, path, status) => {
 		const ranges: string[] = [];
 		let produced = 0;
@@ -166,7 +166,7 @@ describe('unknown-length PUT', () => {
 
 	it('creates and truncates empty streams without an unusable resumable session', async () => {
 		const handle = vi.spyOn(drive, 'handle');
-		for (const [path, status] of [['/dav/empty.dat', 201], ['/dav/a.txt', 204]] as const) {
+		for (const [path, status] of [['/webdav/empty.dat', 201], ['/webdav/a.txt', 204]] as const) {
 			expect((await request(path, { method: 'PUT', body: stream(0) })).status).toBe(status);
 			const file = drive.children('root').find(f => f.name === path.split('/').at(-1));
 			expect(Number(file?.size)).toBe(0);
@@ -192,7 +192,7 @@ describe('unknown-length PUT', () => {
 				return Promise.resolve(new Response(null, { status: 308 }));
 			});
 			const size = failure === 'final-incomplete' ? 3 : 4 * UPLOAD_CHUNK_SIZE;
-			const result = await directPut('/dav/failed.dat', stream(size, () => produced++, cancel));
+			const result = await directPut('/webdav/failed.dat', stream(size, () => produced++, cancel));
 			expect(result.status).toBe(failure === 'init' || failure === 'chunk' ? 503 : 502);
 			expect(chunks).toBe(failure === 'init' ? 0 : 1);
 			expect(drive.children('root').some(file => file.name === 'failed.dat')).toBe(false);
@@ -218,7 +218,7 @@ describe('unknown-length PUT', () => {
 			if (new Headers(init?.headers).has('Content-Range')) chunks++;
 			return original(input, init);
 		});
-		expect((await directPut('/dav/input-error.dat', body)).status).toBe(502);
+		expect((await directPut('/webdav/input-error.dat', body)).status).toBe(502);
 		expect(chunks).toBe(1);
 		expect(drive.children('root').some(file => file.name === 'input-error.dat')).toBe(false);
 	});
@@ -226,9 +226,9 @@ describe('unknown-length PUT', () => {
 
 describe('DELETE trash, cache invalidation, and restore semantics', () => {
 	let path: string;
-	const head = (suffix = '/nested/leaf.txt') => request('/dav' + path + suffix, { method: 'HEAD' });
+	const head = (suffix = '/nested/leaf.txt') => request('/webdav' + path + suffix, { method: 'HEAD' });
 	const propfind = (suffix = '/nested/leaf.txt', depth = '0') =>
-		request('/dav' + path + suffix, { method: 'PROPFIND', headers: { Depth: depth } });
+		request('/webdav' + path + suffix, { method: 'PROPFIND', headers: { Depth: depth } });
 
 	beforeEach(() => {
 		path = '/delete-' + crypto.randomUUID();
@@ -249,7 +249,7 @@ describe('DELETE trash, cache invalidation, and restore semantics', () => {
 		expect((await head()).status).toBe(200);
 		expect((await head('/nested/')).status).toBe(200);
 		const calls = recordMutations(drive);
-		expect((await request('/dav' + path + suffix, { method: 'DELETE' })).status).toBe(204);
+		expect((await request('/webdav' + path + suffix, { method: 'DELETE' })).status).toBe(204);
 		expect(calls).toHaveLength(1);
 		expect(calls[0]).toMatchObject({ method: 'PATCH', path: '/drive/v3/files/delete-tree', body: { trashed: true } });
 		expect(calls[0].url.searchParams.get('supportsAllDrives')).toBe('true');
@@ -259,16 +259,16 @@ describe('DELETE trash, cache invalidation, and restore semantics', () => {
 		expect((await head()).status).toBe(404);
 		expect((await head('/nested/')).status).toBe(404);
 		expect((await head('/')).status).toBe(404);
-		expect((await request('/dav' + path + '/nested/', { method: 'MKCOL' })).status).toBe(409);
+		expect((await request('/webdav' + path + '/nested/', { method: 'MKCOL' })).status).toBe(409);
 		expect((await head('/')).status).toBe(404);
-		expect((await request('/dav' + path + '/', { method: 'MKCOL' })).status).toBe(201);
-		expect((await request('/dav' + path + '/nested/', { method: 'MKCOL' })).status).toBe(201);
-		expect((await request('/dav' + path + '/nested/leaf.txt', { method: 'PUT', body: 'replacement', headers: { 'Content-Type': 'text/plain', 'Content-Length': '11' } })).status).toBe(201);
+		expect((await request('/webdav' + path + '/', { method: 'MKCOL' })).status).toBe(201);
+		expect((await request('/webdav' + path + '/nested/', { method: 'MKCOL' })).status).toBe(201);
+		expect((await request('/webdav' + path + '/nested/leaf.txt', { method: 'PUT', body: 'replacement', headers: { 'Content-Type': 'text/plain', 'Content-Length': '11' } })).status).toBe(201);
 		const recreated = await head();
 		expect(recreated.status).toBe(200);
 		expect(recreated.headers.get('Content-Length')).toBe('11');
 		calls.length = 0;
-		expect((await request('/dav' + path + '/nested/leaf.txt', { method: 'DELETE' })).status).toBe(204);
+		expect((await request('/webdav' + path + '/nested/leaf.txt', { method: 'DELETE' })).status).toBe(204);
 		expect(calls).toHaveLength(1);
 		expect(calls[0].method).toBe('PATCH');
 		expect(calls[0].body).toEqual({ trashed: true });
@@ -284,7 +284,7 @@ describe('DELETE trash, cache invalidation, and restore semantics', () => {
 			for (const id of ['delete-sub', 'delete-leaf']) drive.findById(id)!.trashed = false;
 			return response;
 		});
-		expect((await request('/dav' + path, { method: 'DELETE' })).status).toBe(204);
+		expect((await request('/webdav' + path, { method: 'DELETE' })).status).toBe(204);
 		expect((await head()).status).toBe(404);
 		expect((await head('/nested/')).status).toBe(404);
 	});
@@ -293,13 +293,13 @@ describe('DELETE trash, cache invalidation, and restore semantics', () => {
 		['file', '/nested/leaf.txt', 'delete-leaf'],
 		['folder', '/', 'delete-tree'],
 	] as const)('preserves %s content, timestamps, and dead properties in Trash and supports Drive restore', async (_, suffix, targetId) => {
-		const proppatch = await request('/dav' + path + '/nested/leaf.txt', {
+		const proppatch = await request('/webdav' + path + '/nested/leaf.txt', {
 			method: 'PROPPATCH',
 			body: '<D:propertyupdate xmlns:D="DAV:" xmlns:X="urn:test"><D:set><D:prop><X:label>kept</X:label></D:prop></D:set></D:propertyupdate>',
 		});
 		expect(proppatch.status).toBe(207);
 		const before = drive.findById('delete-leaf')!.modifiedTime;
-		expect((await request('/dav' + path + suffix, { method: 'DELETE' })).status).toBe(204);
+		expect((await request('/webdav' + path + suffix, { method: 'DELETE' })).status).toBe(204);
 		expect((await head()).status).toBe(404);
 		expect(drive.findById(targetId)?.trashed).toBe(true);
 		expect(drive.findById('delete-leaf')?.modifiedTime).toBe(before);
@@ -311,7 +311,7 @@ describe('DELETE trash, cache invalidation, and restore semantics', () => {
 		});
 		expect(restore.status).toBe(200);
 		expect((await head()).status).toBe(200);
-		const get = await request('/dav' + path + '/nested/leaf.txt');
+		const get = await request('/webdav' + path + '/nested/leaf.txt');
 		expect(get.status).toBe(200);
 		expect(await get.text()).toBe('abc');
 		const propXml = await (await propfind()).text();
@@ -327,7 +327,7 @@ describe('DELETE trash, cache invalidation, and restore semantics', () => {
 		const calls = recordMutations(drive, async call => call.method === 'PATCH'
 			? new Response(JSON.stringify({ error: { code: status, message: 'Drive rejection', errors: [{ reason }] } }), { status })
 			: undefined);
-		const res = await request('/dav' + path, { method: 'DELETE' });
+		const res = await request('/webdav' + path, { method: 'DELETE' });
 		expect(res.status).toBe(status);
 		expect(await res.text()).toContain(reason);
 		expect(calls).toHaveLength(1);
@@ -344,7 +344,7 @@ describe('DELETE trash, cache invalidation, and restore semantics', () => {
 				throw new Error('Injected lost DELETE response');
 			}
 		});
-		expect((await request('/dav' + path, { method: 'DELETE' })).status).toBe(500);
+		expect((await request('/webdav' + path, { method: 'DELETE' })).status).toBe(500);
 		expect(drive.findById('delete-leaf')?.trashed).toBe(true);
 		expect((await head()).status).toBe(404);
 	});
@@ -352,7 +352,7 @@ describe('DELETE trash, cache invalidation, and restore semantics', () => {
 	it('keeps file DELETE non-recursive and refreshes the parent listing', async () => {
 		expect((await head()).status).toBe(200);
 		await propfind('/nested/', '1');
-		expect((await request('/dav' + path + '/nested/leaf.txt', { method: 'DELETE' })).status).toBe(204);
+		expect((await request('/webdav' + path + '/nested/leaf.txt', { method: 'DELETE' })).status).toBe(204);
 		expect(drive.findById('delete-leaf')?.trashed).toBe(true);
 		expect(drive.findById('delete-sub')?.trashed).not.toBe(true);
 		expect((await head()).status).toBe(404);
@@ -363,8 +363,8 @@ describe('DELETE trash, cache invalidation, and restore semantics', () => {
 
 	it('does not mutate Drive for root or missing paths', async () => {
 		const calls = recordMutations(drive);
-		expect((await request('/dav/', { method: 'DELETE' })).status).toBe(403);
-		expect((await request('/dav' + path + '/missing', { method: 'DELETE' })).status).toBe(404);
+		expect((await request('/webdav/', { method: 'DELETE' })).status).toBe(403);
+		expect((await request('/webdav' + path + '/missing', { method: 'DELETE' })).status).toBe(404);
 		expect(calls).toEqual([]);
 	});
 });
@@ -377,37 +377,37 @@ describe('Google Workspace native docs and Shortcuts coexistence (7A)', () => {
 		drive.add({ id: dir + '-shortcut', name: 'Linked', mimeType: 'application/vnd.google-apps.shortcut', parents: [dir] });
 		drive.add({ id: dir + '-sheet', name: 'Budget', mimeType: 'application/vnd.google-apps.spreadsheet', parents: [dir] });
 
-		expect((await request('/dav/' + dir + '/Notes/child.txt', { method: 'PUT', body: 'x' })).status).toBe(409);
-		expect((await request('/dav/' + dir + '/Notes/sub', { method: 'MKCOL' })).status).toBe(409);
+		expect((await request('/webdav/' + dir + '/Notes/child.txt', { method: 'PUT', body: 'x' })).status).toBe(409);
+		expect((await request('/webdav/' + dir + '/Notes/sub', { method: 'MKCOL' })).status).toBe(409);
 
-		expect((await request('/dav/' + dir + '/Notes', {
+		expect((await request('/webdav/' + dir + '/Notes', {
 			method: 'PUT',
 			headers: { 'Content-Type': 'text/plain' },
 			body: 'plain text copy',
 		})).status).toBe(201);
-		const fetched = await request('/dav/' + dir + '/Notes');
+		const fetched = await request('/webdav/' + dir + '/Notes');
 		expect(fetched.status).toBe(200);
 		expect(await fetched.text()).toBe('plain text copy');
 
-		expect((await request('/dav/' + dir + '/Linked', { method: 'MKCOL' })).status).toBe(201);
-		expect((await request('/dav/' + dir + '/Linked/child.txt', {
+		expect((await request('/webdav/' + dir + '/Linked', { method: 'MKCOL' })).status).toBe(201);
+		expect((await request('/webdav/' + dir + '/Linked/child.txt', {
 			method: 'PUT',
 			headers: { 'Content-Type': 'text/plain' },
 			body: 'inside folder',
 		})).status).toBe(201);
-		expect(await (await request('/dav/' + dir + '/Linked/', { method: 'PROPFIND', headers: { Depth: '1' } })).text())
-			.toContain('/dav/' + dir + '/Linked/child.txt');
+		expect(await (await request('/webdav/' + dir + '/Linked/', { method: 'PROPFIND', headers: { Depth: '1' } })).text())
+			.toContain('/webdav/' + dir + '/Linked/child.txt');
 
-		expect((await request('/dav/a.txt', {
+		expect((await request('/webdav/a.txt', {
 			method: 'MOVE',
-			headers: { Destination: ORIGIN + '/dav/' + dir + '/Budget' },
+			headers: { Destination: ORIGIN + '/webdav/' + dir + '/Budget' },
 		})).status).toBe(201);
-		const movedHead = await request('/dav/' + dir + '/Budget', { method: 'HEAD' });
+		const movedHead = await request('/webdav/' + dir + '/Budget', { method: 'HEAD' });
 		expect(movedHead.status).toBe(200);
 		expect(movedHead.headers.get('Content-Length')).toBe('123');
 
-		expect((await request('/dav/' + dir + '/Notes', { method: 'DELETE' })).status).toBe(204);
-		expect((await request('/dav/' + dir + '/Notes', { method: 'HEAD' })).status).toBe(404);
+		expect((await request('/webdav/' + dir + '/Notes', { method: 'DELETE' })).status).toBe(204);
+		expect((await request('/webdav/' + dir + '/Notes', { method: 'HEAD' })).status).toBe(404);
 		expect(drive.findById(dir + '-doc')?.trashed).not.toBe(true);
 		expect(drive.findById(dir + '-shortcut')?.trashed).not.toBe(true);
 		expect(drive.findById(dir + '-sheet')?.trashed).not.toBe(true);

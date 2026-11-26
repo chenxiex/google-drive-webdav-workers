@@ -22,7 +22,7 @@ afterEach(() => {
 	vi.unstubAllGlobals();
 });
 
-const overwrite = (method: string, target = '/dav/dest.txt') => request('/dav/a.txt', {
+const overwrite = (method: string, target = '/webdav/dest.txt') => request('/webdav/a.txt', {
 	method, headers: { Destination: ORIGIN + target },
 });
 const mutationSummary = (calls: Mutation[]) => calls.map(({ method, path, body }) => ({ method, path, body }));
@@ -32,10 +32,10 @@ const rejectMutation = (status: number) => new Response(JSON.stringify({ error: 
 
 describe('MOVE / COPY overwrite semantics', () => {
 	it.each([
-		['COPY', '/dav/cp-new.txt'],
-		['MOVE', '/dav/mv-new.txt'],
+		['COPY', '/webdav/cp-new.txt'],
+		['MOVE', '/webdav/mv-new.txt'],
 	] as const)('%s to a new destination returns 201', async (method, destination) => {
-		const res = await request('/dav/a.txt', { method, headers: { Destination: ORIGIN + destination } });
+		const res = await request('/webdav/a.txt', { method, headers: { Destination: ORIGIN + destination } });
 		expect(res.status).toBe(201);
 		if (method === 'MOVE') {
 			expect(res.headers.get('Location')).toBe(ORIGIN + destination);
@@ -48,9 +48,9 @@ describe('MOVE / COPY overwrite semantics', () => {
 	});
 
 	it.each(['MOVE', 'COPY'])('%s with Overwrite: F onto an existing target returns 412', async method => {
-		const res = await request('/dav/a.txt', {
+		const res = await request('/webdav/a.txt', {
 			method,
-			headers: { Destination: ORIGIN + '/dav/dest.txt', Overwrite: 'F' },
+			headers: { Destination: ORIGIN + '/webdav/dest.txt', Overwrite: 'F' },
 		});
 		expect(res.status).toBe(412);
 		expect(drive.findById('file-dest')).toBeDefined();
@@ -61,36 +61,36 @@ describe('MOVE / COPY overwrite semantics', () => {
 		['COPY', 403],
 		['MOVE', 204],
 	] as const)('%s onto itself returns %i', async (method, status) => {
-		const res = await request('/dav/a.txt', {
+		const res = await request('/webdav/a.txt', {
 			method,
-			headers: { Destination: ORIGIN + '/dav/a.txt' },
+			headers: { Destination: ORIGIN + '/webdav/a.txt' },
 		});
 		expect(res.status).toBe(status);
 		expect(drive.findById('file-a')).toBeDefined();
 	});
 
 	it.each([
-		['MOVE', '/dav/a.txt', undefined],
-		['COPY', '/dav/a.txt', undefined],
-		['MOVE', '/dav/', ORIGIN + '/dav/x/'],
-		['COPY', '/dav/', ORIGIN + '/dav/x/'],
+		['MOVE', '/webdav/a.txt', undefined],
+		['COPY', '/webdav/a.txt', undefined],
+		['MOVE', '/webdav/', ORIGIN + '/webdav/x/'],
+		['COPY', '/webdav/', ORIGIN + '/webdav/x/'],
 	] as const)('rejects invalid %s on %s with 403', async (method, path, destination) => {
 		const res = await request(path, { method, ...(destination ? { headers: { Destination: destination } } : {}) });
 		expect(res.status).toBe(403);
 	});
 
 	it.each([
-		'/dav/',
-		'/dav/a.txt',
-		'/dav/docs/',
-		'/dav/tus_uploads',
-		'/dav/folder/tus_uploads/file',
+		'/webdav/',
+		'/webdav/a.txt',
+		'/webdav/docs/',
+		'/webdav/tus_uploads',
+		'/webdav/folder/tus_uploads/file',
 	])('rejects non-TUS PATCH on %s with 405 without forwarding to COPY', async path => {
 		const spy = vi.spyOn(drive, 'handle');
 		for (const extraHeaders of [{}, { 'Tus-Resumable': '1.0.0' }] as Record<string, string>[]) {
 			const res = await request(path, {
 				method: 'PATCH',
-				headers: { Destination: ORIGIN + '/dav/cp-new.txt', ...extraHeaders },
+				headers: { Destination: ORIGIN + '/webdav/cp-new.txt', ...extraHeaders },
 			});
 			expect(res.status).toBe(405);
 			expect(await res.text()).toBe('Method Not Allowed');
@@ -115,7 +115,7 @@ describe('recoverable overwrite operations', () => {
 	it('cross-parent MOVE explicitly adds the destination parent and removes the source parent', async () => {
 		drive.findById('file-dest')!.parents = ['folder-docs'];
 		const calls = recordMutations(drive);
-		expect((await overwrite('MOVE', '/dav/docs/dest.txt')).status).toBe(204);
+		expect((await overwrite('MOVE', '/webdav/docs/dest.txt')).status).toBe(204);
 		expect(calls.map(c => c.method)).toEqual(['PATCH', 'PATCH']);
 		expect(calls[1].url.searchParams.get('addParents')).toBe('folder-docs');
 		expect(calls[1].url.searchParams.get('removeParents')).toBe('root');
@@ -126,7 +126,7 @@ describe('recoverable overwrite operations', () => {
 	it.each(['root', 'folder-docs'])('COPY stages before trashing and publishing in parent %s', async parentId => {
 		drive.findById('file-dest')!.parents = [parentId];
 		const calls = recordMutations(drive);
-		expect((await overwrite('COPY', parentId === 'root' ? '/dav/dest.txt' : '/dav/docs/dest.txt')).status).toBe(204);
+		expect((await overwrite('COPY', parentId === 'root' ? '/webdav/dest.txt' : '/webdav/docs/dest.txt')).status).toBe(204);
 		const copied = drive.files.find(f => !['file-a', 'file-dest'].includes(f.id) && f.name === 'dest.txt' && !f.trashed)!;
 		expect(copied).toMatchObject({ parents: [parentId], size: 123 });
 		expect(mutationSummary(calls)).toEqual([
@@ -285,7 +285,7 @@ describe('MOVE / COPY destructive-operation guards', () => {
 
 	it.each(['MOVE', 'COPY'])('%s resolves a trailing-slash self destination without mutations', async method => {
 		const calls = recordMutations(drive);
-		const res = await request('/dav/docs', { method, headers: { Destination: ORIGIN + '/dav/docs/' } });
+		const res = await request('/webdav/docs', { method, headers: { Destination: ORIGIN + '/webdav/docs/' } });
 		expect(res.status).toBe(method === 'MOVE' ? 204 : 403);
 		expect(calls).toEqual([]);
 		expect(drive.findById('folder-docs')).toBeDefined();
@@ -293,10 +293,10 @@ describe('MOVE / COPY destructive-operation guards', () => {
 	});
 
 	it.each(['MOVE', 'COPY'].flatMap(method => [
-		{ source: '/dav/docs/', destination: '/dav/docs/sub%26dir/' },
-		{ source: '/dav/docs/', destination: '/dav/docs/new-child/' },
-		{ source: '/dav/docs/sub%26dir/', destination: '/dav/docs/' },
-		{ source: '/dav/docs/b%20%26%20c.txt', destination: '/dav/docs/' },
+		{ source: '/webdav/docs/', destination: '/webdav/docs/sub%26dir/' },
+		{ source: '/webdav/docs/', destination: '/webdav/docs/new-child/' },
+		{ source: '/webdav/docs/sub%26dir/', destination: '/webdav/docs/' },
+		{ source: '/webdav/docs/b%20%26%20c.txt', destination: '/webdav/docs/' },
 	].map(paths => ({ method, ...paths }))))('$method rejects related paths $source → $destination before mutation', async ({ method, source, destination }) => {
 		const calls = recordMutations(drive);
 		expect((await request(source, { method, headers: { Destination: ORIGIN + destination } })).status).toBe(403);
@@ -305,7 +305,7 @@ describe('MOVE / COPY destructive-operation guards', () => {
 		expect(drive.findById('file-b')).toBeDefined();
 	});
 
-	it.each(['MOVE', 'COPY'].flatMap(method => ['/dav/missing/file.txt', '/dav/dest.txt/file.txt'].map(destination => ({ method, destination }))))(
+	it.each(['MOVE', 'COPY'].flatMap(method => ['/webdav/missing/file.txt', '/webdav/dest.txt/file.txt'].map(destination => ({ method, destination }))))(
 		'$method rejects missing or non-folder parent $destination before mutation', async ({ method, destination }) => {
 			const calls = recordMutations(drive);
 			expect((await overwrite(method, destination)).status).toBe(409);
@@ -315,13 +315,13 @@ describe('MOVE / COPY destructive-operation guards', () => {
 	);
 
 	it('MOVE of a directory invalidates cached descendant paths', async () => {
-		expect((await request('/dav/docs/b%20%26%20c.txt', { method: 'HEAD' })).status).toBe(200);
+		expect((await request('/webdav/docs/b%20%26%20c.txt', { method: 'HEAD' })).status).toBe(200);
 		const calls = recordMutations(drive);
-		const res = await request('/dav/docs/', { method: 'MOVE', headers: { Destination: ORIGIN + '/dav/renamed/' } });
+		const res = await request('/webdav/docs/', { method: 'MOVE', headers: { Destination: ORIGIN + '/webdav/renamed/' } });
 		expect(res.status).toBe(201);
 		expect(calls.map(c => c.method)).toEqual(['PATCH']);
-		expect((await request('/dav/docs/b%20%26%20c.txt', { method: 'HEAD' })).status).toBe(404);
-		expect((await request('/dav/renamed/b%20%26%20c.txt', { method: 'HEAD' })).status).toBe(200);
+		expect((await request('/webdav/docs/b%20%26%20c.txt', { method: 'HEAD' })).status).toBe(404);
+		expect((await request('/webdav/renamed/b%20%26%20c.txt', { method: 'HEAD' })).status).toBe(200);
 		expect(drive.findById('folder-docs')?.name).toBe('renamed');
 		expect(drive.findById('file-b')?.parents).toEqual(['folder-docs']);
 	});
@@ -336,25 +336,25 @@ describe('recoverable collection overwrites', () => {
 		drive.add({ id: 'old-leaf', name: 'keep.bin', mimeType: 'application/octet-stream', parents: ['old-sub'], content: new Uint8Array([1, 2, 255]), size: 3 });
 		drive.add({ id: 'old-trash', name: 'already-trashed', mimeType: 'text/plain', parents: ['old-tree'], trashed: true });
 	}
-	const transfer = (method: string, folder = false) => request(folder ? '/dav/docs/' : '/dav/a.txt', {
-		method, headers: { Destination: ORIGIN + '/dav/' + targetName + '/' },
+	const transfer = (method: string, folder = false) => request(folder ? '/webdav/docs/' : '/webdav/a.txt', {
+		method, headers: { Destination: ORIGIN + '/webdav/' + targetName + '/' },
 	});
 
 	it.each(['MOVE', 'COPY'])('%s replacing a collection preserves its whole tree in Trash and evicts cached descendants', async method => {
 		targetTree();
-		expect((await request('/dav/' + targetName + '/nested/keep.bin', { method: 'HEAD' })).status).toBe(200);
+		expect((await request('/webdav/' + targetName + '/nested/keep.bin', { method: 'HEAD' })).status).toBe(200);
 		const calls = recordMutations(drive);
 		expect((await transfer(method)).status).toBe(204);
 		for (const id of ['old-tree', 'old-trash', 'old-sub', 'old-leaf']) expect(drive.findById(id)?.trashed).toBe(true);
 		expect(drive.findById('old-leaf')?.content).toEqual(new Uint8Array([1, 2, 255]));
-		expect((await request('/dav/' + targetName + '/nested/keep.bin', { method: 'HEAD' })).status).toBe(404);
-		expect((await request('/dav/' + targetName, { method: 'HEAD' })).status).toBe(200);
+		expect((await request('/webdav/' + targetName + '/nested/keep.bin', { method: 'HEAD' })).status).toBe(404);
+		expect((await request('/webdav/' + targetName, { method: 'HEAD' })).status).toBe(200);
 		expect(calls.some(c => c.method === 'DELETE')).toBe(false);
 	});
 
 	it('MOVE hides old paths even while descendant trash flags lag behind the parent', async () => {
 		targetTree();
-		expect((await request('/dav/' + targetName + '/nested/keep.bin', { method: 'HEAD' })).status).toBe(200);
+		expect((await request('/webdav/' + targetName + '/nested/keep.bin', { method: 'HEAD' })).status).toBe(200);
 		recordMutations(drive, async (call, commit) => {
 			if (call.body.trashed !== true) return;
 			const response = await commit();
@@ -366,22 +366,22 @@ describe('recoverable collection overwrites', () => {
 		// Publication may recompute the mock's settled flags. Reproduce stale
 		// descendant reads at the moment the client next resolves the old path.
 		for (const id of ['old-sub', 'old-leaf']) drive.findById(id)!.trashed = false;
-		expect((await request('/dav/' + targetName + '/nested/keep.bin', { method: 'HEAD' })).status).toBe(404);
+		expect((await request('/webdav/' + targetName + '/nested/keep.bin', { method: 'HEAD' })).status).toBe(404);
 	});
 
 	it('folder MOVE overwrites an unrelated folder without losing either subtree', async () => {
 		targetTree();
-		expect((await request('/dav/docs/b%20%26%20c.txt', { method: 'HEAD' })).status).toBe(200);
-		expect((await request('/dav/' + targetName + '/nested/keep.bin', { method: 'HEAD' })).status).toBe(200);
+		expect((await request('/webdav/docs/b%20%26%20c.txt', { method: 'HEAD' })).status).toBe(200);
+		expect((await request('/webdav/' + targetName + '/nested/keep.bin', { method: 'HEAD' })).status).toBe(200);
 		const calls = recordMutations(drive);
 		expect((await transfer('MOVE', true)).status).toBe(204);
 		expect(drive.findById('old-tree')?.trashed).toBe(true);
 		expect(drive.findById('old-leaf')?.parents).toEqual(['old-sub']);
 		expect(drive.findById('file-b')?.trashed).not.toBe(true);
 		expect(drive.findById('file-b')?.parents).toEqual(['folder-docs']);
-		expect((await request('/dav/docs/b%20%26%20c.txt', { method: 'HEAD' })).status).toBe(404);
-		expect((await request('/dav/' + targetName + '/b%20%26%20c.txt', { method: 'HEAD' })).status).toBe(200);
-		expect((await request('/dav/' + targetName + '/nested/keep.bin', { method: 'HEAD' })).status).toBe(404);
+		expect((await request('/webdav/docs/b%20%26%20c.txt', { method: 'HEAD' })).status).toBe(404);
+		expect((await request('/webdav/' + targetName + '/b%20%26%20c.txt', { method: 'HEAD' })).status).toBe(200);
+		expect((await request('/webdav/' + targetName + '/nested/keep.bin', { method: 'HEAD' })).status).toBe(404);
 		expect(calls.map(c => c.method)).toEqual(['PATCH', 'PATCH']);
 	});
 
@@ -393,7 +393,7 @@ describe('recoverable collection overwrites', () => {
 		for (const id of ['old-sub', 'old-leaf']) expect(drive.findById(id)?.trashed).not.toBe(true);
 		expect(drive.findById('old-trash')).toMatchObject({ trashed: false, explicitlyTrashed: false });
 		expect(drive.findById('old-leaf')?.content).toEqual(new Uint8Array([1, 2, 255]));
-		expect((await request('/dav/' + targetName + '/nested/keep.bin', { method: 'HEAD' })).status).toBe(200);
+		expect((await request('/webdav/' + targetName + '/nested/keep.bin', { method: 'HEAD' })).status).toBe(200);
 		expect(calls.at(-1)?.body).toEqual({ trashed: false });
 		expect(calls.some(c => c.method === 'DELETE')).toBe(false);
 	});
@@ -448,11 +448,11 @@ describe('folder COPY (RFC 4918)', () => {
 		fileB.content = new TextEncoder().encode('hello-b');
 		fileB.size = 7;
 
-		await request('/dav/docs/', {
+		await request('/webdav/docs/', {
 			method: 'PROPPATCH',
 			body: '<D:propertyupdate xmlns:D="DAV:" xmlns:X="urn:test"><D:set><D:prop><X:folderTag>shallow-val</X:folderTag><D:getlastmodified>Mon, 04 Mar 2024 05:06:07 GMT</D:getlastmodified></D:prop></D:set><D:remove><D:prop><D:displayname/></D:prop></D:remove></D:propertyupdate>',
 		});
-		await request('/dav/docs/b%20%26%20c.txt', {
+		await request('/webdav/docs/b%20%26%20c.txt', {
 			method: 'PROPPATCH',
 			body: '<D:propertyupdate xmlns:D="DAV:" xmlns:X="urn:test"><D:set><D:prop><X:fileTag>leaf-val</X:fileTag></D:prop></D:set></D:propertyupdate>',
 		});
@@ -473,19 +473,19 @@ describe('folder COPY (RFC 4918)', () => {
 
 	it.each(['1', 'invalid', ''])('rejects invalid Depth "%s" on COPY with 400 before any mutation', async depth => {
 		const calls = recordMutations(drive);
-		const res = await request('/dav/docs/', {
+		const res = await request('/webdav/docs/', {
 			method: 'COPY',
-			headers: { Destination: ORIGIN + '/dav/docs-copy/', Depth: depth },
+			headers: { Destination: ORIGIN + '/webdav/docs-copy/', Depth: depth },
 		});
 		expect(res.status).toBe(400);
 		expect(calls).toEqual([]);
 	});
 
 	it.each([
-		{ label: 'Overwrite: F on existing folder', path: '/dav/docs/', headers: { Destination: ORIGIN + '/dav/existing-dir/', Overwrite: 'F' } as Record<string, string>, status: 412 },
-		{ label: 'missing parent', path: '/dav/docs/', headers: { Destination: ORIGIN + '/dav/missing/copy/' }, status: 409 },
-		{ label: 'non-folder parent', path: '/dav/docs/', headers: { Destination: ORIGIN + '/dav/dest.txt/copy/' }, status: 409 },
-		{ label: 'self copy', path: '/dav/docs/', headers: { Destination: ORIGIN + '/dav/docs/' }, status: 403 },
+		{ label: 'Overwrite: F on existing folder', path: '/webdav/docs/', headers: { Destination: ORIGIN + '/webdav/existing-dir/', Overwrite: 'F' } as Record<string, string>, status: 412 },
+		{ label: 'missing parent', path: '/webdav/docs/', headers: { Destination: ORIGIN + '/webdav/missing/copy/' }, status: 409 },
+		{ label: 'non-folder parent', path: '/webdav/docs/', headers: { Destination: ORIGIN + '/webdav/dest.txt/copy/' }, status: 409 },
+		{ label: 'self copy', path: '/webdav/docs/', headers: { Destination: ORIGIN + '/webdav/docs/' }, status: 403 },
 	])('rejects folder COPY ($label) with $status before mutation', async ({ path, headers, status }) => {
 		drive.add({ id: 'folder-existing', name: 'existing-dir', mimeType: FOLDER, parents: ['root'] });
 		const calls = recordMutations(drive);
@@ -501,7 +501,7 @@ describe('folder COPY (RFC 4918)', () => {
 	] as const)('Depth: 0 shallow copies folder metadata and properties without batching or children ($mode -> $expectedStatus)', async ({ mode, expectedStatus }) => {
 		await seedRichDocsTree();
 		const destName = `shallow-${mode}-${crypto.randomUUID()}`;
-		const destination = mode === 'overwrite-file' ? `/dav/${destName}` : `/dav/${destName}/`;
+		const destination = mode === 'overwrite-file' ? `/webdav/${destName}` : `/webdav/${destName}/`;
 		const targetId = mode === 'new' ? undefined : `target-${crypto.randomUUID()}`;
 		if (mode === 'overwrite-folder') {
 			drive.add({ id: targetId!, name: destName, mimeType: FOLDER, parents: ['root'] });
@@ -510,7 +510,7 @@ describe('folder COPY (RFC 4918)', () => {
 			drive.add({ id: targetId!, name: destName, mimeType: 'text/plain', parents: ['root'], content: new Uint8Array([9]), size: 1 });
 		}
 		const batches = spyBatches();
-		const res = await request('/dav/docs/', {
+		const res = await request('/webdav/docs/', {
 			method: 'COPY',
 			headers: { Destination: ORIGIN + destination, Depth: '0' },
 		});
@@ -545,11 +545,11 @@ describe('folder COPY (RFC 4918)', () => {
 		drive.add({ id: 'old-sub', name: 'nested', mimeType: FOLDER, parents: ['old-tree'] });
 		drive.add({ id: 'old-leaf', name: 'keep.bin', mimeType: 'application/octet-stream', parents: ['old-sub'], content: new Uint8Array([1, 2]), size: 2 });
 		drive.add({ id: 'old-trash', name: 'already-trashed', mimeType: 'text/plain', parents: ['old-tree'], trashed: true });
-		expect((await request(`/dav/${targetName}/nested/keep.bin`, { method: 'HEAD' })).status).toBe(200);
+		expect((await request(`/webdav/${targetName}/nested/keep.bin`, { method: 'HEAD' })).status).toBe(200);
 
 		const batches = spyBatches();
-		const newDest = `/dav/full-copy-${depth ?? 'default'}/`;
-		const createRes = await request('/dav/docs/', {
+		const newDest = `/webdav/full-copy-${depth ?? 'default'}/`;
+		const createRes = await request('/webdav/docs/', {
 			method: 'COPY',
 			headers: { Destination: ORIGIN + newDest, ...(depth ? { Depth: depth } : {}) },
 		});
@@ -567,14 +567,14 @@ describe('folder COPY (RFC 4918)', () => {
 		expect((await request(newDest + '.password', { method: 'HEAD' })).status).toBe(200);
 		expect(drive.findById('file-b')?.parents).toEqual(['folder-docs']);
 
-		const overwriteRes = await request('/dav/docs/', {
+		const overwriteRes = await request('/webdav/docs/', {
 			method: 'COPY',
-			headers: { Destination: ORIGIN + `/dav/${targetName}/`, ...(depth ? { Depth: depth } : {}) },
+			headers: { Destination: ORIGIN + `/webdav/${targetName}/`, ...(depth ? { Depth: depth } : {}) },
 		});
 		expect(overwriteRes.status).toBe(204);
 		for (const id of ['old-tree', 'old-sub', 'old-leaf', 'old-trash']) expect(drive.findById(id)?.trashed).toBe(true);
-		expect((await request(`/dav/${targetName}/nested/keep.bin`, { method: 'HEAD' })).status).toBe(404);
-		expect((await request(`/dav/${targetName}/sub%26dir/deep-%CE%B1%CE%B2%CE%B3.bin`, { method: 'HEAD' })).status).toBe(200);
+		expect((await request(`/webdav/${targetName}/nested/keep.bin`, { method: 'HEAD' })).status).toBe(404);
+		expect((await request(`/webdav/${targetName}/sub%26dir/deep-%CE%B1%CE%B2%CE%B3.bin`, { method: 'HEAD' })).status).toBe(200);
 	});
 
 	it('chunks >100 child operations across multiple Drive batch calls', async () => {
@@ -582,9 +582,9 @@ describe('folder COPY (RFC 4918)', () => {
 			drive.add({ id: `many-${i}`, name: `f-${String(i).padStart(3, '0')}.txt`, mimeType: 'text/plain', parents: ['folder-docs'], content: new Uint8Array([i % 256]), size: 1 });
 		}
 		const batches = spyBatches();
-		const res = await request('/dav/docs/', {
+		const res = await request('/webdav/docs/', {
 			method: 'COPY',
-			headers: { Destination: ORIGIN + '/dav/many-copy/' },
+			headers: { Destination: ORIGIN + '/webdav/many-copy/' },
 		});
 		expect(res.status).toBe(201);
 		expect(batches.every(b => b.ids.length <= 100)).toBe(true);
@@ -612,9 +612,9 @@ describe('folder COPY (RFC 4918)', () => {
 				]);
 			}
 		});
-		const res = await request('/dav/docs/', {
+		const res = await request('/webdav/docs/', {
 			method: 'COPY',
-			headers: { Destination: ORIGIN + '/dav/retry-copy/' },
+			headers: { Destination: ORIGIN + '/webdav/retry-copy/' },
 		});
 		expect(res.status).toBe(201);
 		expect(batches[2].ids).toHaveLength(1);
@@ -638,9 +638,9 @@ describe('folder COPY (RFC 4918)', () => {
 				));
 			}
 		});
-		const res = await request('/dav/docs/', {
+		const res = await request('/webdav/docs/', {
 			method: 'COPY',
-			headers: { Destination: ORIGIN + `/dav/${targetName}` },
+			headers: { Destination: ORIGIN + `/webdav/${targetName}` },
 		});
 		expect(res.status).toBe(status);
 		expect(batches.length).toBeGreaterThanOrEqual(2);
@@ -654,9 +654,9 @@ describe('folder COPY (RFC 4918)', () => {
 			drive.add({ id: `lim-${i}`, name: `n-${i}.txt`, mimeType: 'text/plain', parents: ['folder-docs'] });
 		}
 		const batches = spyBatches();
-		const res = await request('/dav/docs/', {
+		const res = await request('/webdav/docs/', {
 			method: 'COPY',
-			headers: { Destination: ORIGIN + '/dav/too-many/' },
+			headers: { Destination: ORIGIN + '/webdav/too-many/' },
 		});
 		expect(res.status).toBe(413);
 		expect(batches).toHaveLength(2);
@@ -672,9 +672,9 @@ describe('folder COPY (RFC 4918)', () => {
 			parentId = id;
 		}
 		const batches = spyBatches();
-		const res = await request('/dav/docs/', {
+		const res = await request('/webdav/docs/', {
 			method: 'COPY',
-			headers: { Destination: ORIGIN + '/dav/too-deep/' },
+			headers: { Destination: ORIGIN + '/webdav/too-deep/' },
 		});
 		expect(res.status).toBe(413);
 		expect(batches).toHaveLength(40);
@@ -698,9 +698,9 @@ describe('folder COPY (RFC 4918)', () => {
 				throw new Error('Injected publish network loss');
 			}
 		});
-		const res = await request('/dav/docs/', {
+		const res = await request('/webdav/docs/', {
 			method: 'COPY',
-			headers: { Destination: ORIGIN + `/dav/${targetName}/` },
+			headers: { Destination: ORIGIN + `/webdav/${targetName}/` },
 		});
 		expect(res.status).toBe(expectedStatus);
 		expect(drive.findById('old-tree')?.trashed).toBe(targetTrashed);

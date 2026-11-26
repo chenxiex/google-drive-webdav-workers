@@ -21,7 +21,7 @@
 - [x] **全站移除 `ensureDir` 自动建父目录，统一按 RFC 4918 返回 `409`（`9.2B`）**
   - 移除 [src/webdav/handler.ts](src/webdav/handler.ts)、[src/webdav/upload.ts](src/webdav/upload.ts) 与 [src/tus/handler.ts](src/tus/handler.ts) 中 `MKCOL`、`PUT` 与 TUS `POST` 的 `ensureDir` 调用，父目录缺失或非文件夹时全站统一返回 `409 Conflict`（与 `MOVE`/`COPY` 一致，防止同步场景复活已删/改名父目录）；同步更新 [test/worker/dav-write.test.ts](test/worker/dav-write.test.ts) 中依赖自动建父目录的用例。
 
-- [ ] **统一路由并调整通用 WebDAV 默认路径为 `/webdav/`（`9.3`）**
+- [x] **统一路由并调整通用 WebDAV 默认路径为 `/webdav/`（`9.3`）**
   - 移除 `OCIS_ENABLED` 开关与新旧双轨语义：oCIS WebDAV 与发现路由（`/dav/spaces/<spaceId>/`、`/remote.php/webdav/`、`/remote.php/dav/files/<username>/`、`/status.php`、`/ocs/*`、`/graph/*`、`/.well-known/*`）常驻同一 Drive/WebDAV 处理器；OIDC `/oauth/*` 按是否配置 Cloudflare Access 自动启用（未配置时仅运行 HTTP Basic `USERS`）。
   - 将通用 WebDAV 默认 `PATH` 从 `/dav/` 调整为 `/webdav/`（保留 `PATH` 可配置），并对 `/` 或与 oCIS 保留前缀（`/dav/spaces/`、`/remote.php/`、`/ocs/`、`/graph/`、`/oauth/`、`/status.php`、`/.well-known/`）冲突的配置返回 `500` 配置错误；实现时同步更新 [README.md](README.md)、[.env.example](.env.example) 与 [docs/webdav-behavior.md](docs/webdav-behavior.md)。
 

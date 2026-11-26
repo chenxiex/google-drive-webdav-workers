@@ -25,18 +25,18 @@ afterEach(() => {
 
 describe('auth', () => {
 	it('requires credentials', async () => {
-		const res = await SELF.fetch(ORIGIN + '/dav/');
+		const res = await SELF.fetch(ORIGIN + '/webdav/');
 		expect(res.status).toBe(401);
 		expect(res.headers.get('WWW-Authenticate')).toMatch(/^Basic realm=/);
 	});
 
 	it('rejects a wrong password', async () => {
-		const res = await request('/dav/', { headers: { Authorization: 'Basic ' + btoa('test:wrong') } });
+		const res = await request('/webdav/', { headers: { Authorization: 'Basic ' + btoa('test:wrong') } });
 		expect(res.status).toBe(401);
 	});
 
 	it('rejects malformed base64 without crashing', async () => {
-		const res = await request('/dav/', { headers: { Authorization: 'Basic not-valid@#$' } });
+		const res = await request('/webdav/', { headers: { Authorization: 'Basic not-valid@#$' } });
 		expect(res.status).toBe(401);
 	});
 });
@@ -52,7 +52,7 @@ describe('server metadata', () => {
 	});
 
 	it('does not advertise Class 2, locking, or non-TUS PATCH methods in OPTIONS', async () => {
-		const res = await request('/dav/', { method: 'OPTIONS' });
+		const res = await request('/webdav/', { method: 'OPTIONS' });
 		expect(res.status).toBe(200);
 		expect(res.headers.get('DAV')).toBe('1');
 		const allow = res.headers.get('Allow')!.split(',').map(m => m.trim());
@@ -61,12 +61,12 @@ describe('server metadata', () => {
 		expect(allow).toContain('PROPFIND');
 		expect(allow).toContain('MOVE');
 
-		const tusOptions = await request('/dav/tus_uploads/' + crypto.randomUUID(), { method: 'OPTIONS' });
+		const tusOptions = await request('/webdav/tus_uploads/' + crypto.randomUUID(), { method: 'OPTIONS' });
 		expect(tusOptions.status).toBe(200);
 		expect(tusOptions.headers.get('Allow')!.split(',').map(m => m.trim())).toContain('PATCH');
 	});
 
-	it.each(['/other', '/_/16/type/application/vnd.google-apps.folder'])('returns 404 for paths outside the base path (%s)', async path => {
+	it.each(['/other', '/dav/', '/dav/spaces/root/', '/_/16/type/application/vnd.google-apps.folder'])('returns 404 for paths outside the base path (%s)', async path => {
 		const spy = vi.spyOn(drive, 'handle');
 		const res = await SELF.fetch(ORIGIN + path);
 		expect(res.status).toBe(404);
@@ -74,19 +74,19 @@ describe('server metadata', () => {
 	});
 
 	it('rejects invalid percent-encoding with a 400, not a 500', async () => {
-		const res = await request('/dav/%zz');
+		const res = await request('/webdav/%zz');
 		expect(res.status).toBe(400);
 		expect(await res.text()).toContain('Invalid path encoding');
 	});
 
 	it('returns 404 for a missing resource', async () => {
-		const res = await request('/dav/missing.txt');
+		const res = await request('/webdav/missing.txt');
 		expect(res.status).toBe(404);
 	});
 });
 
 describe('unsupported locking', () => {
-	it.each(['/dav/a.txt', '/dav/missing.txt'])('rejects LOCK and UNLOCK without contacting Drive (%s)', async path => {
+	it.each(['/webdav/a.txt', '/webdav/missing.txt'])('rejects LOCK and UNLOCK without contacting Drive (%s)', async path => {
 		const spy = vi.spyOn(drive, 'handle');
 		for (const attempt of [
 			{ method: 'LOCK', headers: { 'Content-Type': 'application/xml', Timeout: 'Second-3600' },
@@ -104,9 +104,9 @@ describe('unsupported locking', () => {
 
 	it('still authenticates LOCK/UNLOCK and reports empty supportedlock in PROPFIND', async () => {
 		for (const method of ['LOCK', 'UNLOCK']) {
-			expect((await SELF.fetch(ORIGIN + '/dav/a.txt', { method })).status).toBe(401);
+			expect((await SELF.fetch(ORIGIN + '/webdav/a.txt', { method })).status).toBe(401);
 		}
-		const response = await request('/dav/', { method: 'PROPFIND', headers: { Depth: '1' } });
+		const response = await request('/webdav/', { method: 'PROPFIND', headers: { Depth: '1' } });
 		expect(response.status).toBe(207);
 		const xml = await response.text();
 		expect(xml.match(/<D:supportedlock\/>/g)?.length).toBe(xml.match(/<D:response>/g)?.length);
@@ -124,8 +124,8 @@ describe('original file downloads', () => {
 
 	it.each(['', '?param=s32'])('downloads original image bytes, not a thumbnail (%s)', async query => {
 		const spy = vi.spyOn(drive, 'handle');
-		const head = await request('/dav/image.png', { method: 'HEAD' });
-		const response = await request('/dav/image.png' + query);
+		const head = await request('/webdav/image.png', { method: 'HEAD' });
+		const response = await request('/webdav/image.png' + query);
 		expect(response.status).toBe(200);
 		expect(response.headers.get('Content-Type')).toBe('image/png');
 		expect(response.headers.get('Content-Length')).toBe(String(content.length));
@@ -135,7 +135,7 @@ describe('original file downloads', () => {
 		expect(head.headers.get('Accept-Ranges')).toBe('bytes');
 		expect(response.headers.get('Accept-Ranges')).toBe('bytes');
 		expect(head.headers.get('Date')).not.toBe(head.headers.get('Last-Modified'));
-		const properties = await (await request('/dav/image.png', { method: 'PROPFIND', headers: { Depth: '0' } })).text();
+		const properties = await (await request('/webdav/image.png', { method: 'PROPFIND', headers: { Depth: '0' } })).text();
 		expect(properties).toContain('<D:getetag>&quot;image-1&quot;</D:getetag>');
 		expect(new Uint8Array(await response.arrayBuffer())).toEqual(content);
 		const urls = spy.mock.calls.map(([input]) => new URL(input instanceof Request ? input.url : String(input)));
@@ -144,7 +144,7 @@ describe('original file downloads', () => {
 	});
 
 	it.each(['matching', 'stale', 'weak', 'missing-upstream', 'unsatisfiable'] as const)('handles If-Range safely (%s)', async mode => {
-		const initial = await request('/dav/image.png');
+		const initial = await request('/webdav/image.png');
 		const tag = initial.headers.get('ETag')!;
 		await initial.arrayBuffer();
 		const handle = drive.handle.bind(drive);
@@ -159,7 +159,7 @@ describe('original file downloads', () => {
 		});
 		const validator = mode === 'stale' ? '"old-version"' : mode === 'weak' ? 'W/' + tag : tag;
 		const range = mode === 'unsatisfiable' ? 'bytes=100-102' : 'bytes=1-3';
-		const response = await request('/dav/image.png', { headers: { Range: range, 'If-Range': validator } });
+		const response = await request('/webdav/image.png', { headers: { Range: range, 'If-Range': validator } });
 		const matching = mode === 'matching';
 		expect(response.status).toBe(matching ? 206 : 200);
 		expect(response.headers.get('Content-Range')).toBe(matching ? 'bytes 1-3/12' : null);
@@ -168,14 +168,14 @@ describe('original file downloads', () => {
 	});
 
 	it('uses the media validator even when cached metadata, size and mtime stay unchanged', async () => {
-		const first = await request('/dav/image.png');
+		const first = await request('/webdav/image.png');
 		const tag = first.headers.get('ETag')!;
 		await first.arrayBuffer();
 		const file = drive.files.find(file => file.id === 'image')!;
 		const modifiedTime = file.modifiedTime;
 		const changed = content.slice(); changed[0] = 1;
 		file.content = changed;
-		const response = await request('/dav/image.png', { headers: { Range: 'bytes=1-3', 'If-Range': tag } });
+		const response = await request('/webdav/image.png', { headers: { Range: 'bytes=1-3', 'If-Range': tag } });
 		expect(response.status).toBe(200);
 		expect(response.headers.get('ETag')).not.toBe(tag);
 		expect(file.modifiedTime).toBe(modifiedTime);
@@ -196,7 +196,7 @@ describe('original file downloads', () => {
 			expect(new Headers(init?.headers).has('Range')).toBe(false);
 			return new Response('retry failed', { status: 503 });
 		});
-		const response = await request('/dav/image.png', { headers: { Range: 'bytes=1-3', 'If-Range': '"old"' } });
+		const response = await request('/webdav/image.png', { headers: { Range: 'bytes=1-3', 'If-Range': '"old"' } });
 		expect(response.status).toBe(503);
 		expect(mediaCalls).toBe(2);
 		expect(cancelled).toBe(true);
@@ -212,14 +212,14 @@ describe('original file downloads', () => {
 			}
 			return handle(input, init);
 		});
-		const response = await request('/dav/image.png', { headers: { Range: 'bytes=1-3', 'If-Range': '"old"' } });
+		const response = await request('/webdav/image.png', { headers: { Range: 'bytes=1-3', 'If-Range': '"old"' } });
 		expect(response.status).toBe(status);
 		expect(mediaCalls).toBe(1);
 	});
 
 	it('forwards the client Range and preserves the partial original response', async () => {
 		const spy = vi.spyOn(drive, 'handle');
-		const response = await request('/dav/image.png', { headers: { Range: 'bytes=1-3' } });
+		const response = await request('/webdav/image.png', { headers: { Range: 'bytes=1-3' } });
 		expect(response.status).toBe(206);
 		expect(response.headers.get('Content-Type')).toBe('image/png');
 		expect(response.headers.get('Content-Length')).toBe('3');
@@ -246,7 +246,7 @@ describe('PROPFIND', () => {
 			if (String(input).includes('/drive/v3/about?')) return new Response(JSON.stringify({ storageQuota }));
 			return original(input, init);
 		});
-		const response = await request('/dav/', { method: 'PROPFIND', headers: { Depth: '0' } });
+		const response = await request('/webdav/', { method: 'PROPFIND', headers: { Depth: '0' } });
 		expect(response.status).toBe(207);
 		const xml = await response.text();
 		expect(xml).toContain('<D:quota-used-bytes>' + storageQuota.usage + '</D:quota-used-bytes>');
@@ -255,7 +255,7 @@ describe('PROPFIND', () => {
 	});
 
 	it('lists children with encoded hrefs and numeric sizes (Depth 1)', async () => {
-		const res = await request('/dav/', {
+		const res = await request('/webdav/', {
 			method: 'PROPFIND',
 			headers: { Depth: '1' },
 		});
@@ -263,11 +263,11 @@ describe('PROPFIND', () => {
 		expect(res.headers.get('Content-Type')).toMatch(/xml/);
 		const body = await res.text();
 
-		expect(body).toContain('<D:href>/dav/</D:href>');
-		expect(body).toContain('<D:href>/dav/docs/</D:href>');
-		expect(body).toContain('<D:href>/dav/a.txt</D:href>');
-		expect(body).toContain('<D:href>/dav/dest.txt</D:href>');
-		expect(body).toContain('<D:href>/dav/x%20%26%20y%20%5B%23%5D.txt</D:href>');
+		expect(body).toContain('<D:href>/webdav/</D:href>');
+		expect(body).toContain('<D:href>/webdav/docs/</D:href>');
+		expect(body).toContain('<D:href>/webdav/a.txt</D:href>');
+		expect(body).toContain('<D:href>/webdav/dest.txt</D:href>');
+		expect(body).toContain('<D:href>/webdav/x%20%26%20y%20%5B%23%5D.txt</D:href>');
 		expect(body).toContain('<D:getcontentlength>123</D:getcontentlength>');
 		expect(body).toContain('<D:getcontentlength>100</D:getcontentlength>');
 		expect(body).toContain('<D:displayname>x &amp; y [#].txt</D:displayname>');
@@ -275,50 +275,50 @@ describe('PROPFIND', () => {
 	});
 
 	it('lists nested folder children (Depth 1)', async () => {
-		const res = await request('/dav/docs/', {
+		const res = await request('/webdav/docs/', {
 			method: 'PROPFIND',
 			headers: { Depth: '1' },
 		});
 		const body = await res.text();
-		expect(body).toContain('<D:href>/dav/docs/sub%26dir/</D:href>');
-		expect(body).toContain('<D:href>/dav/docs/b%20%26%20c.txt</D:href>');
+		expect(body).toContain('<D:href>/webdav/docs/sub%26dir/</D:href>');
+		expect(body).toContain('<D:href>/webdav/docs/b%20%26%20c.txt</D:href>');
 		expect(body).toContain('<D:getcontentlength>999</D:getcontentlength>');
 	});
 
 	it('only returns the requested resource at Depth 0 (and quota on root)', async () => {
-		const res = await request('/dav/', {
+		const res = await request('/webdav/', {
 			method: 'PROPFIND',
 			headers: { Depth: '0' },
 		});
 		const body = await res.text();
-		expect(body).toContain('<D:href>/dav/</D:href>');
-		expect(body).not.toContain('/dav/docs/');
+		expect(body).toContain('<D:href>/webdav/</D:href>');
+		expect(body).not.toContain('/webdav/docs/');
 		expect(body).not.toContain('getcontentlength');
 		expect(body).toContain('<D:quota-used-bytes>4096</D:quota-used-bytes>');
 		expect(body).toContain('<D:quota-available-bytes>1073737728</D:quota-available-bytes>');
 	});
 
 	it('resolves a hostile file name through its encoded path', async () => {
-		const res = await request('/dav/x%20%26%20y%20%5B%23%5D.txt', {
+		const res = await request('/webdav/x%20%26%20y%20%5B%23%5D.txt', {
 			method: 'PROPFIND',
 			headers: { Depth: '0' },
 		});
 		expect(res.status).toBe(207);
 		const body = await res.text();
-		expect(body).toContain('<D:href>/dav/x%20%26%20y%20%5B%23%5D.txt</D:href>');
+		expect(body).toContain('<D:href>/webdav/x%20%26%20y%20%5B%23%5D.txt</D:href>');
 		expect(body).toContain('<D:getcontentlength>100</D:getcontentlength>');
 	});
 });
 
 describe('HEAD and collection GET', () => {
 	it('HEAD reports the file size', async () => {
-		const res = await request('/dav/a.txt', { method: 'HEAD' });
+		const res = await request('/webdav/a.txt', { method: 'HEAD' });
 		expect(res.status).toBe(200);
 		expect(res.headers.get('Content-Length')).toBe('123');
 		expect(res.headers.get('Content-Type')).toBe('text/plain');
 	});
 
-	it.each(['/dav/', '/dav/docs', '/dav/docs/'])('rejects GET on collection %s with 405 without listing children', async path => {
+	it.each(['/webdav/', '/webdav/docs', '/webdav/docs/'])('rejects GET on collection %s with 405 without listing children', async path => {
 		const spy = vi.spyOn(drive, 'handle');
 		const res = await request(path, { method: 'GET', redirect: 'manual' });
 		expect(res.status).toBe(405);
@@ -338,7 +338,7 @@ describe('isolate cache bounds and lifetime', () => {
 		let now = start;
 		vi.spyOn(Date, 'now').mockImplementation(() => now);
 		const read = async () => {
-			const response = await request('/dav/' + name, { method: ns === 'meta' ? 'HEAD' : 'PROPFIND', headers: { Depth: '1' } });
+			const response = await request('/webdav/' + name, { method: ns === 'meta' ? 'HEAD' : 'PROPFIND', headers: { Depth: '1' } });
 			expect(response.status).toBe(ns === 'meta' ? 200 : 207);
 			return ns === 'meta' ? response.headers.get('Content-Length') : response.text();
 		};
@@ -363,25 +363,25 @@ describe('isolate cache bounds and lifetime', () => {
 		for (let i = 0; i <= 128; i++) {
 			drive.add({ id: 'bounded-' + i, name: 'bounded-' + i, mimeType: 'text/plain', size: 123, parents: ['root'] });
 		}
-		expect((await directHead('/dav/bounded-0')).status).toBe(200);
+		expect((await directHead('/webdav/bounded-0')).status).toBe(200);
 		for (let start = 1; start < 128; start += 16) {
-			const batch = Array.from({ length: Math.min(16, 128 - start) }, (_, j) => directHead('/dav/bounded-' + (start + j)));
+			const batch = Array.from({ length: Math.min(16, 128 - start) }, (_, j) => directHead('/webdav/bounded-' + (start + j)));
 			const responses = await Promise.all(batch);
 			expect(responses.every(r => r.status === 200)).toBe(true);
 		}
-		expect((await directHead('/dav/bounded-128')).status).toBe(200);
+		expect((await directHead('/webdav/bounded-128')).status).toBe(200);
 		drive.findById('bounded-0')!.size = 456;
 		drive.findById('bounded-128')!.size = 456;
-		expect((await directHead('/dav/bounded-0')).headers.get('Content-Length')).toBe('456');
-		expect((await directHead('/dav/bounded-128')).headers.get('Content-Length')).toBe('123');
-		expect((await directHead('/dav/')).status).toBe(200);
+		expect((await directHead('/webdav/bounded-0')).headers.get('Content-Length')).toBe('456');
+		expect((await directHead('/webdav/bounded-128')).headers.get('Content-Length')).toBe('123');
+		expect((await directHead('/webdav/')).status).toBe(200);
 	});
 
 	it('does not retain oversized directory listings', async () => {
 		drive.add({ id: 'large-list', name: 'large-list', mimeType: FOLDER, parents: ['root'] });
 		for (let i = 0; i < 80; i++) drive.add({ id: 'large-' + i, name: 'x'.repeat(900) + i, mimeType: 'text/plain', parents: ['large-list'] });
 		const read = async () => {
-			const response = await request('/dav/large-list/', { method: 'PROPFIND', headers: { Depth: '1' } });
+			const response = await request('/webdav/large-list/', { method: 'PROPFIND', headers: { Depth: '1' } });
 			expect(response.status).toBe(207);
 			return response.text();
 		};
@@ -430,13 +430,13 @@ describe('Google Workspace native docs and Shortcuts (7A)', () => {
 		drive.add({ id: dir + '-txt', name: 'readme.txt', mimeType: 'text/plain', size: 2, content: new Uint8Array([111, 107]), parents: [dir] });
 
 		const spy = paginate(2);
-		const res = await request('/dav/' + dir + '/', { method: 'PROPFIND', headers: { Depth: '1' } });
+		const res = await request('/webdav/' + dir + '/', { method: 'PROPFIND', headers: { Depth: '1' } });
 		expect(res.status).toBe(207);
 		const xml = await res.text();
 		for (const [, , name] of workspaceTypes) expect(xml).not.toContain(name);
-		expect(xml).toContain('/dav/' + dir + '/Real%20Folder/');
-		expect(xml).toContain('/dav/' + dir + '/Spec.docx');
-		expect(xml).toContain('/dav/' + dir + '/readme.txt');
+		expect(xml).toContain('/webdav/' + dir + '/Real%20Folder/');
+		expect(xml).toContain('/webdav/' + dir + '/Spec.docx');
+		expect(xml).toContain('/webdav/' + dir + '/readme.txt');
 		expect(spy.mock.calls.filter(([input]) => String(input).includes('orderBy=')).length).toBeGreaterThan(1);
 	});
 
@@ -446,7 +446,7 @@ describe('Google Workspace native docs and Shortcuts (7A)', () => {
 		drive.add({ id: dir, name: dir, mimeType: FOLDER, parents: ['root'] });
 		drive.add({ id: itemId, name, mimeType, parents: [dir] });
 		drive.add({ id: dir + '-child', name: 'hidden-child.txt', mimeType: 'text/plain', size: 3, parents: [itemId] });
-		const path = '/dav/' + dir + '/' + encodeURIComponent(name);
+		const path = '/webdav/' + dir + '/' + encodeURIComponent(name);
 
 		const spy = vi.spyOn(drive, 'handle');
 		for (const init of [
@@ -456,8 +456,8 @@ describe('Google Workspace native docs and Shortcuts (7A)', () => {
 			{ method: 'PROPFIND', headers: { Depth: '1' } },
 			{ method: 'PROPPATCH', body: '<D:propertyupdate xmlns:D="DAV:" xmlns:X="urn:test"><D:set><D:prop><X:k>v</X:k></D:prop></D:set></D:propertyupdate>' },
 			{ method: 'DELETE' },
-			{ method: 'MOVE', headers: { Destination: ORIGIN + '/dav/' + dir + '/moved-' + label } },
-			{ method: 'COPY', headers: { Destination: ORIGIN + '/dav/' + dir + '/copied-' + label } },
+			{ method: 'MOVE', headers: { Destination: ORIGIN + '/webdav/' + dir + '/moved-' + label } },
+			{ method: 'COPY', headers: { Destination: ORIGIN + '/webdav/' + dir + '/copied-' + label } },
 		] as RequestInit[]) {
 			expect((await request(path, init)).status).toBe(404);
 		}
@@ -482,25 +482,25 @@ describe('Google Workspace native docs and Shortcuts (7A)', () => {
 		drive.add({ id: dir + '-inner', name: 'inside.txt', mimeType: 'text/plain', size: 2, content: new Uint8Array([49, 50]), parents: [dir + '-folder-real'] });
 
 		const spy = paginate(1);
-		const listing = await request('/dav/' + dir + '/', { method: 'PROPFIND', headers: { Depth: '1' } });
+		const listing = await request('/webdav/' + dir + '/', { method: 'PROPFIND', headers: { Depth: '1' } });
 		expect(listing.status).toBe(207);
 		const listingXml = await listing.text();
 		expect(listingXml).not.toContain('application/vnd.google-apps.document');
 		expect(listingXml).not.toContain('application/vnd.google-apps.shortcut');
 		expect(listingXml).toContain('<D:getcontenttype>application/pdf</D:getcontenttype>');
-		expect(listingXml).toContain('/dav/' + dir + '/Shared/');
+		expect(listingXml).toContain('/webdav/' + dir + '/Shared/');
 
-		const download = await request('/dav/' + dir + '/Report');
+		const download = await request('/webdav/' + dir + '/Report');
 		expect(download.status).toBe(200);
 		expect(download.headers.get('Content-Type')).toBe('application/pdf');
 		expect(new Uint8Array(await download.arrayBuffer())).toEqual(pdf);
 
-		const sub = await request('/dav/' + dir + '/Shared/', { method: 'PROPFIND', headers: { Depth: '1' } });
+		const sub = await request('/webdav/' + dir + '/Shared/', { method: 'PROPFIND', headers: { Depth: '1' } });
 		expect(sub.status).toBe(207);
-		expect(await sub.text()).toContain('/dav/' + dir + '/Shared/inside.txt');
+		expect(await sub.text()).toContain('/webdav/' + dir + '/Shared/inside.txt');
 
 		const callsBeforeNonFolder = spy.mock.calls.length;
-		expect((await request('/dav/' + dir + '/Report/child.txt')).status).toBe(404);
+		expect((await request('/webdav/' + dir + '/Report/child.txt')).status).toBe(404);
 		expect(spy.mock.calls.length).toBe(callsBeforeNonFolder);
 	});
 });

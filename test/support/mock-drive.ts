@@ -16,6 +16,9 @@ export interface DriveFile {
 	trashed?: boolean;
 	explicitlyTrashed?: boolean;
 	content?: Uint8Array;
+	md5Checksum?: string;
+	sha1Checksum?: string;
+	sha256Checksum?: string;
 	thumbnailLink?: string;
 }
 
@@ -78,7 +81,57 @@ function parseMetadata(bytes: Uint8Array): Metadata | Response {
 
 // Drive partial-response selectors used by this worker. Unknown supported-API
 // features fail loudly instead of pretending that the real API accepted them.
-const fileFields = new Set(['kind', 'id', 'version', 'name', 'mimeType', 'size', 'modifiedTime', 'createdTime', 'starred', 'folderColorRgb', 'appProperties', 'parents', 'trashed', 'explicitlyTrashed', 'description', 'iconLink', 'thumbnailLink', 'imageMediaMetadata']);
+const fileFields = new Set(['kind', 'id', 'version', 'name', 'mimeType', 'size', 'modifiedTime', 'createdTime', 'starred', 'folderColorRgb', 'appProperties', 'parents', 'trashed', 'explicitlyTrashed', 'description', 'iconLink', 'thumbnailLink', 'imageMediaMetadata', 'md5Checksum', 'sha1Checksum', 'sha256Checksum']);
+const EMPTY_MD5 = 'd41d8cd98f00b204e9800998ecf8427e';
+const MD5_SHIFTS = [
+	7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22,
+	5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20,
+	4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23,
+	6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
+];
+const MD5_K = Array.from({ length: 64 }, (_, i) => Math.floor(Math.abs(Math.sin(i + 1)) * 0x100000000) >>> 0);
+const toHex = (buffer: ArrayBuffer): string => Array.from(new Uint8Array(buffer), b => b.toString(16).padStart(2, '0')).join('');
+
+function md5Hex(bytes: Uint8Array): string {
+	const bitLen = bytes.length * 8;
+	const paddedLen = (((bytes.length + 8) >>> 6) + 1) * 64;
+	const padded = new Uint8Array(paddedLen);
+	padded.set(bytes);
+	padded[bytes.length] = 0x80;
+	const view = new DataView(padded.buffer);
+	view.setUint32(paddedLen - 8, bitLen >>> 0, true);
+	view.setUint32(paddedLen - 4, Math.floor(bitLen / 0x100000000) >>> 0, true);
+	let a0 = 0x67452301, b0 = 0xefcdab89, c0 = 0x98badcfe, d0 = 0x10325476;
+	for (let offset = 0; offset < paddedLen; offset += 64) {
+		let a = a0, b = b0, c = c0, d = d0;
+		for (let i = 0; i < 64; i++) {
+			let f: number, g: number;
+			if (i < 16) { f = (b & c) | (~b & d); g = i; }
+			else if (i < 32) { f = (d & b) | (~d & c); g = (5 * i + 1) & 15; }
+			else if (i < 48) { f = b ^ c ^ d; g = (3 * i + 5) & 15; }
+			else { f = c ^ (b | ~d); g = (7 * i) & 15; }
+			const sum = (a + f + MD5_K[i] + view.getUint32(offset + g * 4, true)) >>> 0;
+			const shift = MD5_SHIFTS[i];
+			const rot = ((sum << shift) | (sum >>> (32 - shift))) >>> 0;
+			a = d; d = c; c = b; b = (b + rot) >>> 0;
+		}
+		a0 = (a0 + a) >>> 0; b0 = (b0 + b) >>> 0; c0 = (c0 + c) >>> 0; d0 = (d0 + d) >>> 0;
+	}
+	return [a0, b0, c0, d0].map(word => {
+		const out = new Uint8Array(4);
+		new DataView(out.buffer).setUint32(0, word, true);
+		return toHex(out.buffer);
+	}).join('');
+}
+
+async function computeChecksums(bytes: Uint8Array): Promise<{ md5Checksum: string; sha1Checksum: string; sha256Checksum: string }> {
+	const copy = bytes.slice();
+	const [sha1, sha256] = await Promise.all([
+		crypto.subtle.digest('SHA-1', copy),
+		crypto.subtle.digest('SHA-256', copy),
+	]);
+	return { md5Checksum: md5Hex(copy), sha1Checksum: toHex(sha1), sha256Checksum: toHex(sha256) };
+}
 function selections(fields: string): string[] {
 	let depth = 0;
 	let start = 0;
@@ -123,12 +176,13 @@ function representation(file: DriveFile): Record<string, unknown> {
 		...(file.appProperties && Object.keys(file.appProperties).length ? { appProperties: { ...file.appProperties } } : {}),
 		...(file.thumbnailLink ? { thumbnailLink: file.thumbnailLink } : {}),
 		parents: [...file.parents], modifiedTime: file.modifiedTime, trashed: file.trashed ?? false, explicitlyTrashed: file.explicitlyTrashed ?? false,
-		...(file.mimeType !== FOLDER ? { size: String(file.size ?? 0) } : {}),
+		...(!file.mimeType.startsWith('application/vnd.google-apps.') ? {
+			size: String(file.size ?? 0),
+			...(file.md5Checksum !== undefined ? { md5Checksum: file.md5Checksum } : {}),
+			...(file.sha1Checksum !== undefined ? { sha1Checksum: file.sha1Checksum } : {}),
+			...(file.sha256Checksum !== undefined ? { sha256Checksum: file.sha256Checksum } : {}),
+		} : {}),
 	};
-}
-function fileResponse(file: DriveFile, fields: string | null): Response {
-	const selected = project(representation(file), fields ?? 'kind,id,name,mimeType', fileFields);
-	return selected instanceof Response ? selected : json(selected);
 }
 
 function findBytes(bytes: Uint8Array, needle: Uint8Array, start = 0): number {
@@ -163,6 +217,7 @@ export class MockDrive {
 	private root: DriveFile = { id: 'root', name: 'My Drive', mimeType: FOLDER, parents: [], createdTime: '2024-01-01T00:00:00.000Z', modifiedTime: '2024-01-01T00:00:00.000Z' };
 	private sessions = new Map<string, Session>();
 	private pages = new Map<string, { offset: number; query: string; order: string }>();
+	private hashedContent = new WeakMap<DriveFile, Uint8Array>();
 	constructor(private oauth = { clientId: 'test-client-id', clientSecret: 'test-client-secret', refreshToken: 'test-refresh-token-history' }) {}
 
 	add(file: DriveFile): DriveFile {
@@ -173,9 +228,23 @@ export class MockDrive {
 		if (file.mimeType === FOLDER) file.folderColorRgb ??= '#8f8f8f';
 		if (file.appProperties) file.appProperties = { ...file.appProperties };
 		file.explicitlyTrashed ??= file.trashed ?? false;
+		if (file.content !== undefined && (file.md5Checksum !== undefined || file.sha1Checksum !== undefined || file.sha256Checksum !== undefined)) {
+			this.hashedContent.set(file, file.content);
+		}
 		this.files.push(file);
 		this.refreshTrashState();
 		return file;
+	}
+	private async ensureChecksums(file: DriveFile): Promise<void> {
+		if (file.mimeType.startsWith('application/vnd.google-apps.') || file.content === undefined) return;
+		if (this.hashedContent.get(file) === file.content) return;
+		Object.assign(file, await computeChecksums(file.content));
+		this.hashedContent.set(file, file.content);
+	}
+	private async fileResponse(file: DriveFile, fields: string | null): Promise<Response> {
+		await this.ensureChecksums(file);
+		const selected = project(representation(file), fields ?? 'kind,id,name,mimeType', fileFields);
+		return selected instanceof Response ? selected : json(selected);
 	}
 	remove(id: string): void {
 		const removed = new Set([id]);
@@ -235,10 +304,13 @@ export class MockDrive {
 		if (Object.keys(next).length > 30) return apiError(403, 'propertyCountLimitExceeded', "The file's property and app property limit has been reached. Files can have up to 30 properties and 30 app properties per app, with a maximum of 100 in total.");
 		return next;
 	}
-	private create(meta: Metadata, content: Uint8Array = new Uint8Array(), mimeType?: string): DriveFile | Response {
+	private async create(
+		meta: Metadata,
+		options: { content?: Uint8Array; mimeType?: string; size?: number | string; md5Checksum?: string; sha1Checksum?: string; sha256Checksum?: string } = {},
+	): Promise<DriveFile | Response> {
 		if (meta.createdTime !== undefined) unsupported('unverified timestamps on create');
 		if (meta.mimeType?.startsWith('application/vnd.google-apps.') && meta.mimeType !== FOLDER) unsupported('Google Workspace document conversion');
-		const resolvedMime = meta.mimeType || mimeType || 'application/octet-stream';
+		const resolvedMime = meta.mimeType || options.mimeType || 'application/octet-stream';
 		const folderColorRgb = this.quantizeFolderColor(resolvedMime, meta.folderColorRgb);
 		if (folderColorRgb instanceof Response) return folderColorRgb;
 		const parents = meta.parents?.length ? meta.parents : ['root'];
@@ -246,10 +318,30 @@ export class MockDrive {
 		if (error) return error;
 		const appProperties = this.properties({}, meta.appProperties);
 		if (appProperties instanceof Response) return appProperties;
-		return this.add({ appProperties, description: meta.description ?? undefined, starred: meta.starred, folderColorRgb, createdTime: meta.createdTime, id: crypto.randomUUID(), name: meta.name || 'Untitled', mimeType: resolvedMime,
-			parents, content: content.slice(), size: content.length, trashed: meta.trashed ?? false, modifiedTime: meta.modifiedTime === undefined ? new Date().toISOString() : new Date(meta.modifiedTime).toISOString() });
+		const isGoogleApp = resolvedMime.startsWith('application/vnd.google-apps.');
+		const hasExplicitChecksums = options.md5Checksum !== undefined || options.sha1Checksum !== undefined || options.sha256Checksum !== undefined;
+		const content = options.content !== undefined ? options.content.slice() : isGoogleApp || options.size !== undefined ? undefined : new Uint8Array();
+		const digests = isGoogleApp ? {}
+			: hasExplicitChecksums ? {
+				...(options.md5Checksum !== undefined ? { md5Checksum: options.md5Checksum } : {}),
+				...(options.sha1Checksum !== undefined ? { sha1Checksum: options.sha1Checksum } : {}),
+				...(options.sha256Checksum !== undefined ? { sha256Checksum: options.sha256Checksum } : {}),
+			}
+			: options.content !== undefined ? await computeChecksums(content!)
+			: { md5Checksum: EMPTY_MD5 };
+		const created = this.add({
+			appProperties, description: meta.description ?? undefined, starred: meta.starred, folderColorRgb, createdTime: meta.createdTime,
+			id: crypto.randomUUID(), name: meta.name || 'Untitled', mimeType: resolvedMime, parents,
+			...(content !== undefined ? { content } : {}),
+			size: options.size ?? content?.length ?? 0,
+			...digests,
+			trashed: meta.trashed ?? false,
+			modifiedTime: meta.modifiedTime === undefined ? new Date().toISOString() : new Date(meta.modifiedTime).toISOString(),
+		});
+		if (created.content !== undefined) this.hashedContent.set(created, created.content);
+		return created;
 	}
-	private update(file: DriveFile, meta: Metadata, url: URL, content?: Uint8Array): Response | undefined {
+	private async update(file: DriveFile, meta: Metadata, url: URL, content?: Uint8Array): Promise<Response | undefined> {
 		if (file === this.root) unsupported('writing My Drive root metadata');
 		if (meta.createdTime !== undefined) return apiError(403, 'fieldNotWritable', 'The resource body includes fields which are not directly writable.');
 		const appProperties = this.properties(file.appProperties, meta.appProperties);
@@ -296,12 +388,14 @@ export class MockDrive {
 		// Metadata-only MIME changes are ignored by Drive for binary files.
 		if (content !== undefined) {
 			file.content = content.slice(); file.size = content.length;
+			Object.assign(file, await computeChecksums(file.content));
+			this.hashedContent.set(file, file.content);
 			// Updating a binary file's bytes preserves its existing MIME type,
 			// even when the media request declares a different Content-Type.
 			if (meta.modifiedTime === undefined) file.modifiedTime = new Date().toISOString();
 		}
 	}
-	private list(url: URL): Response {
+	private async list(url: URL): Promise<Response> {
 		const q = url.searchParams.get('q') ?? '';
 		let files = [...this.files];
 		let remaining = q.trim();
@@ -347,7 +441,9 @@ export class MockDrive {
 		const offset = page?.offset ?? 0;
 		let nextPageToken: string | undefined;
 		if (offset + size < files.length) { nextPageToken = crypto.randomUUID(); this.pages.set(nextPageToken, { offset: offset + size, query: q, order }); }
-		const data = { kind: 'drive#fileList', incompleteSearch: false, ...(nextPageToken ? { nextPageToken } : {}), files: files.slice(offset, offset + size).map(representation) };
+		const pageFiles = files.slice(offset, offset + size);
+		await Promise.all(pageFiles.map(file => this.ensureChecksums(file)));
+		const data = { kind: 'drive#fileList', incompleteSearch: false, ...(nextPageToken ? { nextPageToken } : {}), files: pageFiles.map(representation) };
 		const result = project(data, url.searchParams.get('fields') ?? 'kind,incompleteSearch,nextPageToken,files(kind,id,name,mimeType)', new Set(['kind', 'incompleteSearch', 'nextPageToken', 'files']), { key: 'files', fields: fileFields });
 		return result instanceof Response ? result : json(result);
 	}
@@ -358,7 +454,7 @@ export class MockDrive {
 		if (url.pathname !== '/upload/drive/v3/files' + (session.id ? '/' + session.id : '')) return new Response(null, { status: 404 });
 		if (session.failure) return new Response(session.failure, { status: 400 });
 		const range = headers.get('Content-Range');
-		if (session.completed) return fileResponse(session.completed, session.fields);
+		if (session.completed) return this.fileResponse(session.completed, session.fields);
 		const progress = () => new Response(null, { status: 308, headers: session.bytes.length ? { Range: `bytes=0-${session.bytes.length - 1}` } : {} });
 		const emptyFinal = range === 'bytes */0' && !bytes.length && !session.bytes.length;
 		if (range?.match(/^bytes \*\/(\d+|\*)$/) && !bytes.length && !emptyFinal) return progress();
@@ -398,13 +494,13 @@ export class MockDrive {
 		if (session.id) {
 			const existing = this.findById(session.id);
 			if (!existing) return notFound(session.id);
-			const error = this.update(existing, session.metadata, url, accumulated);
+			const error = await this.update(existing, session.metadata, url, accumulated);
 			if (error) return error;
 			file = existing;
-		} else file = this.create(session.metadata, accumulated, session.mimeType);
+		} else file = await this.create(session.metadata, { content: accumulated, mimeType: session.mimeType });
 		if (file instanceof Response) return file;
 		session.completed = file;
-		return fileResponse(file, session.fields);
+		return this.fileResponse(file, session.fields);
 	}
 
 	private async batch(method: string, headers: Headers, bytes: Uint8Array): Promise<Response> {
@@ -558,9 +654,9 @@ export class MockDrive {
 				const parsed = multipart(bytes, mimeType); if (parsed instanceof Response) return parsed;
 				meta = parsed.metadata; content = parsed.content; mimeType = meta.mimeType ?? parsed.mimeType;
 			} else if (type !== 'media') unsupported(`uploadType ${type}`);
-			if (file) { const error = this.update(file, meta, url, content); return error ?? fileResponse(file, fields); }
-			const created = this.create(meta, content, mimeType);
-			return created instanceof Response ? created : fileResponse(created, fields);
+			if (file) { const error = await this.update(file, meta, url, content); return error ?? this.fileResponse(file, fields); }
+			const created = await this.create(meta, { content, mimeType });
+			return created instanceof Response ? created : this.fileResponse(created, fields);
 		}
 		const copy = url.pathname.match(/^\/drive\/v3\/files\/([^/]+)\/copy$/);
 		if (copy && method === 'POST') {
@@ -568,17 +664,20 @@ export class MockDrive {
 			const meta = parseMetadata(await bodyBytes(input, init)); if (meta instanceof Response) return meta;
 			if (!source) return notFound(copy[1]);
 			if (source.mimeType === FOLDER) return apiError(403, 'cannotCopyFile', 'This file cannot be copied by the user.');
-			const created = this.create({ name: source.name, parents: source.parents, description: source.description, starred: source.starred, ...meta, mimeType: source.mimeType }, source.content ?? new Uint8Array());
+			await this.ensureChecksums(source);
+			const created = await this.create(
+				{ name: source.name, parents: source.parents, description: source.description, starred: source.starred, ...meta, mimeType: source.mimeType },
+				{ content: source.content, size: source.size ?? 0, md5Checksum: source.md5Checksum, sha1Checksum: source.sha1Checksum, sha256Checksum: source.sha256Checksum },
+			);
 			if (created instanceof Response) return created;
-			created.size = source.size ?? 0;
-			return fileResponse(created, fields);
+			return this.fileResponse(created, fields);
 		}
 		if (url.pathname === '/drive/v3/files') {
 			if (method === 'GET') return this.list(url);
 			if (method === 'POST') {
 				const meta = parseMetadata(await bodyBytes(input, init)); if (meta instanceof Response) return meta;
-				const created = this.create(meta);
-				return created instanceof Response ? created : fileResponse(created, fields);
+				const created = await this.create(meta);
+				return created instanceof Response ? created : this.fileResponse(created, fields);
 			}
 		}
 		const match = url.pathname.match(/^\/drive\/v3\/files\/([^/]+)$/);
@@ -591,8 +690,8 @@ export class MockDrive {
 			if (!content || Number(file.size) !== content.length) unsupported('media fixture without explicit bytes and matching size');
 			// v2 media ETag is an opaque strong representation validator, not
 			// the v2 JSON etag or v3 metadata version. If-Range is ignored.
-			const digest = await crypto.subtle.digest('SHA-256', content);
-			const etag = '"' + Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, '0')).join('') + '"';
+			const digest = await crypto.subtle.digest('SHA-256', content.slice());
+			const etag = '"' + toHex(digest) + '"';
 			const mediaHeaders = { 'Content-Type': file.mimeType, ...(url.pathname.includes('/v2/') ? { ETag: etag } : {}) };
 			const range = headers.get('Range');
 			if (!range) return new Response(content.slice(), { headers: { ...mediaHeaders, 'Content-Length': String(content.length) } });
@@ -607,7 +706,7 @@ export class MockDrive {
 		}
 		if (match && method === 'GET') {
 			const file = this.findById(match[1]);
-			return file ? fileResponse(file, fields) : notFound(match[1]);
+			return file ? this.fileResponse(file, fields) : notFound(match[1]);
 		}
 		if (match && ['PATCH', 'DELETE'].includes(method)) {
 			const file = this.findById(match[1]);
@@ -615,8 +714,8 @@ export class MockDrive {
 			if (!file) return notFound(match[1]);
 			if (method === 'DELETE') { this.remove(file.id); return new Response(null, { status: 204 }); }
 			const meta = parseMetadata(bytes); if (meta instanceof Response) return meta;
-			const error = this.update(file, meta, url);
-			return error ?? fileResponse(file, fields);
+			const error = await this.update(file, meta, url);
+			return error ?? this.fileResponse(file, fields);
 		}
 		unsupported(`${method} ${url.pathname}`);
 	}

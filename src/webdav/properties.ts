@@ -5,6 +5,7 @@ import { DavProperty, key as propertyKey, parseFind, parsePatch, propertyNameXml
 
 const DAV_NAMESPACE = 'DAV:';
 const DRIVE_NAMESPACE = 'urn:google:drive';
+const OC_NAMESPACE = 'http://owncloud.org/ns';
 
 const statusLabels: Record<number, string> = {
     200: 'OK',
@@ -69,6 +70,9 @@ function isProtectedProperty(property: DavProperty): boolean {
         || property.namespace === DRIVE_NAMESPACE && !['description', 'starred', 'modifiedTime', 'folderColorRgb'].includes(property.name);
 }
 
+const isIgnoredProperty = (property: DavProperty): boolean =>
+    property.namespace === OC_NAMESPACE && property.name === 'checksums';
+
 function applyNativeProperty(patch: Record<string, unknown>, property: DavProperty, action: 'set' | 'remove', metadata: any, text: string, hasElements: boolean): void {
     const field = property.namespace === DAV_NAMESPACE ? 'modifiedTime' : property.name;
     if (action === 'remove') {
@@ -111,10 +115,18 @@ function applyNativeProperty(patch: Record<string, unknown>, property: DavProper
 
 const fileEtag = (file: any): string => '"' + (file.id || 'root') + '-' + (file.version ?? file.modifiedTime ?? '') + '"';
 
+function fileChecksums(file: any): string | undefined {
+    const parts: string[] = [];
+    if (typeof file.sha1Checksum === 'string' && file.sha1Checksum) parts.push('SHA1:' + file.sha1Checksum);
+    if (typeof file.md5Checksum === 'string' && file.md5Checksum) parts.push('MD5:' + file.md5Checksum);
+    if (typeof file.sha256Checksum === 'string' && file.sha256Checksum) parts.push('SHA256:' + file.sha256Checksum);
+    return parts.length ? parts.join(' ') : undefined;
+}
+
 function davProperties(file: any, quota?: { used: string; available?: string }): Map<string, DavProperty> {
     const result = new Map<string, DavProperty>();
     const add = (name: string, value: unknown, namespace = DAV_NAMESPACE, raw = false) => {
-        const prefix = namespace === DAV_NAMESPACE ? 'D' : 'G';
+        const prefix = namespace === DAV_NAMESPACE ? 'D' : namespace === OC_NAMESPACE ? 'oc' : 'G';
         const property = { namespace, name, xml: `<${prefix}:${name}${namespace === DAV_NAMESPACE ? '' : ` xmlns:${prefix}="${namespace}"`}>${raw ? value : escapeXml(value)}</${prefix}:${name}>` };
         result.set(propertyKey(property), property);
     };
@@ -142,6 +154,10 @@ function davProperties(file: any, quota?: { used: string; available?: string }):
     for (const [key, property] of readDeadProperties(file.appProperties)) {
         if (property.removed) result.delete(key);
         else result.set(key, property);
+    }
+    if (!folder) {
+        const checksums = fileChecksums(file);
+        if (checksums) add('checksums', `<oc:checksum>${escapeXml(checksums)}</oc:checksum>`, OC_NAMESPACE, true);
     }
     return result;
 }
@@ -196,6 +212,10 @@ export async function handleProppatch(drive: DriveClient, request: Request): Pro
                 errors.set(key, { status: 403, protected: true });
             } else if (isNativeProperty(property)) {
                 applyNativeProperty(patch, property, action, metadata, text, hasElements);
+            } else if (isIgnoredProperty(property)) {
+                // Client-supplied oc:checksums digests (e.g. rclone PROPPATCH
+                // alongside DAV:lastmodified) are a silent 200 no-op; never
+                // persist them into appProperties.
             } else {
                 if (action === 'set' && property.namespace === DAV_NAMESPACE && property.name === 'displayname' && hasElements) {
                     throw new StatusError('Display name requires text', 409);
@@ -212,7 +232,9 @@ export async function handleProppatch(drive: DriveClient, request: Request): Pro
         try { patch.appProperties = writeDeadProperties(dead, metadata.appProperties || {}); }
         catch (error) {
             // Storage is shared by all dead properties in this request.
-            for (const { property } of operations) if (!isNativeProperty(property)) errors.set(propertyKey(property), { status: errorStatus(error) });
+            for (const { property } of operations) {
+                if (!isNativeProperty(property) && !isIgnoredProperty(property)) errors.set(propertyKey(property), { status: errorStatus(error) });
+            }
         }
     }
     const result = (fallback: number) => {
@@ -224,6 +246,7 @@ export async function handleProppatch(drive: DriveClient, request: Request): Pro
             }).join('')));
     };
     if (errors.size) return result(424);
+    if (!Object.keys(patch).length) return result(200);
     try {
         // One metadata PATCH is the atomic boundary. No split native/dead
         // writes, post-write checks, retries, or speculative rollback.

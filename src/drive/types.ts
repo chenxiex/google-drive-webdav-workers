@@ -1,6 +1,6 @@
 export const FOLDER_MIME = 'application/vnd.google-apps.folder';
 export const GOOGLE_APPS_MIME_PREFIX = 'application/vnd.google-apps.';
-export const PROPERTY_FIELDS = 'id,version,name,mimeType,size,modifiedTime,createdTime,description,starred,folderColorRgb,appProperties,parents';
+export const PROPERTY_FIELDS = 'id,version,name,mimeType,size,modifiedTime,createdTime,description,starred,folderColorRgb,appProperties,parents,md5Checksum,sha1Checksum,sha256Checksum';
 
 export interface StorageQuota {
     available?: string;

@@ -17,6 +17,7 @@
 - `PROPPATCH` processes `set` / `remove` operations in document order. Property identity is the expanded name (namespace URI plus local name), not the prefix. Dead properties retain XML child elements, attributes, mixed text, significant whitespace, in-scope namespace bindings, and inherited `xml:lang` / `xml:space`. Empty values are distinct from absent properties; removing an absent dead property succeeds. UTF-8 XML is limited to 64 KiB and 128 nesting levels; malformed XML and DTD/entity declarations are rejected before writing.
 - `DAV:displayname` is a writable text property stored alongside dead properties. It does **not** rename the Drive file or change its URL; `REMOVE` stores a small tombstone so subsequent `PROPFIND` reports `displayname` absent instead of falling back to the Drive filename, and `SET` makes it visible again. `MOVE` preserves dead properties (including this tombstone) and `COPY` explicitly passes `appProperties` to Drive, since Drive's copy endpoint does not inherit `appProperties` automatically.
 - `PROPFIND` sets `getetag` from Drive ID and `version` (`"<id>-<version|modifiedTime>"`), serving as a metadata/property synchronization marker rather than the binary download validator.
+- `PROPFIND` dynamically computes `{http://owncloud.org/ns}checksums` (`<oc:checksums><oc:checksum>...</oc:checksum></oc:checksums>`) on non-folder files from Drive's real `sha1Checksum`, `md5Checksum`, and `sha256Checksum` fields (emitting available `SHA1:<hex>`, `MD5:<hex>`, and `SHA256:<hex>` digests, and omitting the property on folders or files without Drive digests).
 - Quota integers (`quota-used-bytes` and `quota-available-bytes`, returned on `Depth: 0` root `PROPFIND`) are computed with `BigInt` without JavaScript floating-point rounding. If Drive does not report a finite quota limit, `quota-available-bytes` is absent (explicitly requesting it returns `404` in multistatus), not `0` or `NaN`. Exhausted finite quotas report `0` available bytes.
 
 ### Drive-backed live properties
@@ -32,9 +33,11 @@ Use the project namespace `urn:google:drive` for native Drive extensions (for ex
 | `G:starred` | `true` / `false` (also `1` / `0`) |
 | `G:folderColorRgb` | `#rrggbb` on folders; Drive quantizes to its nearest supported palette color |
 
-Present native live properties cannot be removed (`409`): set an empty description or `starred=false` to clear those values. Removing an already absent optional native property succeeds without altering Drive metadata (if the batch sends `{}` to `files.update`, Drive still increments `version`).
+Present native live properties cannot be removed (`409`): set an empty description or `starred=false` to clear those values. Removing an already absent optional native property succeeds as a no-op without calling `files.update`.
 
 `DAV:creationdate` / `G:createdTime` are read-only, as are `getcontentlength`, `getcontenttype`, `getetag`, `resourcetype`, `supportedlock`, `lockdiscovery`, `quota-used-bytes`, `quota-available-bytes`, and unsupported `urn:google:drive` names. Metadata-only updates do not change an existing binary file's MIME type; use file-content operations for content and `MOVE` for renaming.
+
+Writes (`set` or `remove`) to `{http://owncloud.org/ns}checksums` in `PROPPATCH` (such as `rclone` batching `oc:checksums` with `DAV:lastmodified`) are silently ignored as a `200` no-op without persisting client digests to `appProperties` (still returning `424 Failed Dependency` if another property in the batch fails).
 
 Property semantics follow [RFC 4918](https://www.rfc-editor.org/rfc/rfc4918.html); backend limits follow [Drive custom properties](https://developers.google.com/workspace/drive/api/guides/properties).
 

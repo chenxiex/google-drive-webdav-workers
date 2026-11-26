@@ -78,6 +78,26 @@ describe('MOVE / COPY overwrite semantics', () => {
 		const res = await request(path, { method, ...(destination ? { headers: { Destination: destination } } : {}) });
 		expect(res.status).toBe(403);
 	});
+
+	it.each([
+		'/dav/',
+		'/dav/a.txt',
+		'/dav/docs/',
+		'/dav/tus_uploads',
+		'/dav/folder/tus_uploads/file',
+	])('rejects non-TUS PATCH on %s with 405 without forwarding to COPY', async path => {
+		const spy = vi.spyOn(drive, 'handle');
+		for (const extraHeaders of [{}, { 'Tus-Resumable': '1.0.0' }] as Record<string, string>[]) {
+			const res = await request(path, {
+				method: 'PATCH',
+				headers: { Destination: ORIGIN + '/dav/cp-new.txt', ...extraHeaders },
+			});
+			expect(res.status).toBe(405);
+			expect(await res.text()).toBe('Method Not Allowed');
+		}
+		expect(spy).not.toHaveBeenCalled();
+		expect(drive.children('root').some(f => f.name === 'cp-new.txt')).toBe(false);
+	});
 });
 
 describe('recoverable overwrite operations', () => {

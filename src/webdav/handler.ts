@@ -2,9 +2,12 @@ import { type DriveClient } from '../drive/client';
 import { FOLDER_MIME } from '../drive/types';
 import { StatusError, errorStatus, getUrl, splitPath } from '../http';
 
-export function handleOptions(): Response {
-    // Locking (Class 2) is not implemented.
-    const allowed_methods = ['GET', 'HEAD', 'OPTIONS', 'PUT', 'PROPFIND', 'PROPPATCH', 'MKCOL', 'DELETE', 'MOVE', 'COPY', 'POST', 'PATCH'].join(',');
+export function handleOptions(isTusPath = false): Response {
+    // Locking (Class 2) is not implemented; PATCH is supported only on TUS upload URLs.
+    const allowed_methods = [
+        'GET', 'HEAD', 'OPTIONS', 'PUT', 'PROPFIND', 'PROPPATCH', 'MKCOL', 'DELETE', 'MOVE', 'COPY', 'POST',
+        ...(isTusPath ? ['PATCH'] : []),
+    ].join(',');
     return new Response(null, { status: 200, headers: { 'Allow': allowed_methods, 'DAV': '1', 'MS-Author-Via': 'DAV', 'Accept-Ranges': 'bytes', 'Tus-Version': '1.0.0', 'Tus-Extension': 'creation' } });
 }
 

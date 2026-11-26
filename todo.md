@@ -15,7 +15,7 @@
   - 支持 `Depth: 0`（浅复制空目录壳及属性）与 `Depth: infinity`/缺省（按层 BFS 打包 `files.list` / `files.create` / `files.copy` 至 `POST /batch/drive/v3`，每批最多 100 个子请求，受安全规模/子请求预算保护，遇偶发 `429`/`5xx` 子项轻量重试 1–2 次）；先建暂存目录再覆盖发布。实现前需审计 `/batch/drive/v3` 并在 `MockDrive` 建模。
   - 统一单文件与文件夹 `COPY` 的暂存失败清理策略：在暂存复制阶段失败、旧目标移入回收站失败、或末步发布重命名遇确定性 `4xx`（非 `408`）拒绝并还原旧目标后，顺手将未发布的 `.webdav-copy-<UUID>` 移入回收站清理并返回单一明确错误码（仅末步重命名遇 `5xx`/`408`/断连等不确定失败时不自动清理或还原）。
 
-- [ ] **移除全站非 TUS `PATCH` 转发 `COPY` 的遗留路由（`9.1A`）**
+- [x] **移除全站非 TUS `PATCH` 转发 `COPY` 的遗留路由（`9.1A`）**
   - 删除 [src/router.ts](src/router.ts) 中非 `tus_uploads/` 路径将 `PATCH` 改写为 `COPY` 的遗留代码，全站对非 TUS `PATCH` 统一返回 `405 Method Not Allowed`。
 
 - [ ] **全站移除 `ensureDir` 自动建父目录，统一按 RFC 4918 返回 `409`（`9.2B`）**

@@ -61,7 +61,7 @@ export async function handleRequest(request: Request, env: Env, _ctx?: Execution
 
         switch (method) {
             case 'OPTIONS':
-                return handleOptions();
+                return handleOptions(isTusPath);
             case 'PROPFIND':
                 return await handlePropfind(drive, request);
             case 'PROPPATCH':
@@ -77,7 +77,8 @@ export async function handleRequest(request: Request, env: Env, _ctx?: Execution
             case 'POST':
                 return await handleTusCreate(drive, env, auth.user, request);
             case 'PATCH':
-                return await (isTusPath ? handleTusUpload(drive, env, auth.user, request) : handleCopy(drive, request));
+                if (isTusPath) return await handleTusUpload(drive, env, auth.user, request);
+                break;
             case 'MOVE':
                 return await handleMove(drive, request);
             case 'COPY':
@@ -87,9 +88,8 @@ export async function handleRequest(request: Request, env: Env, _ctx?: Execution
             case 'LOCK':
             case 'UNLOCK':
                 return handleLock();
-            default:
-                return new Response('Method Not Allowed', { status: 405 });
         }
+        return new Response('Method Not Allowed', { status: 405 });
     } catch (e: any) {
         const status = e.status || e.code || 500;
         return new Response(status + ': ' + e.message, { status });

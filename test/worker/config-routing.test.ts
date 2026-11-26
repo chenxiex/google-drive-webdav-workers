@@ -88,7 +88,15 @@ describe('path routing', () => {
 		expect((await run(base, {
 			headers: { Authorization: basic('test', 'wrong') },
 		})).status).toBe(401);
-		expect((await run(base, { method: 'OPTIONS', headers: AUTH })).status).toBe(200);
+		const options = await run(base, { method: 'OPTIONS', headers: AUTH });
+		expect(options.status).toBe(200);
+		expect(options.headers.get('Allow')!.split(',').map(m => m.trim())).not.toContain('PATCH');
+		expect((await run(base + 'a.txt', {
+			method: 'PATCH',
+			headers: { ...AUTH, Destination: ORIGIN + base + 'copy.txt' },
+		})).status).toBe(405);
+		expect((await run(base + 'tus_uploads', { method: 'PATCH', headers: AUTH })).status).toBe(405);
+		expect((await run(base + 'tus_uploads/' + crypto.randomUUID(), { method: 'PATCH', headers: AUTH })).status).toBe(412);
 		expect((await run('/robots.txt')).status).toBe(200);
 		expect((await run('/favicon.ico')).status).toBe(204);
 		expect(fetch).not.toHaveBeenCalled();

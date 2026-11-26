@@ -51,13 +51,19 @@ describe('server metadata', () => {
 		expect(favicon.status).toBe(204);
 	});
 
-	it('does not advertise Class 2 or locking methods in OPTIONS', async () => {
+	it('does not advertise Class 2, locking, or non-TUS PATCH methods in OPTIONS', async () => {
 		const res = await request('/dav/', { method: 'OPTIONS' });
 		expect(res.status).toBe(200);
 		expect(res.headers.get('DAV')).toBe('1');
-		expect(res.headers.get('Allow')).not.toContain('LOCK');
-		expect(res.headers.get('Allow')).toContain('PROPFIND');
-		expect(res.headers.get('Allow')).toContain('MOVE');
+		const allow = res.headers.get('Allow')!.split(',').map(m => m.trim());
+		expect(allow).not.toContain('LOCK');
+		expect(allow).not.toContain('PATCH');
+		expect(allow).toContain('PROPFIND');
+		expect(allow).toContain('MOVE');
+
+		const tusOptions = await request('/dav/tus_uploads/' + crypto.randomUUID(), { method: 'OPTIONS' });
+		expect(tusOptions.status).toBe(200);
+		expect(tusOptions.headers.get('Allow')!.split(',').map(m => m.trim())).toContain('PATCH');
 	});
 
 	it.each(['/other', '/_/16/type/application/vnd.google-apps.folder'])('returns 404 for paths outside the base path (%s)', async path => {

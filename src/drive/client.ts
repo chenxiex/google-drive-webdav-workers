@@ -4,6 +4,10 @@ import { type MemoryCache, isolateCache } from './cache';
 import { getAccessToken } from './oauth';
 import { FOLDER_MIME, PROPERTY_FIELDS, type StorageQuota, isVisibleDriveItem } from './types';
 
+const FOLDER_META_TTL = 300000;
+const FILE_META_TTL = 30000;
+const OBJECTS_TTL = 30000;
+
 export class DriveClient {
     readonly config: RuntimeConfig;
     readonly cache: MemoryCache;
@@ -179,23 +183,27 @@ export class DriveClient {
         return metadata?.mimeType === FOLDER_MIME ? metadata : null;
     }
 
-    async getMetadata(path: string): Promise<any> {
+    async getMetadata(path: string, options?: { bypassLeafCache?: boolean }): Promise<any> {
         path = path.startsWith('/') ? path : '/' + path;
         path = path.endsWith('/') ? path : path + '/';
         if (path === '/') return this.rootMetadata();
-        let meta = await this.cache.get(path, 'meta');
-        if (meta) return meta;
+        const bypassLeafCache = options?.bypassLeafCache ?? false;
+        if (!bypassLeafCache) {
+            const cached = await this.cache.get(path, 'meta');
+            if (cached) return cached;
+        }
 
         let fullpath = '/';
         let metadata: any = this.rootMetadata();
 
-        const fragments = trimString(path, '/').split('/');
+        const fragments = trimString(path, '/').split('/').filter(Boolean);
 
-        for (const name of fragments) {
-            if (!name) continue;
+        for (let i = 0; i < fragments.length; i++) {
+            const name = fragments[i];
+            const isLeaf = i === fragments.length - 1;
             if (metadata.mimeType !== FOLDER_MIME) return null;
             fullpath += name + '/';
-            meta = await this.cache.get(fullpath, 'meta');
+            let meta = !(isLeaf && bypassLeafCache) ? await this.cache.get(fullpath, 'meta') : null;
             if (!meta) {
                 // `getUrl` already decoded the path once; decoding again here
                 // threw a URIError for any name containing a literal "%".
@@ -213,8 +221,12 @@ export class DriveClient {
                     visible = result.files?.find(isVisibleDriveItem) ?? null;
                     pageToken = result.nextPageToken;
                 } while (!visible && pageToken);
-                if (!visible) return null;
-                await this.cache.put(fullpath, visible, 'meta');
+                if (!visible) {
+                    if (isLeaf && bypassLeafCache) await this.cache.delete(fullpath, 'meta');
+                    return null;
+                }
+                const ttl = visible.mimeType === FOLDER_MIME ? FOLDER_META_TTL : FILE_META_TTL;
+                await this.cache.put(fullpath, visible, 'meta', ttl);
                 meta = visible;
             }
             metadata = meta;
@@ -243,18 +255,27 @@ export class DriveClient {
             if (result.files) list.push(...result.files.filter(isVisibleDriveItem));
         } while (pageToken);
 
-        await this.cache.put(id, list, 'objects', 30000);
+        await this.cache.put(id, list, 'objects', OBJECTS_TTL);
         return list;
     }
 
-    async getRawContent(id: string, range: string | null, abuse: boolean): Promise<Response> {
+    private async fetchMedia(url: URL, range: string | null, abuse: boolean): Promise<Response> {
         const headers: Record<string, string> = { Authorization: 'Bearer ' + (await this.getAccessToken()) };
         if (range) headers['Range'] = range;
-        const url = new URL(`https://www.googleapis.com/drive/v2/files/${id}`);
-        url.searchParams.set('supportsAllDrives', 'true');
         url.searchParams.set('alt', 'media');
         url.searchParams.set('acknowledgeAbuse', abuse ? 'true' : 'false');
-        return await fetch(url.toString(), { headers });
+        return fetch(url.toString(), { headers });
+    }
+
+    getRevisionContent(id: string, revisionId: string, range: string | null, abuse: boolean): Promise<Response> {
+        const url = new URL(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}/revisions/${encodeURIComponent(revisionId)}`);
+        return this.fetchMedia(url, range, abuse);
+    }
+
+    getFileContent(id: string, range: string | null, abuse: boolean): Promise<Response> {
+        const url = new URL(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}`);
+        url.searchParams.set('supportsAllDrives', 'true');
+        return this.fetchMedia(url, range, abuse);
     }
 
     async queryDrive(params: Record<string, any>, retryCount: number = 0): Promise<any> {

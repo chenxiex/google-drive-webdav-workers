@@ -1,5 +1,5 @@
 import { type DriveClient } from '../drive/client';
-import { FOLDER_MIME } from '../drive/types';
+import { FOLDER_MIME, fileEtag } from '../drive/types';
 import { StatusError, encodePath, errorStatus, escapeXml, getUrl, pathJoin } from '../http';
 import { DavProperty, key as propertyKey, parseFind, parsePatch, propertyNameXml, readDeadProperties, writeDeadProperties } from './property-xml';
 
@@ -113,8 +113,6 @@ function applyNativeProperty(patch: Record<string, unknown>, property: DavProper
     }
 }
 
-const fileEtag = (file: any): string => '"' + (file.id || 'root') + '-' + (file.version ?? file.modifiedTime ?? '') + '"';
-
 function fileChecksums(file: any): string | undefined {
     const parts: string[] = [];
     if (typeof file.sha1Checksum === 'string' && file.sha1Checksum) parts.push('SHA1:' + file.sha1Checksum);
@@ -137,7 +135,8 @@ function davProperties(file: any, quota?: { used: string; available?: string }):
         add('getcontentlength', Number(file.size) || 0);
         add('getcontenttype', file.mimeType || 'application/octet-stream');
     }
-    add('getetag', fileEtag(file));
+    const etag = fileEtag(file);
+    if (etag) add('getetag', etag);
     if (file.modifiedTime) add('getlastmodified', new Date(file.modifiedTime).toUTCString());
     if (file.createdTime) add('creationdate', file.createdTime);
     // Keep the existing empty lock capability element (Class 1, no locks).

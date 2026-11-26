@@ -26,7 +26,7 @@ pnpm run build
 | `DELETE /drive/v3/files/{id}` | Returns empty `204`, `404` when missing, and recursively deletes descendants when deleting a folder. |
 | Multipart & media uploads | `POST ?uploadType=multipart` parses quoted/unquoted boundaries, UTF-8 metadata, and exact binary bytes; `PATCH ?uploadType=media` overwrites/truncates while preserving the existing binary MIME type; both populate `md5Checksum`, `sha1Checksum`, and `sha256Checksum`. |
 | Resumable uploads (`uploadType=resumable`) | Empty `200` `Location` session init; status `PUT` (`bytes */total`) and non-final chunks return `308` with `Range`; omitted `X-Upload-Content-Length` (`*`) supported until final chunk; non-final chunks require >= 256 KiB and acknowledge only whole 256 KiB multiples (discarding unaligned tails); replay/overlapping chunks preserve already-accepted prefix bytes; `bytes */0` finalizes empty files; explicit `modifiedTime` is preserved; completed status queries and final-chunk replays return `200` with `md5Checksum`, `sha1Checksum`, and `sha256Checksum`; conflicting totals or small non-final chunks fail with `400` and poison the session. |
-| Media download (`GET /drive/v{2,3}/files/{id}?alt=media`) | Returns exact fixture bytes and MIME; supports in-bounds closed `Range` (`206`); v2 returns a deterministic SHA-256-derived strong `ETag` and `416` when start >= length; deliberately ignores `If-Range` (matching live v2 behavior). |
+| Media download (`GET /drive/v3/files/{id}/revisions/{revisionId}?alt=media`, `GET /drive/v3/files/{id}?alt=media`) | Returns exact revision or current file bytes and MIME; tracks `headRevisionId` across creation and content updates (retaining prior immutable revision snapshots while keeping `headRevisionId` unchanged on metadata-only `PATCH`); supports in-bounds closed `Range` (`206`) and `416` when `start >= length`. |
 
 ### Non-obvious Drive contracts modeled in `MockDrive`
 
@@ -43,12 +43,12 @@ pnpm run build
 ## Deliberate limits
 
 `MockDrive` fails loudly (`MockDrive does not implement ...`) for unverified or unimplemented features instead of faking success, including:
-- Media downloads of folders/Workspace documents, missing fixture bytes/mismatched size, and open/suffix/multipart/out-of-bounds ranges (other than v2 `start >= length` `416`)
+- Media downloads of folders/Workspace documents, missing fixture bytes/mismatched size, and open/suffix/multipart/out-of-bounds ranges (other than `start >= length` `416`)
 - Unverified `folderColorRgb` values, `createdTime` on `create`, writes to `root`, Workspace conversions, nested non-`files` `fields` selectors, and unmodeled `q` operators or `orderBy` keys
 - Moving items from/into Trash, changing trash state under a trashed ancestor, and folder cycles
 - `changes.list` / `getStartPageToken` (not yet implemented; must be audited and modeled before `OC-05`)
 - Media/upload operations inside `POST /batch/drive/v3` (rejected by Google Drive)
-- `headRevisionId` and `revisions.get?alt=media` (including immutable post-overwrite `Range` reads) were live-verified on 2026-11-24 and remain to be modeled in `MockDrive` when migrating away from v2 downloads and implementing `OC-06` (`md5Checksum`, `sha1Checksum`, and `sha256Checksum`, including the metadata-only empty-file exception, are modeled).
+- `headRevisionId` and `revisions.get?alt=media` (including immutable post-overwrite `Range` reads and `416`) are modeled; read-only shared `403` and `cannotDownloadAbusiveFile` responses are injected at the fetch boundary in tests.
 - Shared-drive permissions, cross-app 100-property aggregate quotas, real OAuth token expiry/revocation, network/rate-limit retries, and asynchronous trash propagation delays (covered via fault injection in tests).
 
 ## Official Google Drive references

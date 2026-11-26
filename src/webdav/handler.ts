@@ -1,5 +1,5 @@
 import { type DriveClient } from '../drive/client';
-import { FOLDER_MIME } from '../drive/types';
+import { FOLDER_MIME, fileEtag } from '../drive/types';
 import { StatusError, errorStatus, getUrl, splitPath } from '../http';
 
 export function handleOptions(isTusPath = false): Response {
@@ -30,58 +30,83 @@ export async function handleMkcol(drive: DriveClient, request: Request): Promise
     return new Response(await response.text(), { status: response.status });
 }
 
+function methodNotAllowedOnCollection(): Response {
+    return new Response('Method Not Allowed', {
+        status: 405,
+        headers: { Allow: 'HEAD, OPTIONS, PROPFIND, PROPPATCH, DELETE, MOVE, POST' },
+    });
+}
+
 export async function handleGet(drive: DriveClient, request: Request): Promise<Response> {
     const { fpath } = getUrl(request.url, drive.config.basePath);
     const url = new URL(request.url);
-    let response: Response;
-    const metadata = await drive.getMetadata(fpath);
-    if (metadata) {
-        try {
-            if (metadata.mimeType === FOLDER_MIME) {
-                return new Response('Method Not Allowed', {
-                    status: 405,
-                    headers: { Allow: 'HEAD, OPTIONS, PROPFIND, PROPPATCH, DELETE, MOVE, POST' },
-                });
-            }
-            const abuse = url.searchParams.get('abuse') === 'true';
-            const range = request.headers.get('Range');
-            const ifRange = request.headers.get('If-Range');
-            response = await drive.getRawContent(metadata.id, range, abuse);
-            if (range && ifRange !== null && (response.status === 206 || response.status === 416)) {
-                // Drive ignores If-Range. Compare against the validator of
-                // the actual partial representation, never cached metadata.
-                const etag = response.headers.get('ETag');
-                const matches = etag !== null && /^"[\x21\x23-\x7e\x80-\xff]*"$/.test(etag) && ifRange === etag;
-                if (response.status === 416 || !matches) {
-                    await response.body?.cancel();
-                    response = await drive.getRawContent(metadata.id, null, abuse);
-                }
-            }
-            if (response.status >= 400) {
-                // The body is not always JSON, and `errors` is not always
-                // populated; either would otherwise turn into a 500 that
-                // hides Drive's real status.
+    const range = request.headers.get('Range');
+    const ifRange = request.headers.get('If-Range');
+    const bypassLeafCache = !range || ifRange !== null;
+    const metadata = await drive.getMetadata(fpath, { bypassLeafCache });
+    if (!metadata) return new Response(null, { status: 404 });
+
+    try {
+        if (metadata.mimeType === FOLDER_MIME) return methodNotAllowedOnCollection();
+
+        const abuse = url.searchParams.get('abuse') === 'true';
+        let effectiveRange = range;
+
+        if (range && ifRange !== null) {
+            const liveEtag = fileEtag(metadata);
+            const matches = liveEtag !== undefined && /^"[\x21\x23-\x7e\x80-\xff]*"$/.test(ifRange) && ifRange === liveEtag;
+            if (!matches) effectiveRange = null;
+        }
+
+        const revisionId = typeof metadata.headRevisionId === 'string' && metadata.headRevisionId
+            ? metadata.headRevisionId
+            : null;
+        let response: Response;
+        if (revisionId) {
+            response = await drive.getRevisionContent(metadata.id, revisionId, effectiveRange, abuse);
+            if (response.status === 403) {
                 const result: any = await response.json().catch(() => ({}));
                 const reason = result?.error?.errors?.[0]?.reason;
-                if (!abuse && response.status === 403 && reason === 'cannotDownloadAbusiveFile') {
+                if (!abuse && reason === 'cannotDownloadAbusiveFile') {
                     return Response.redirect(url.origin + url.pathname + '?abuse=true', 302);
                 }
-                throw new StatusError(result?.error?.message || response.statusText || 'Drive error', response.status);
+                response = await drive.getFileContent(metadata.id, effectiveRange, abuse);
+            } else if (response.status === 404) {
+                await response.body?.cancel();
+                await drive.cache.invalidateFileAndParent(fpath, metadata.parents?.[0]);
+                response = await drive.getFileContent(metadata.id, effectiveRange, abuse);
             }
-            response = new Response(response.body, response);
-            response.headers.set('Accept-Ranges', 'bytes');
-        } catch (e: any) { return new Response(e.message, { status: errorStatus(e) }); }
-    } else { response = new Response(null, { status: 404 }); }
-    return response;
+        } else {
+            response = await drive.getFileContent(metadata.id, effectiveRange, abuse);
+        }
+
+        if (response.status >= 400 && response.status !== 416) {
+            // The body is not always JSON, and `errors` is not always
+            // populated; either would otherwise turn into a 500 that
+            // hides Drive's real status.
+            const result: any = await response.json().catch(() => ({}));
+            const reason = result?.error?.errors?.[0]?.reason;
+            if (!abuse && response.status === 403 && reason === 'cannotDownloadAbusiveFile') {
+                return Response.redirect(url.origin + url.pathname + '?abuse=true', 302);
+            }
+            throw new StatusError(result?.error?.message || response.statusText || 'Drive error', response.status);
+        }
+        response = new Response(response.body, response);
+        response.headers.set('Accept-Ranges', 'bytes');
+        const etag = fileEtag(metadata);
+        if (etag) response.headers.set('ETag', etag);
+        return response;
+    } catch (e: any) { return new Response(e.message, { status: errorStatus(e) }); }
 }
 
 export async function handleHead(drive: DriveClient, request: Request): Promise<Response> {
     const { fpath } = getUrl(request.url, drive.config.basePath);
-    const metadata = await drive.getMetadata(fpath);
+    const metadata = await drive.getMetadata(fpath, { bypassLeafCache: true });
     if (metadata) {
         const size = metadata.size ? metadata.size.toString() : '0';
         const mimeType = metadata.mimeType || 'application/octet-stream';
         const modifiedTime = metadata.modifiedTime ? new Date(metadata.modifiedTime).toUTCString() : new Date().toUTCString();
+        const etag = metadata.mimeType !== FOLDER_MIME ? fileEtag(metadata) : undefined;
         return new Response(null, {
             status: 200,
             headers: {
@@ -89,6 +114,7 @@ export async function handleHead(drive: DriveClient, request: Request): Promise<
                 'Content-Type': mimeType,
                 'Last-Modified': modifiedTime,
                 ...(metadata.mimeType !== FOLDER_MIME ? { 'Accept-Ranges': 'bytes' } : {}),
+                ...(etag ? { 'ETag': etag } : {}),
             },
         });
     }

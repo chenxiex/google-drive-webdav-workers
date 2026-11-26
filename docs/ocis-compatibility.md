@@ -94,7 +94,7 @@ Required property surface:
 - Support `Prefer: return=minimal` by omitting `404` propstat entries and returning `Preference-Applied: return=minimal`.
 
 Validators and synchronization:
-- **Unified Drive v3 validators & immutable revision downloads (`4A-1`, target contract; current `dev` still runs Drive v2 downloads until migrated)**:
+- **Unified Drive v3 validators & immutable revision downloads (`4A-1`)**:
   - Unify `GET`, `HEAD`, and `PROPFIND` file validators on Drive **v3** using `"<id>-<headRevisionId>"` (falling back to `version` when `headRevisionId` is absent), removing the Drive v2 dependency.
   - Live Drive v3 verification (2026-11-24) confirmed `headRevisionId` is populated immediately and identically across `multipart`, `media`, `resumable` final `200`, metadata-only empty `POST`, `files.get`, and `files.list`; content overwrites change `headRevisionId` and advance `version`, whereas `appProperties` updates advance `version` without changing `headRevisionId`.
   - `GET` downloads immutable bytes from `GET /drive/v3/files/{id}/revisions/{headRevisionId}?alt=media` (live-verified `200`, `Range` `206`, out-of-bounds `416`, zero-byte `200`, and immutable `206` reads of the previous `rev1` after overwriting the file to `rev2`), falling back to `files/{id}?alt=media` on `403` (read-only shared items) or `404` (purged revision).

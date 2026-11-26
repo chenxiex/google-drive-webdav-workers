@@ -41,7 +41,7 @@
 - [x] **修复顶层异常捕获复用 `errorStatus()`**
   - [src/router.ts](src/router.ts) 顶层 `catch` 直接读取 `e.status || e.code || 500`，若异常带非 HTTP 数字或字符串的 `e.code` 会导致 `new Response` 再抛出 `RangeError`；应统一改用已定义的 `errorStatus(e)`。
 
-- [ ] **将下载与 ETag 从 Drive v2 迁移至统一的 Drive v3（`4A-1`）**
+- [x] **将下载与 ETag 从 Drive v2 迁移至统一的 Drive v3（`4A-1`）**
   - 已于 2026-11-24 实测验证 Drive v3：`headRevisionId` 在 `multipart`/`media`/`resumable` 终块 `200`/空创建/`files.get`/`files.list` 均立即可用（仅改 `appProperties` 时保持不变、覆写内容时变化）；`revisions/{headRevisionId}?alt=media` 支持 `200`/`Range 206`/越界 `416`/空文件 `200`，且在文件被覆写为 `rev2` 后仍可从旧 `rev1` 不可变读取 `206`。
   - 统一将 `GET`/`HEAD`/`PROPFIND` 文件 ETag 迁至 `"<id>-<headRevisionId>"`（无 `headRevisionId` 时回退 `version`），`GET` 优先走 `revisions/{headRevisionId}?alt=media`（只读共享 `403` 或版本淘汰 `404` 时回退 `files/{id}?alt=media`），`If-Range` 绕过内存缓存实时校验 `headRevisionId`；移除 Drive v2 依赖并同步更新 `MockDrive`。
 

@@ -115,18 +115,28 @@ describe('persisted WebDAV properties', () => {
         await patch(set('<G:folderColorRgb>#ff0000</G:folderColorRgb>'), '/webdav/docs/');
         expect(drive.findById('folder-docs')!.folderColorRgb).toBe('#f83a22');
 
+        const initialRev = source().headRevisionId;
+        const initialTag = value(await (await find('<D:getetag/>')).text(), DAV, 'getetag');
+        await patch(set('<X:note>meta-only</X:note>'));
+        expect(source().version).toBe('2');
+        expect(source().headRevisionId).toBe(initialRev);
+        expect(value(await (await find('<D:getetag/>')).text(), DAV, 'getetag')).toBe(initialTag);
+
         const tags: (string | null | undefined)[] = [];
         for (const content of ['abcd', 'efgh']) {
             expect((await request('/webdav/a.txt', { method: 'PUT', body: content })).status).toBe(204);
+            const revAfterPut = source().headRevisionId;
             const patchBody = await (await patch(set('<D:lastmodified>1577836800</D:lastmodified>'))).text();
             expect(propStatus(patchBody, DAV, 'lastmodified')).toBe('HTTP/1.1 200 OK');
             expect(source().size).toBe(4);
             expect(source().modifiedTime).toBe('2020-01-01T00:00:00.000Z');
+            expect(source().headRevisionId).toBe(revAfterPut);
             expect(JSON.stringify(source().appProperties ?? {})).not.toContain('lastmodified');
             tags.push(value(await (await find('<D:getetag/>')).text(), DAV, 'getetag'));
         }
         expect(tags[0]).toBeTruthy();
         expect(tags[1]).not.toBe(tags[0]);
+        expect(tags[0]).not.toBe(initialTag);
     });
 
     it.each([

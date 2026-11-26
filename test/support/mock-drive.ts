@@ -7,6 +7,7 @@ export interface DriveFile {
 	size?: number | string;
 	parents: string[];
 	version?: string;
+	headRevisionId?: string | null;
 	modifiedTime?: string;
 	createdTime?: string;
 	description?: string;
@@ -81,7 +82,7 @@ function parseMetadata(bytes: Uint8Array): Metadata | Response {
 
 // Drive partial-response selectors used by this worker. Unknown supported-API
 // features fail loudly instead of pretending that the real API accepted them.
-const fileFields = new Set(['kind', 'id', 'version', 'name', 'mimeType', 'size', 'modifiedTime', 'createdTime', 'starred', 'folderColorRgb', 'appProperties', 'parents', 'trashed', 'explicitlyTrashed', 'description', 'iconLink', 'thumbnailLink', 'imageMediaMetadata', 'md5Checksum', 'sha1Checksum', 'sha256Checksum']);
+const fileFields = new Set(['kind', 'id', 'version', 'headRevisionId', 'name', 'mimeType', 'size', 'modifiedTime', 'createdTime', 'starred', 'folderColorRgb', 'appProperties', 'parents', 'trashed', 'explicitlyTrashed', 'description', 'iconLink', 'thumbnailLink', 'imageMediaMetadata', 'md5Checksum', 'sha1Checksum', 'sha256Checksum']);
 const EMPTY_MD5 = 'd41d8cd98f00b204e9800998ecf8427e';
 const MD5_SHIFTS = [
 	7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22,
@@ -178,6 +179,7 @@ function representation(file: DriveFile): Record<string, unknown> {
 		parents: [...file.parents], modifiedTime: file.modifiedTime, trashed: file.trashed ?? false, explicitlyTrashed: file.explicitlyTrashed ?? false,
 		...(!file.mimeType.startsWith('application/vnd.google-apps.') ? {
 			size: String(file.size ?? 0),
+			...(file.headRevisionId ? { headRevisionId: file.headRevisionId } : {}),
 			...(file.md5Checksum !== undefined ? { md5Checksum: file.md5Checksum } : {}),
 			...(file.sha1Checksum !== undefined ? { sha1Checksum: file.sha1Checksum } : {}),
 			...(file.sha256Checksum !== undefined ? { sha256Checksum: file.sha256Checksum } : {}),
@@ -218,10 +220,44 @@ export class MockDrive {
 	private sessions = new Map<string, Session>();
 	private pages = new Map<string, { offset: number; query: string; order: string }>();
 	private hashedContent = new WeakMap<DriveFile, Uint8Array>();
+	private revSeq = 0;
+	private revisions = new Map<string, Map<string, { content: Uint8Array; mimeType: string }>>();
 	constructor(private oauth = { clientId: 'test-client-id', clientSecret: 'test-client-secret', refreshToken: 'test-refresh-token-history' }) {}
 
+	private nextRevisionId(): string {
+		return 'rev-' + (++this.revSeq);
+	}
+	private recordRevision(file: DriveFile): void {
+		if (!file.headRevisionId || file.content === undefined) return;
+		let fileRevs = this.revisions.get(file.id);
+		if (!fileRevs) {
+			fileRevs = new Map();
+			this.revisions.set(file.id, fileRevs);
+		}
+		fileRevs.set(file.headRevisionId, { content: file.content.slice(), mimeType: file.mimeType });
+	}
+	purgeRevision(fileId: string, revisionId: string): void {
+		this.revisions.get(fileId)?.delete(revisionId);
+	}
+	replaceContent(fileId: string, content: Uint8Array, options?: { preserveModifiedTime?: boolean }): DriveFile {
+		const file = this.findById(fileId);
+		if (!file || file.mimeType.startsWith('application/vnd.google-apps.')) {
+			throw new Error(`Cannot replace content on ${fileId}`);
+		}
+		file.content = content.slice();
+		file.size = content.length;
+		file.version = (BigInt(file.version ?? '1') + 1n).toString();
+		file.headRevisionId = this.nextRevisionId();
+		this.hashedContent.delete(file);
+		if (!options?.preserveModifiedTime) file.modifiedTime = new Date().toISOString();
+		this.recordRevision(file);
+		return file;
+	}
 	add(file: DriveFile): DriveFile {
 		file.version ??= '1';
+		if (!file.mimeType.startsWith('application/vnd.google-apps.')) {
+			if (file.headRevisionId === undefined) file.headRevisionId = this.nextRevisionId();
+		}
 		file.parents = [...file.parents];
 		file.modifiedTime ??= '2024-01-01T00:00:00.000Z';
 		file.createdTime ??= file.modifiedTime;
@@ -231,6 +267,7 @@ export class MockDrive {
 		if (file.content !== undefined && (file.md5Checksum !== undefined || file.sha1Checksum !== undefined || file.sha256Checksum !== undefined)) {
 			this.hashedContent.set(file, file.content);
 		}
+		this.recordRevision(file);
 		this.files.push(file);
 		this.refreshTrashState();
 		return file;
@@ -249,6 +286,7 @@ export class MockDrive {
 	remove(id: string): void {
 		const removed = new Set([id]);
 		for (const parent of removed) for (const child of this.children(parent)) removed.add(child.id);
+		for (const removedId of removed) this.revisions.delete(removedId);
 		this.files = this.files.filter(f => !removed.has(f.id));
 	}
 	findById(id: string): DriveFile | undefined { return this.files.find(f => f.id === id) ?? (id === 'root' ? this.root : undefined); }
@@ -388,8 +426,10 @@ export class MockDrive {
 		// Metadata-only MIME changes are ignored by Drive for binary files.
 		if (content !== undefined) {
 			file.content = content.slice(); file.size = content.length;
+			file.headRevisionId = this.nextRevisionId();
 			Object.assign(file, await computeChecksums(file.content));
 			this.hashedContent.set(file, file.content);
+			this.recordRevision(file);
 			// Updating a binary file's bytes preserves its existing MIME type,
 			// even when the media request declares a different Content-Type.
 			if (meta.modifiedTime === undefined) file.modifiedTime = new Date().toISOString();
@@ -597,6 +637,20 @@ export class MockDrive {
 		});
 	}
 
+	private serveMedia(content: Uint8Array, mimeType: string, headers: Headers): Response {
+		const mediaHeaders = { 'Content-Type': mimeType };
+		const range = headers.get('Range');
+		if (!range) return new Response(content.slice(), { headers: { ...mediaHeaders, 'Content-Length': String(content.length) } });
+		const parsed = range.match(/^bytes=(\d+)-(\d+)$/);
+		if (!parsed) unsupported('unverified media range syntax');
+		const start = Number(parsed[1]), end = Number(parsed[2]);
+		if (start >= content.length) return new Response(null, { status: 416, headers: { 'Content-Range': `bytes */${content.length}` } });
+		if (start > end || end >= content.length) unsupported('unverified media range bounds');
+		return new Response(content.slice(start, end + 1), {
+			status: 206, headers: { ...mediaHeaders, 'Content-Length': String(end - start + 1), 'Content-Range': `bytes ${start}-${end}/${content.length}` },
+		});
+	}
+
 	async handle(input: FetchInput, init?: FetchInit): Promise<Response> {
 		const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
 		const req = input instanceof Request ? input : undefined;
@@ -680,29 +734,31 @@ export class MockDrive {
 				return created instanceof Response ? created : this.fileResponse(created, fields);
 			}
 		}
+		const revisionMedia = url.pathname.match(/^\/drive\/v3\/files\/([^/]+)\/revisions\/([^/]+)$/);
+		if (revisionMedia && method === 'GET' && url.searchParams.get('alt') === 'media') {
+			const fileId = decodeURIComponent(revisionMedia[1]);
+			const revisionId = decodeURIComponent(revisionMedia[2]);
+			const file = this.findById(fileId);
+			if (!file) return notFound(fileId);
+			if (file.mimeType.startsWith('application/vnd.google-apps.')) unsupported('media downloads of folders/native documents');
+			const revision = this.revisions.get(file.id)?.get(revisionId);
+			if (!revision) {
+				if (file.headRevisionId === revisionId && (!file.content || Number(file.size) !== file.content.length)) {
+					unsupported('media fixture without explicit bytes and matching size');
+				}
+				return apiError(404, 'notFound', `Revision not found: ${revisionId}.`, 'revisionId');
+			}
+			return this.serveMedia(revision.content, revision.mimeType, headers);
+		}
 		const match = url.pathname.match(/^\/drive\/v3\/files\/([^/]+)$/);
-		const media = url.pathname.match(/^\/drive\/v[23]\/files\/([^/]+)$/);
-		if (media && method === 'GET' && url.searchParams.get('alt') === 'media') {
-			const file = this.findById(media[1]);
-			if (!file) return notFound(media[1]);
+		if (match && method === 'GET' && url.searchParams.get('alt') === 'media') {
+			const fileId = decodeURIComponent(match[1]);
+			const file = this.findById(fileId);
+			if (!file) return notFound(fileId);
 			if (file.mimeType.startsWith('application/vnd.google-apps.')) unsupported('media downloads of folders/native documents');
 			const content = file.content;
 			if (!content || Number(file.size) !== content.length) unsupported('media fixture without explicit bytes and matching size');
-			// v2 media ETag is an opaque strong representation validator, not
-			// the v2 JSON etag or v3 metadata version. If-Range is ignored.
-			const digest = await crypto.subtle.digest('SHA-256', content.slice());
-			const etag = '"' + toHex(digest) + '"';
-			const mediaHeaders = { 'Content-Type': file.mimeType, ...(url.pathname.includes('/v2/') ? { ETag: etag } : {}) };
-			const range = headers.get('Range');
-			if (!range) return new Response(content.slice(), { headers: { ...mediaHeaders, 'Content-Length': String(content.length) } });
-			const parsed = range.match(/^bytes=(\d+)-(\d+)$/);
-			if (!parsed) unsupported('unverified media range syntax');
-			const start = Number(parsed[1]), end = Number(parsed[2]);
-			if (url.pathname.includes('/v2/') && start >= content.length) return new Response(null, { status: 416, headers: { 'Content-Range': `bytes */${content.length}` } });
-			if (start > end || end >= content.length) unsupported('unverified media range bounds');
-			return new Response(content.slice(start, end + 1), {
-				status: 206, headers: { ...mediaHeaders, 'Content-Length': String(end - start + 1), 'Content-Range': `bytes ${start}-${end}/${content.length}` },
-			});
+			return this.serveMedia(content, file.mimeType, headers);
 		}
 		if (match && method === 'GET') {
 			const file = this.findById(match[1]);

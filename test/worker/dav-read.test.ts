@@ -124,26 +124,29 @@ describe('original file downloads', () => {
 
 	it.each(['', '?param=s32'])('downloads original image bytes, not a thumbnail (%s)', async query => {
 		const spy = vi.spyOn(drive, 'handle');
+		const expectedEtag = `"image-${drive.findById('image')!.headRevisionId}"`;
 		const head = await request('/webdav/image.png', { method: 'HEAD' });
 		const response = await request('/webdav/image.png' + query);
 		expect(response.status).toBe(200);
 		expect(response.headers.get('Content-Type')).toBe('image/png');
 		expect(response.headers.get('Content-Length')).toBe(String(content.length));
 		expect(head.headers.get('Content-Length')).toBe(response.headers.get('Content-Length'));
-		expect(head.headers.get('ETag')).toBeNull();
-		expect(response.headers.get('ETag')).toMatch(/^"[^"]+"$/);
+		expect(head.headers.get('ETag')).toBe(expectedEtag);
+		expect(response.headers.get('ETag')).toBe(expectedEtag);
 		expect(head.headers.get('Accept-Ranges')).toBe('bytes');
 		expect(response.headers.get('Accept-Ranges')).toBe('bytes');
 		expect(head.headers.get('Date')).not.toBe(head.headers.get('Last-Modified'));
 		const properties = await (await request('/webdav/image.png', { method: 'PROPFIND', headers: { Depth: '0' } })).text();
-		expect(properties).toContain('<D:getetag>&quot;image-1&quot;</D:getetag>');
+		expect(properties).toContain(`<D:getetag>&quot;image-${drive.findById('image')!.headRevisionId}&quot;</D:getetag>`);
 		expect(new Uint8Array(await response.arrayBuffer())).toEqual(content);
 		const urls = spy.mock.calls.map(([input]) => new URL(input instanceof Request ? input.url : String(input)));
-		expect(urls.some(url => url.searchParams.get('alt') === 'media')).toBe(true);
+		expect(urls.some(url => url.pathname === `/drive/v3/files/image/revisions/${drive.findById('image')!.headRevisionId}`
+			&& url.searchParams.get('alt') === 'media')).toBe(true);
+		expect(urls.some(url => url.pathname.includes('/drive/v2/'))).toBe(false);
 		expect(urls.every(url => url.hostname === 'www.googleapis.com')).toBe(true);
 	});
 
-	it.each(['matching', 'stale', 'weak', 'missing-upstream', 'unsatisfiable'] as const)('handles If-Range safely (%s)', async mode => {
+	it.each(['matching', 'stale', 'weak', 'http-date', 'unsatisfiable'] as const)('handles If-Range safely (%s)', async mode => {
 		const initial = await request('/webdav/image.png');
 		const tag = initial.headers.get('ETag')!;
 		await initial.arrayBuffer();
@@ -153,81 +156,234 @@ describe('original file downloads', () => {
 			const response = await handle(input, init);
 			if (String(input).includes('alt=media')) {
 				calls.push(new Headers(init?.headers).get('Range'));
-				if (mode === 'missing-upstream') response.headers.delete('ETag');
 			}
 			return response;
 		});
-		const validator = mode === 'stale' ? '"old-version"' : mode === 'weak' ? 'W/' + tag : tag;
+		const validator = mode === 'stale' ? '"old-version"'
+			: mode === 'weak' ? 'W/' + tag
+			: mode === 'http-date' ? 'Wed, 01 Jan 2020 00:00:00 GMT'
+			: tag;
 		const range = mode === 'unsatisfiable' ? 'bytes=100-102' : 'bytes=1-3';
 		const response = await request('/webdav/image.png', { headers: { Range: range, 'If-Range': validator } });
+		if (mode === 'unsatisfiable') {
+			expect(response.status).toBe(416);
+			expect(response.headers.get('Content-Range')).toBe('bytes */12');
+			expect(response.headers.get('Accept-Ranges')).toBe('bytes');
+			expect(response.headers.get('ETag')).toBe(tag);
+			await response.body?.cancel();
+			expect(calls).toEqual([range]);
+			return;
+		}
 		const matching = mode === 'matching';
 		expect(response.status).toBe(matching ? 206 : 200);
 		expect(response.headers.get('Content-Range')).toBe(matching ? 'bytes 1-3/12' : null);
+		expect(response.headers.get('ETag')).toBe(tag);
 		expect(new Uint8Array(await response.arrayBuffer())).toEqual(matching ? content.slice(1, 4) : content);
-		expect(calls).toEqual(matching ? [range] : [range, null]);
+		expect(calls).toEqual([matching ? range : null]);
 	});
 
-	it('uses the media validator even when cached metadata, size and mtime stay unchanged', async () => {
-		const first = await request('/webdav/image.png');
-		const tag = first.headers.get('ETag')!;
+	it('serves immutable revision bytes for cached reads and bypasses cache for live If-Range', async () => {
+		const id = 'immutable-' + crypto.randomUUID();
+		const name = id + '.png';
+		drive.add({ id, name, mimeType: 'image/png', parents: ['root'], size: content.length, content });
+		const first = await request('/webdav/' + name);
+		const tag1 = first.headers.get('ETag')!;
 		await first.arrayBuffer();
-		const file = drive.files.find(file => file.id === 'image')!;
-		const modifiedTime = file.modifiedTime;
-		const changed = content.slice(); changed[0] = 1;
-		file.content = changed;
-		const response = await request('/webdav/image.png', { headers: { Range: 'bytes=1-3', 'If-Range': tag } });
-		expect(response.status).toBe(200);
-		expect(response.headers.get('ETag')).not.toBe(tag);
-		expect(file.modifiedTime).toBe(modifiedTime);
-		expect(new Uint8Array(await response.arrayBuffer())).toEqual(changed);
+
+		const modifiedTime = drive.findById(id)!.modifiedTime;
+		const changed = content.slice();
+		changed[0] = 1;
+		drive.replaceContent(id, changed, { preserveModifiedTime: true });
+		const tag2 = `"${id}-${drive.findById(id)!.headRevisionId}"`;
+		expect(tag2).not.toBe(tag1);
+
+		const partialOld = await request('/webdav/' + name, { headers: { Range: 'bytes=1-3' } });
+		expect(partialOld.status).toBe(206);
+		expect(partialOld.headers.get('ETag')).toBe(tag1);
+		expect(new Uint8Array(await partialOld.arrayBuffer())).toEqual(content.slice(1, 4));
+
+		const fullNew = await request('/webdav/' + name, { headers: { Range: 'bytes=1-3', 'If-Range': tag1 } });
+		expect(fullNew.status).toBe(200);
+		expect(fullNew.headers.get('ETag')).toBe(tag2);
+		expect(drive.findById(id)!.modifiedTime).toBe(modifiedTime);
+		expect(new Uint8Array(await fullNew.arrayBuffer())).toEqual(changed);
 	});
 
-	it('cancels discarded partial bytes and preserves a failed full-download retry', async () => {
-		const handle = drive.handle.bind(drive);
-		let cancelled = false;
-		let mediaCalls = 0;
-		vi.spyOn(drive, 'handle').mockImplementation(async (input, init) => {
-			if (!String(input).includes('alt=media')) return handle(input, init);
-			mediaCalls++;
-			if (mediaCalls === 1) return new Response(new ReadableStream({
-				cancel() { cancelled = true; },
-			}), { status: 206, headers: { ETag: '"new"' } });
-			expect(cancelled).toBe(true);
-			expect(new Headers(init?.headers).has('Range')).toBe(false);
-			return new Response('retry failed', { status: 503 });
-		});
-		const response = await request('/webdav/image.png', { headers: { Range: 'bytes=1-3', 'If-Range': '"old"' } });
-		expect(response.status).toBe(503);
-		expect(mediaCalls).toBe(2);
-		expect(cancelled).toBe(true);
-	});
+	it.each([403, 404] as const)('falls back to files/{id}?alt=media when revision download returns %s', async status => {
+		const id = `fallback-${status}-${crypto.randomUUID()}`;
+		const name = id + '.bin';
+		drive.add({ id, name, mimeType: 'application/octet-stream', parents: ['root'], size: content.length, content });
+		const revId = drive.findById(id)!.headRevisionId!;
+		if (status === 404) drive.purgeRevision(id, revId);
 
-	it.each([404, 500])('does not hide upstream %s with an If-Range retry', async status => {
 		const handle = drive.handle.bind(drive);
-		let mediaCalls = 0;
+		const mediaUrls: string[] = [];
 		vi.spyOn(drive, 'handle').mockImplementation(async (input, init) => {
-			if (String(input).includes('alt=media')) {
-				mediaCalls++;
-				return new Response('upstream failure', { status });
+			const url = String(input);
+			if (url.includes('alt=media')) mediaUrls.push(url);
+			if (status === 403 && url.includes(`/revisions/${revId}`)) {
+				return new Response(JSON.stringify({ error: { code: 403, errors: [{ reason: 'insufficientFilePermissions' }] } }), { status: 403 });
 			}
 			return handle(input, init);
 		});
-		const response = await request('/webdav/image.png', { headers: { Range: 'bytes=1-3', 'If-Range': '"old"' } });
-		expect(response.status).toBe(status);
-		expect(mediaCalls).toBe(1);
+
+		const response = await request('/webdav/' + name, { headers: { Range: 'bytes=1-3' } });
+		expect(response.status).toBe(206);
+		expect(response.headers.get('Content-Range')).toBe('bytes 1-3/12');
+		expect(response.headers.get('ETag')).toBe(`"${id}-${revId}"`);
+		expect(new Uint8Array(await response.arrayBuffer())).toEqual(content.slice(1, 4));
+		expect(mediaUrls).toHaveLength(2);
+		expect(mediaUrls[0]).toContain(`/drive/v3/files/${id}/revisions/${revId}`);
+		expect(mediaUrls[1]).toContain(`/drive/v3/files/${id}?supportsAllDrives=true&alt=media`);
+	});
+
+	it('redirects 302 on cannotDownloadAbusiveFile without falling back to files/{id}', async () => {
+		const id = 'abusive-' + crypto.randomUUID();
+		const name = id + '.bin';
+		drive.add({ id, name, mimeType: 'application/octet-stream', parents: ['root'], size: content.length, content });
+		const revId = drive.findById(id)!.headRevisionId!;
+		const handle = drive.handle.bind(drive);
+		const mediaUrls: string[] = [];
+		vi.spyOn(drive, 'handle').mockImplementation(async (input, init) => {
+			const url = String(input);
+			if (url.includes('alt=media')) {
+				mediaUrls.push(url);
+				if (new URL(url).searchParams.get('acknowledgeAbuse') !== 'true') {
+					return new Response(JSON.stringify({ error: { code: 403, errors: [{ reason: 'cannotDownloadAbusiveFile' }] } }), { status: 403 });
+				}
+			}
+			return handle(input, init);
+		});
+
+		const redirectRes = await request('/webdav/' + name, { redirect: 'manual' });
+		expect(redirectRes.status).toBe(302);
+		expect(redirectRes.headers.get('Location')).toBe(`${ORIGIN}/webdav/${name}?abuse=true`);
+		expect(mediaUrls).toHaveLength(1);
+		expect(mediaUrls[0]).toContain(`/revisions/${revId}`);
+
+		const acknowledged = await request('/webdav/' + name + '?abuse=true');
+		expect(acknowledged.status).toBe(200);
+		expect(new Uint8Array(await acknowledged.arrayBuffer())).toEqual(content);
+	});
+
+	it.each([
+		{ label: 'upstream-500', revStatus: 500, fileStatus: 200, expectedStatus: 500, expectedCalls: 1 },
+		{ label: 'purged-and-missing', revStatus: 404, fileStatus: 404, expectedStatus: 404, expectedCalls: 2 },
+	])('does not mask %s on revision/file media requests ($label)', async ({ revStatus, fileStatus, expectedStatus, expectedCalls }) => {
+		const id = `err-${revStatus}-${crypto.randomUUID()}`;
+		const name = id + '.bin';
+		drive.add({ id, name, mimeType: 'application/octet-stream', parents: ['root'], size: content.length, content });
+		const handle = drive.handle.bind(drive);
+		let mediaCalls = 0;
+		vi.spyOn(drive, 'handle').mockImplementation(async (input, init) => {
+			const url = String(input);
+			if (url.includes('alt=media')) {
+				mediaCalls++;
+				return new Response('upstream failure', { status: url.includes('/revisions/') ? revStatus : fileStatus });
+			}
+			return handle(input, init);
+		});
+		const response = await request('/webdav/' + name, { headers: { Range: 'bytes=1-3', 'If-Range': '"old"' } });
+		expect(response.status).toBe(expectedStatus);
+		expect(mediaCalls).toBe(expectedCalls);
+	});
+
+	it.each(['version-fallback', 'no-validator'] as const)('handles absent headRevisionId (%s)', async mode => {
+		const id = `no-rev-${mode}-${crypto.randomUUID()}`;
+		const name = id + '.bin';
+		drive.add({ id, name, mimeType: 'application/octet-stream', parents: ['root'], size: content.length, content, headRevisionId: null, version: '7' });
+		const handle = drive.handle.bind(drive);
+		const spy = vi.spyOn(drive, 'handle').mockImplementation(async (input, init) => {
+			const res = await handle(input, init);
+			if (mode === 'no-validator' && (init?.method ?? 'GET') === 'GET' && !String(input).includes('alt=media')) {
+				const payload = await res.json() as any;
+				const strip = (f: any) => { if (f?.id === id) delete f.version; };
+				strip(payload);
+				payload.files?.forEach(strip);
+				return new Response(JSON.stringify(payload), res);
+			}
+			return res;
+		});
+		const head = await request('/webdav/' + name, { method: 'HEAD' });
+		const get = await request('/webdav/' + name);
+		const prop = await (await request('/webdav/' + name, { method: 'PROPFIND', headers: { Depth: '0' } })).text();
+		const expectedTag = mode === 'version-fallback' ? `"${id}-7"` : null;
+		expect(head.headers.get('ETag')).toBe(expectedTag);
+		expect(get.headers.get('ETag')).toBe(expectedTag);
+		if (expectedTag) {
+			expect(prop).toContain(`<D:getetag>&quot;${id}-7&quot;</D:getetag>`);
+		} else {
+			expect(prop).not.toContain('getetag');
+			const ifRangeRes = await request('/webdav/' + name, { headers: { Range: 'bytes=1-3', 'If-Range': '"any"' } });
+			expect(ifRangeRes.status).toBe(200);
+			expect(ifRangeRes.headers.get('ETag')).toBeNull();
+			expect(new Uint8Array(await ifRangeRes.arrayBuffer())).toEqual(content);
+		}
+		expect(new Uint8Array(await get.arrayBuffer())).toEqual(content);
+		const media = spy.mock.calls.find(([input]) => String(input).includes('alt=media'));
+		expect(String(media![0])).toContain(`/drive/v3/files/${id}?supportsAllDrives=true&alt=media`);
+		expect(String(media![0])).not.toContain('/revisions/');
+	});
+
+	it('supports zero-byte files on GET, HEAD, and unsatisfiable Range', async () => {
+		const id = 'empty-' + crypto.randomUUID();
+		const name = id + '.txt';
+		drive.add({ id, name, mimeType: 'text/plain', parents: ['root'], size: 0, content: new Uint8Array() });
+		const expectedEtag = `"${id}-${drive.findById(id)!.headRevisionId}"`;
+
+		const head = await request('/webdav/' + name, { method: 'HEAD' });
+		expect(head.status).toBe(200);
+		expect(head.headers.get('Content-Length')).toBe('0');
+		expect(head.headers.get('ETag')).toBe(expectedEtag);
+
+		const get = await request('/webdav/' + name);
+		expect(get.status).toBe(200);
+		expect(get.headers.get('Content-Length')).toBe('0');
+		expect(get.headers.get('ETag')).toBe(expectedEtag);
+		expect(new Uint8Array(await get.arrayBuffer())).toEqual(new Uint8Array());
+
+		const range = await request('/webdav/' + name, { headers: { Range: 'bytes=0-0' } });
+		expect(range.status).toBe(416);
+		expect(range.headers.get('Content-Range')).toBe('bytes */0');
+		expect(range.headers.get('ETag')).toBe(expectedEtag);
+	});
+
+	it('evicts stale cache on If-Range when cached file ID was trashed and replaced', async () => {
+		const id1 = 'old-' + crypto.randomUUID();
+		const id2 = 'new-' + crypto.randomUUID();
+		const name = 'replaced-' + crypto.randomUUID() + '.bin';
+		drive.add({ id: id1, name, mimeType: 'application/octet-stream', parents: ['root'], size: content.length, content });
+		const first = await request('/webdav/' + name);
+		const tag1 = first.headers.get('ETag')!;
+		await first.arrayBuffer();
+
+		await drive.handle(`https://www.googleapis.com/drive/v3/files/${id1}`, {
+			method: 'PATCH',
+			headers: { Authorization: 'Bearer test-access-token' },
+			body: JSON.stringify({ trashed: true }),
+		});
+		const replacement = new Uint8Array([9, 8, 7, 6]);
+		drive.add({ id: id2, name, mimeType: 'application/octet-stream', parents: ['root'], size: replacement.length, content: replacement });
+
+		const res = await request('/webdav/' + name, { headers: { Range: 'bytes=0-1', 'If-Range': tag1 } });
+		expect(res.status).toBe(200);
+		expect(res.headers.get('ETag')).toBe(`"${id2}-${drive.findById(id2)!.headRevisionId}"`);
+		expect(new Uint8Array(await res.arrayBuffer())).toEqual(replacement);
 	});
 
 	it('forwards the client Range and preserves the partial original response', async () => {
 		const spy = vi.spyOn(drive, 'handle');
+		const expectedEtag = `"image-${drive.findById('image')!.headRevisionId}"`;
 		const response = await request('/webdav/image.png', { headers: { Range: 'bytes=1-3' } });
 		expect(response.status).toBe(206);
 		expect(response.headers.get('Content-Type')).toBe('image/png');
 		expect(response.headers.get('Content-Length')).toBe('3');
 		expect(response.headers.get('Content-Range')).toBe('bytes 1-3/12');
+		expect(response.headers.get('ETag')).toBe(expectedEtag);
 		expect(new Uint8Array(await response.arrayBuffer())).toEqual(content.slice(1, 4));
 		const media = spy.mock.calls.find(([input]) => String(input).includes('alt=media'));
 		expect(media).toBeDefined();
-		expect(String(media![0])).toContain('/drive/v2/files/');
+		expect(String(media![0])).toContain('/drive/v3/files/image/revisions/');
 		expect(new Headers(media![1]?.headers).get('Range')).toBe('bytes=1-3');
 		expect(new Headers(media![1]?.headers).get('Authorization')).toBe('Bearer test-access-token');
 	});
@@ -311,11 +467,16 @@ describe('PROPFIND', () => {
 });
 
 describe('HEAD and collection GET', () => {
-	it('HEAD reports the file size', async () => {
+	it('HEAD reports the file size and unified ETag without emitting ETag on collections', async () => {
 		const res = await request('/webdav/a.txt', { method: 'HEAD' });
 		expect(res.status).toBe(200);
 		expect(res.headers.get('Content-Length')).toBe('123');
 		expect(res.headers.get('Content-Type')).toBe('text/plain');
+		expect(res.headers.get('ETag')).toBe(`"file-a-${drive.findById('file-a')!.headRevisionId}"`);
+
+		const folderHead = await request('/webdav/docs/', { method: 'HEAD' });
+		expect(folderHead.status).toBe(200);
+		expect(folderHead.headers.get('ETag')).toBeNull();
 	});
 
 	it.each(['/webdav/', '/webdav/docs', '/webdav/docs/'])('rejects GET on collection %s with 405 without listing children', async path => {
@@ -331,50 +492,119 @@ describe('HEAD and collection GET', () => {
 });
 
 describe('isolate cache bounds and lifetime', () => {
-	it.each(['meta', 'objects'])('expires %s entries without extending their lifetime on hits', async ns => {
-		const name = 'memory-ttl-' + ns;
-		drive.add({ id: name, name, mimeType: ns === 'objects' ? FOLDER : 'text/plain', size: 123, parents: ['root'] });
+	it.each(['folder-meta', 'file-meta', 'objects'] as const)('expires %s entries without extending their lifetime on hits', async kind => {
+		const name = 'memory-ttl-' + kind;
+		const isFolder = kind !== 'file-meta';
+		drive.add({ id: name, name, mimeType: isFolder ? FOLDER : 'text/plain', size: 123, description: 'initial', parents: ['root'] });
 		const start = Date.now();
 		let now = start;
 		vi.spyOn(Date, 'now').mockImplementation(() => now);
 		const read = async () => {
-			const response = await request('/webdav/' + name, { method: ns === 'meta' ? 'HEAD' : 'PROPFIND', headers: { Depth: '1' } });
-			expect(response.status).toBe(ns === 'meta' ? 200 : 207);
-			return ns === 'meta' ? response.headers.get('Content-Length') : response.text();
+			const response = await request('/webdav/' + name, {
+				method: 'PROPFIND',
+				headers: { Depth: kind === 'objects' ? '1' : '0' },
+			});
+			expect(response.status).toBe(207);
+			return response.text();
 		};
 		const original = await read();
-		if (ns === 'meta') drive.findById(name)!.size = 456;
+		if (kind === 'folder-meta') drive.findById(name)!.description = 'updated-folder';
+		else if (kind === 'file-meta') drive.findById(name)!.size = 456;
 		else drive.add({ id: name + '-new', name: 'new-child.txt', mimeType: 'text/plain', parents: [name] });
-		now = start + (ns === 'meta' ? 300000 : 30000) - 1;
+		now = start + (kind === 'folder-meta' ? 300000 : 30000) - 1;
 		expect(await read()).toBe(original);
 		now++;
 		const fresh = await read();
-		if (ns === 'meta') expect(fresh).toBe('456');
+		if (kind === 'folder-meta') expect(fresh).toContain('updated-folder');
+		else if (kind === 'file-meta') expect(fresh).toContain('<D:getcontentlength>456</D:getcontentlength>');
 		else expect(fresh).toContain('new-child.txt');
 	});
 
+	it('bypasses leaf cache for HEAD and whole-file GET while serving short-cached PROPFIND and plain Range GET', async () => {
+		const subId = 'cache-sub-' + crypto.randomUUID();
+		const fileId = 'cache-file-' + crypto.randomUUID();
+		drive.add({ id: subId, name: subId, mimeType: FOLDER, parents: ['root'] });
+		const v1 = new TextEncoder().encode('version-one!');
+		drive.add({ id: fileId, name: 'doc.bin', mimeType: 'application/octet-stream', size: v1.length, content: v1, parents: [subId] });
+		const tag1 = `"${fileId}-${drive.findById(fileId)!.headRevisionId}"`;
+		const path = `/webdav/${subId}/doc.bin`;
+
+		expect((await request(path, { method: 'PROPFIND', headers: { Depth: '0' } })).status).toBe(207);
+
+		const v2 = new TextEncoder().encode('version-two!');
+		drive.replaceContent(fileId, v2, { preserveModifiedTime: true });
+		const tag2 = `"${fileId}-${drive.findById(fileId)!.headRevisionId}"`;
+
+		const spy = vi.spyOn(drive, 'handle');
+		const listCalls = () => spy.mock.calls.filter(([input]) => new URL(String(input)).pathname === '/drive/v3/files').length;
+
+		// PROPFIND and plain Range GET use the 30s file leaf cache (0 metadata calls).
+		const prop1 = await request(path, { method: 'PROPFIND', headers: { Depth: '0' } });
+		expect(await prop1.text()).toContain(tag1.replaceAll('"', '&quot;'));
+		expect(listCalls()).toBe(0);
+
+		const plainRange = await request(path, { headers: { Range: 'bytes=0-6' } });
+		expect(plainRange.status).toBe(206);
+		expect(plainRange.headers.get('ETag')).toBe(tag1);
+		expect(new Uint8Array(await plainRange.arrayBuffer())).toEqual(v1.slice(0, 7));
+		expect(listCalls()).toBe(0);
+
+		// HEAD bypasses the leaf cache while reusing the cached parent folder (1 files.list call).
+		const head = await request(path, { method: 'HEAD' });
+		expect(head.status).toBe(200);
+		expect(head.headers.get('ETag')).toBe(tag2);
+		expect(listCalls()).toBe(1);
+
+		// Whole-file GET bypasses the leaf cache (1 files.list call) and refreshes the cache.
+		const v3 = new TextEncoder().encode('version-tri!');
+		drive.replaceContent(fileId, v3, { preserveModifiedTime: true });
+		const tag3 = `"${fileId}-${drive.findById(fileId)!.headRevisionId}"`;
+		spy.mockClear();
+		const fullGet = await request(path);
+		expect(fullGet.status).toBe(200);
+		expect(fullGet.headers.get('ETag')).toBe(tag3);
+		expect(new Uint8Array(await fullGet.arrayBuffer())).toEqual(v3);
+		expect(listCalls()).toBe(1);
+
+		const propRefreshed = await request(path, { method: 'PROPFIND', headers: { Depth: '0' } });
+		expect(await propRefreshed.text()).toContain(tag3.replaceAll('"', '&quot;'));
+		expect(listCalls()).toBe(1);
+
+		// Trashing externally is immediately seen by HEAD and evicts the stale cache entry.
+		await drive.handle(`https://www.googleapis.com/drive/v3/files/${fileId}`, {
+			method: 'PATCH',
+			headers: { Authorization: 'Bearer test-access-token' },
+			body: JSON.stringify({ trashed: true }),
+		});
+		expect((await request(path, { method: 'HEAD' })).status).toBe(404);
+		expect((await request(path, { method: 'PROPFIND', headers: { Depth: '0' } })).status).toBe(404);
+	});
+
 	it('evicts old metadata at capacity while preserving the mounted root', async () => {
-		const directHead = async (path: string) => {
+		const directPropfind = async (path: string) => {
 			const ctx = createExecutionContext();
-			const response = await worker.fetch(new Request(ORIGIN + path, { method: 'HEAD', headers: AUTH }), env as Env, ctx);
+			const response = await worker.fetch(new Request(ORIGIN + path, {
+				method: 'PROPFIND',
+				headers: { ...AUTH, Depth: '0' },
+			}), env as Env, ctx);
 			await waitOnExecutionContext(ctx);
 			return response;
 		};
 		for (let i = 0; i <= 128; i++) {
 			drive.add({ id: 'bounded-' + i, name: 'bounded-' + i, mimeType: 'text/plain', size: 123, parents: ['root'] });
 		}
-		expect((await directHead('/webdav/bounded-0')).status).toBe(200);
+		expect((await directPropfind('/webdav/bounded-0')).status).toBe(207);
 		for (let start = 1; start < 128; start += 16) {
-			const batch = Array.from({ length: Math.min(16, 128 - start) }, (_, j) => directHead('/webdav/bounded-' + (start + j)));
+			const batch = Array.from({ length: Math.min(16, 128 - start) }, (_, j) => directPropfind('/webdav/bounded-' + (start + j)));
 			const responses = await Promise.all(batch);
-			expect(responses.every(r => r.status === 200)).toBe(true);
+			expect(responses.every(r => r.status === 207)).toBe(true);
 		}
-		expect((await directHead('/webdav/bounded-128')).status).toBe(200);
+		expect((await directPropfind('/webdav/bounded-128')).status).toBe(207);
 		drive.findById('bounded-0')!.size = 456;
 		drive.findById('bounded-128')!.size = 456;
-		expect((await directHead('/webdav/bounded-0')).headers.get('Content-Length')).toBe('456');
-		expect((await directHead('/webdav/bounded-128')).headers.get('Content-Length')).toBe('123');
-		expect((await directHead('/webdav/')).status).toBe(200);
+		expect(await (await directPropfind('/webdav/bounded-0')).text()).toContain('<D:getcontentlength>456</D:getcontentlength>');
+		expect(await (await directPropfind('/webdav/bounded-128')).text()).toContain('<D:getcontentlength>123</D:getcontentlength>');
+		expect((await directPropfind('/webdav/')).status).toBe(207);
 	});
 
 	it('does not retain oversized directory listings', async () => {

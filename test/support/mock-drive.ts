@@ -24,10 +24,27 @@ type FetchInit = Parameters<typeof fetch>[1];
 type Metadata = { name?: string; mimeType?: string; parents?: string[]; trashed?: boolean; createdTime?: string; modifiedTime?: string; description?: string | null; starred?: boolean; folderColorRgb?: string | null; appProperties?: Record<string, string | null> };
 type Session = { metadata: Metadata; id?: string; mimeType: string; total?: number; bytes: Uint8Array; fields: string | null; completed?: DriveFile; failure?: string };
 const API = 'https://www.googleapis.com';
+const STATUS_TEXT: Record<number, string> = {
+	200: 'OK',
+	204: 'No Content',
+	400: 'Bad Request',
+	401: 'Unauthorized',
+	403: 'Forbidden',
+	404: 'Not Found',
+	409: 'Conflict',
+	429: 'Too Many Requests',
+	500: 'Internal Server Error',
+	502: 'Bad Gateway',
+	503: 'Service Unavailable',
+};
+const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const json = (data: unknown, status = 200): Response => new Response(JSON.stringify(data), {
 	status, headers: { 'Content-Type': 'application/json; charset=UTF-8' },
 });
+const batchBadRequest = (message: string): Response => json([{
+	error: { code: 400, message, errors: [{ message, domain: 'global', reason: 'badRequest' }], status: 'INVALID_ARGUMENT' },
+}], 400);
 const apiError = (status: number, reason: string, message: string, location?: string): Response => json({
 	error: { code: status, message, errors: [{ message, domain: 'global', reason, ...(location ? { location, locationType: 'parameter' } : {}) }] },
 }, status);
@@ -171,16 +188,31 @@ export class MockDrive {
 	// Model settled My Drive state. Real descendant propagation is asynchronous;
 	// this deterministic mock does not simulate its transient visibility window.
 	private refreshTrashState(): void {
+		const byId = new Map(this.files.map(f => [f.id, f]));
+		byId.set('root', this.root);
+		const memo = new Map<string, boolean>();
 		const isTrashed = (file: DriveFile, seen = new Set<string>()): boolean => {
-			if (file.explicitlyTrashed) return true;
+			const cached = memo.get(file.id);
+			if (cached !== undefined) return cached;
+			if (file.explicitlyTrashed) { memo.set(file.id, true); return true; }
 			if (seen.has(file.id)) unsupported('folder cycles');
 			seen.add(file.id);
-			return file.parents.some(id => {
-				const parent = this.findById(id);
-				return parent ? isTrashed(parent, new Set(seen)) : false;
+			const trashed = file.parents.some(id => {
+				const parent = byId.get(id);
+				return parent ? isTrashed(parent, seen) : false;
 			});
+			seen.delete(file.id);
+			memo.set(file.id, trashed);
+			return trashed;
 		};
 		for (const file of this.files) file.trashed = isTrashed(file);
+	}
+	private quantizeFolderColor(mimeType: string, folderColorRgb: string | null | undefined, fallback?: string): string | undefined | Response {
+		if (folderColorRgb == null || folderColorRgb === '') return fallback;
+		if (mimeType !== FOLDER) return apiError(403, 'colorNotSupportedForItem', 'Color is not supported on this item.');
+		const verified: Record<string, string> = { '#ff0000': '#f83a22', '#f83a22': '#f83a22', '#8f8f8f': '#8f8f8f', 'nope': '#8f8f8f' };
+		if (!(folderColorRgb in verified)) unsupported('unverified folder color quantization');
+		return verified[folderColorRgb];
 	}
 	private validateParents(parents: string[]): Response | undefined {
 		if (parents.length > 1) return apiError(403, 'cannotAddParent', 'Increasing the number of parents is not allowed');
@@ -204,14 +236,17 @@ export class MockDrive {
 		return next;
 	}
 	private create(meta: Metadata, content: Uint8Array = new Uint8Array(), mimeType?: string): DriveFile | Response {
-		if (meta.createdTime !== undefined || meta.folderColorRgb !== undefined) unsupported('unverified timestamps or folder color on create');
+		if (meta.createdTime !== undefined) unsupported('unverified timestamps on create');
 		if (meta.mimeType?.startsWith('application/vnd.google-apps.') && meta.mimeType !== FOLDER) unsupported('Google Workspace document conversion');
+		const resolvedMime = meta.mimeType || mimeType || 'application/octet-stream';
+		const folderColorRgb = this.quantizeFolderColor(resolvedMime, meta.folderColorRgb);
+		if (folderColorRgb instanceof Response) return folderColorRgb;
 		const parents = meta.parents?.length ? meta.parents : ['root'];
 		const error = this.validateParents(parents);
 		if (error) return error;
 		const appProperties = this.properties({}, meta.appProperties);
 		if (appProperties instanceof Response) return appProperties;
-		return this.add({ appProperties, description: meta.description ?? undefined, starred: meta.starred, createdTime: meta.createdTime, id: crypto.randomUUID(), name: meta.name || 'Untitled', mimeType: meta.mimeType || mimeType || 'application/octet-stream',
+		return this.add({ appProperties, description: meta.description ?? undefined, starred: meta.starred, folderColorRgb, createdTime: meta.createdTime, id: crypto.randomUUID(), name: meta.name || 'Untitled', mimeType: resolvedMime,
 			parents, content: content.slice(), size: content.length, trashed: meta.trashed ?? false, modifiedTime: meta.modifiedTime === undefined ? new Date().toISOString() : new Date(meta.modifiedTime).toISOString() });
 	}
 	private update(file: DriveFile, meta: Metadata, url: URL, content?: Uint8Array): Response | undefined {
@@ -220,13 +255,8 @@ export class MockDrive {
 		const appProperties = this.properties(file.appProperties, meta.appProperties);
 		if (appProperties instanceof Response) return appProperties;
 		if (meta.parents !== undefined) return apiError(403, 'fieldNotWritable', 'The parents field is not directly writable in update requests. Use the addParents and removeParents parameters instead.');
-		let folderColorRgb = file.folderColorRgb;
-		if (meta.folderColorRgb != null && meta.folderColorRgb !== '') {
-			if (file.mimeType !== FOLDER) return apiError(403, 'colorNotSupportedForItem', 'Color is not supported on this item.');
-			const verified: Record<string, string> = { '#ff0000': '#f83a22', '#f83a22': '#f83a22', '#8f8f8f': '#8f8f8f', 'nope': '#8f8f8f' };
-			if (!(meta.folderColorRgb in verified)) unsupported('unverified folder color quantization');
-			folderColorRgb = verified[meta.folderColorRgb];
-		}
+		const folderColorRgb = this.quantizeFolderColor(file.mimeType, meta.folderColorRgb, file.folderColorRgb);
+		if (folderColorRgb instanceof Response) return folderColorRgb;
 		const added = (url.searchParams.get('addParents') ?? '').split(',').filter(Boolean);
 		const removed = (url.searchParams.get('removeParents') ?? '').split(',').filter(Boolean);
 		if ((added.length || removed.length) && (file.trashed || added.some(id => this.findById(id)?.trashed))) unsupported('moving from or into Trash');
@@ -377,12 +407,107 @@ export class MockDrive {
 		return fileResponse(file, session.fields);
 	}
 
+	private async batch(method: string, headers: Headers, bytes: Uint8Array): Promise<Response> {
+		if (method !== 'POST') unsupported(`batch method ${method}`);
+		const ct = headers.get('Content-Type') ?? '';
+		const boundaryMatch = ct.match(/boundary=(?:"([^"]+)"|([^;\s]+))/i);
+		if (!/^multipart\/mixed\b/i.test(ct) || !boundaryMatch) return batchBadRequest('Failed to get multipart boundary.');
+		const reqBoundary = boundaryMatch[1] ?? boundaryMatch[2];
+		const raw = decoder.decode(bytes);
+		const escaped = reqBoundary.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+		const delimiter = new RegExp(`(?:^|\\r?\\n)--${escaped}(--)?(?:\\r?\\n|$)`, 'g');
+		const parts: string[] = [];
+		let partStart = -1;
+		let closed = false;
+		let match: RegExpExecArray | null;
+		while ((match = delimiter.exec(raw)) !== null) {
+			if (partStart >= 0) parts.push(raw.slice(partStart, match.index));
+			if (match[1] === '--') { closed = true; break; }
+			partStart = delimiter.lastIndex;
+		}
+		if (!closed || parts.length === 0 || parts.length > 100) {
+			return batchBadRequest(`Failed to parse batch request, error:  ${parts.length} items.`);
+		}
+
+		const resBoundary = 'batch_' + crypto.randomUUID().replace(/-/g, '');
+		const resChunks: string[] = [];
+		for (const part of parts) {
+			const outerSep = part.match(/\r?\n\r?\n/);
+			if (!outerSep || outerSep.index === undefined) return batchBadRequest('Malformed batch part.');
+			const outerHead = part.slice(0, outerSep.index);
+			const innerRaw = part.slice(outerSep.index + outerSep[0].length);
+			let partType = '';
+			let contentId: string | undefined;
+			for (const line of outerHead.split(/\r?\n/)) {
+				const colon = line.indexOf(':');
+				if (colon <= 0) continue;
+				const k = line.slice(0, colon).trim().toLowerCase();
+				const v = line.slice(colon + 1).trim();
+				if (k === 'content-type') partType = v;
+				else if (k === 'content-id') contentId = v;
+			}
+			if (!/^application\/http\b/i.test(partType)) return batchBadRequest('Batch part must have Content-Type: application/http.');
+
+			const innerSep = innerRaw.match(/\r?\n\r?\n/);
+			const innerHead = innerSep && innerSep.index !== undefined ? innerRaw.slice(0, innerSep.index) : innerRaw;
+			const innerBody = innerSep && innerSep.index !== undefined ? innerRaw.slice(innerSep.index + innerSep[0].length) : '';
+			const headLines = innerHead.split(/\r?\n/);
+			const reqLine = headLines[0]?.match(/^([A-Z]+)\s+(\S+)(?:\s+HTTP\/\d(?:\.\d)?)?$/);
+			if (!reqLine) return batchBadRequest('Malformed inner HTTP request line.');
+			const [, innerMethod, innerTarget] = reqLine;
+
+			const innerHeaders = new Headers();
+			for (const line of headLines.slice(1)) {
+				const colon = line.indexOf(':');
+				if (colon <= 0) continue;
+				innerHeaders.set(line.slice(0, colon).trim(), line.slice(colon + 1).trim());
+			}
+			if (!innerHeaders.has('Authorization') && headers.has('Authorization')) {
+				innerHeaders.set('Authorization', headers.get('Authorization')!);
+			}
+			if (innerHeaders.has('Content-Length') && Number(innerHeaders.get('Content-Length')) !== encoder.encode(innerBody).byteLength) {
+				return batchBadRequest('Mismatched inner Content-Length.');
+			}
+
+			const innerUrl = new URL(innerTarget, API);
+			if (innerUrl.pathname.startsWith('/upload/') || innerUrl.searchParams.get('alt') === 'media') {
+				unsupported('media operations in batch');
+			}
+			if (innerUrl.pathname === '/batch/drive/v3') unsupported('nested batch requests');
+
+			const innerRes = await this.handle(innerUrl.toString(), {
+				method: innerMethod,
+				headers: innerHeaders,
+				body: innerBody.length ? encoder.encode(innerBody) : undefined,
+			});
+			const resBodyText = await innerRes.text();
+			const resContentType = innerRes.headers.get('Content-Type') ?? 'application/json; charset=UTF-8';
+			const resByteLength = encoder.encode(resBodyText).byteLength;
+			const mirroredId = contentId === undefined
+				? undefined
+				: contentId.startsWith('<') && contentId.endsWith('>')
+					? `<response-${contentId.slice(1, -1)}>`
+					: `response-${contentId}`;
+			const statusReason = STATUS_TEXT[innerRes.status] ?? 'Error';
+
+			let partOut = `\r\n--${resBoundary}\r\nContent-Type: application/http\r\n`;
+			if (mirroredId !== undefined) partOut += `Content-ID: ${mirroredId}\r\n`;
+			partOut += `\r\nHTTP/1.1 ${innerRes.status} ${statusReason}\r\nContent-Type: ${resContentType}\r\nContent-Length: ${resByteLength}\r\n\r\n${resBodyText}`;
+			resChunks.push(partOut);
+		}
+		return new Response(resChunks.join('') + `\r\n--${resBoundary}--\r\n`, {
+			status: 200,
+			headers: { 'Content-Type': `multipart/mixed; boundary=${resBoundary}` },
+		});
+	}
+
 	async handle(input: FetchInput, init?: FetchInit): Promise<Response> {
 		const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
 		const req = input instanceof Request ? input : undefined;
 		const method = (init?.method ?? req?.method ?? 'GET').toUpperCase();
 		const headers = new Headers(init?.headers ?? req?.headers);
 		if (url.origin !== API) unsupported(`${method} ${url.origin}${url.pathname}`);
+		if (url.pathname === '/batch/drive/v3') return this.batch(method, headers, await bodyBytes(input, init));
 		if (url.pathname === '/oauth2/v4/token') {
 			if (method !== 'POST') unsupported(`OAuth method ${method}`);
 			const form = new URLSearchParams(decoder.decode(await bodyBytes(input, init)));

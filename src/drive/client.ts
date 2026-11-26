@@ -143,21 +143,34 @@ export class DriveClient {
         });
     }
 
+    private async parseTransferId(response: Response, label: string, expectedNotId?: string, expectedId?: string): Promise<{ id: string }> {
+        if (!response.ok) {
+            throw new TransferError(label + ' failed: ' + await response.text(), response.status,
+                response.status >= 400 && response.status < 500 && response.status !== 408);
+        }
+        let result: any;
+        try { result = await response.json(); } catch { /* success with an unreadable body is ambiguous */ }
+        if (!result || typeof result.id !== 'string' || !result.id
+            || (expectedNotId !== undefined && result.id === expectedNotId)
+            || (expectedId !== undefined && result.id !== expectedId)) {
+            throw new TransferError(label + ' returned no valid ID; outcome uncertain', 502, false);
+        }
+        return result;
+    }
+
+    async transferCreate(body: Record<string, unknown>, headers: Record<string, string>): Promise<{ id: string }> {
+        const response = await fetch('https://www.googleapis.com/drive/v3/files?supportsAllDrives=true&fields=id', {
+            method: 'POST', headers, body: JSON.stringify(body),
+        });
+        return this.parseTransferId(response, 'Drive create');
+    }
+
     async transferWrite(id: string, body: Record<string, unknown>, headers: Record<string, string>, copy = false, parents = ''): Promise<{ id: string }> {
         const response = await fetch('https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(id)
             + (copy ? '/copy' : '') + '?supportsAllDrives=true&fields=id' + parents, {
             method: copy ? 'POST' : 'PATCH', headers, body: JSON.stringify(body),
         });
-        if (!response.ok) {
-            throw new TransferError('Drive write for ' + id + ' failed: ' + await response.text(), response.status,
-                response.status >= 400 && response.status < 500 && response.status !== 408);
-        }
-        let result: any;
-        try { result = await response.json(); } catch { /* success with an unreadable body is ambiguous */ }
-        if (!result || typeof result.id !== 'string' || !result.id || (copy ? result.id === id : result.id !== id)) {
-            throw new TransferError('Drive write for ' + id + ' returned no valid ID; outcome uncertain', 502, false);
-        }
-        return result;
+        return this.parseTransferId(response, 'Drive write for ' + id, copy ? id : undefined, copy ? undefined : id);
     }
 
     // Create any missing folder along the way to `path`, so a client can PUT
@@ -237,7 +250,7 @@ export class DriveClient {
             pageSize: 1000,
             includeItemsFromAllDrives: true,
             supportsAllDrives: true,
-            q: `'${id}' in parents and trashed = false AND name != '.password'`,
+            q: `'${id}' in parents and trashed = false`,
             fields: `nextPageToken, files(${PROPERTY_FIELDS},thumbnailLink,imageMediaMetadata)`,
             orderBy: 'folder, name',
         };

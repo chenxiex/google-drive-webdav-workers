@@ -11,7 +11,7 @@
 - [x] **过滤隐藏 Google Workspace 原生文档与 Shortcut（`7A`）**
   - 在目录列举（`getObjects`）与路径解析（`getMetadata`）中过滤除文件夹外的所有 `application/vnd.google-apps.*` 项（含 Docs/Sheets/Slides 与 Shortcut），避免客户端下载报错或双向同步死循环。
 
-- [ ] **基于 Drive v3 Batch API 实现 RFC 4918 文件夹 COPY（`8B`）**
+- [x] **基于 Drive v3 Batch API 实现 RFC 4918 文件夹 COPY（`8B`）**
   - 支持 `Depth: 0`（浅复制空目录壳及属性）与 `Depth: infinity`/缺省（按层 BFS 打包 `files.list` / `files.create` / `files.copy` 至 `POST /batch/drive/v3`，每批最多 100 个子请求，受安全规模/子请求预算保护，遇偶发 `429`/`5xx` 子项轻量重试 1–2 次）；先建暂存目录再覆盖发布。实现前需审计 `/batch/drive/v3` 并在 `MockDrive` 建模。
   - 统一单文件与文件夹 `COPY` 的暂存失败清理策略：在暂存复制阶段失败、旧目标移入回收站失败、或末步发布重命名遇确定性 `4xx`（非 `408`）拒绝并还原旧目标后，顺手将未发布的 `.webdav-copy-<UUID>` 移入回收站清理并返回单一明确错误码（仅末步重命名遇 `5xx`/`408`/断连等不确定失败时不自动清理或还原）。
 

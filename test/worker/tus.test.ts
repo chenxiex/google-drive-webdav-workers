@@ -166,6 +166,27 @@ describe('durable TUS', () => {
         expect(drive.files).toHaveLength(1);
     });
 
+    it.each([
+        ['/dav/missing/', { 'Upload-Length': '5', 'Upload-Metadata': 'filename ' + btoa('a.bin') }],
+        ['/dav/missing/', { 'Upload-Length': '0', 'Upload-Metadata': 'filename ' + btoa('empty.bin') }],
+        ['/dav/missing/a.bin', { 'Upload-Length': '5' }],
+        ['/dav/existing.txt/', { 'Upload-Length': '5', 'Upload-Metadata': 'filename ' + btoa('a.bin') }],
+        ['/dav/existing.txt/a.bin', { 'Upload-Length': '5' }],
+    ] as const)('rejects creation on %s with 409 when parent collection is missing or not a folder', async (path, headers) => {
+        drive.add({ id: 'file-existing', name: 'existing.txt', mimeType: 'text/plain', size: 1, parents: ['root'] });
+        const methods: string[] = [];
+        const original = drive.handle.bind(drive);
+        vi.spyOn(drive, 'handle').mockImplementation((input, init) => {
+            methods.push(new Request(input, init).method);
+            return original(input, init);
+        });
+        const response = await send(path, { method: 'POST', headers });
+        expect(response.status).toBe(409);
+        expect(response.headers.get('Tus-Resumable')).toBe('1.0.0');
+        expect(methods.every(method => method === 'GET')).toBe(true);
+        expect(drive.files).toHaveLength(1);
+    });
+
     it('rejects invalid PATCH without consuming bytes, hides sessions from other owners, and expires receipts', async () => {
         const { url } = await create(3);
         expect((await patch(url, 0, bytes(1), { 'Content-Type': 'text/plain' })).status).toBe(415);

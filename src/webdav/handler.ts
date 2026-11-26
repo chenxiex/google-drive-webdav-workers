@@ -14,12 +14,12 @@ export function handleOptions(isTusPath = false): Response {
 export async function handleMkcol(drive: DriveClient, request: Request): Promise<Response> {
     const { fpath } = getUrl(request.url, drive.config.basePath);
 
+    const { name, parent } = splitPath(fpath);
+    const parentMetadata = await drive.getFolderMetadata(parent);
+    if (!parentMetadata) return new Response('Parent collection is missing or not a collection', { status: 409 });
+
     const metadata = await drive.getMetadata(fpath);
     if (metadata) return new Response('<D:error xmlns:D="DAV:"><D:exception>MethodNotAllowed</D:exception><D:message>The resource you tried to create already exists</D:message></D:error>', { status: 405 });
-
-    const { name, parent } = splitPath(fpath);
-    const parentMetadata = await drive.ensureDir(parent);
-    if (!parentMetadata) return new Response(null, { status: 404 });
 
     const response = await drive.createFolder(name, parentMetadata.id);
 

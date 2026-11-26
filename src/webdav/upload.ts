@@ -88,8 +88,8 @@ export async function handlePut(drive: DriveClient, request: Request): Promise<R
     const body: ReadableStream<Uint8Array> | null = request.body;
 
     const { name, parent } = splitPath(fpath);
-    const parentMetadata = await drive.ensureDir(parent);
-    if (!parentMetadata) return new Response(null, { status: 404 });
+    const parentMetadata = await drive.getFolderMetadata(parent);
+    if (!parentMetadata) return new Response('Parent collection is missing or not a collection', { status: 409 });
     const metadata = await drive.getMetadata(fpath);
     const existingFileId = metadata?.id || null;
     if (body && !request.headers.has('Content-Length')) {

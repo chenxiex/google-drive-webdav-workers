@@ -72,6 +72,42 @@ describe('PUT and MKCOL', () => {
 		const created = drive.children('root').find((f) => f.name === 'new-folder');
 		expect(created?.mimeType).toBe(FOLDER);
 	});
+
+	it.each([
+		['MKCOL', '/dav/missing/new-folder', undefined],
+		['MKCOL', '/dav/missing/nested/new-folder/', undefined],
+		['MKCOL', '/dav/a.txt/new-folder', undefined],
+		['PUT', '/dav/missing/file.txt', 'hello'],
+		['PUT', '/dav/missing/empty.txt', ''],
+		['PUT', '/dav/a.txt/file.txt', 'hello'],
+		['PUT-stream', '/dav/missing/stream.dat', 'stream'],
+		['PUT-stream', '/dav/a.txt/stream.dat', 'stream'],
+	] as const)('%s on %s rejects missing or non-folder parent with 409 without mutating Drive', async (kind, path, payload) => {
+		const methods: string[] = [];
+		const original = drive.handle.bind(drive);
+		vi.spyOn(drive, 'handle').mockImplementation((input, init) => {
+			methods.push(new Request(input, init).method);
+			return original(input, init);
+		});
+		const init: RequestInit = kind === 'MKCOL'
+			? { method: 'MKCOL' }
+			: kind === 'PUT-stream'
+				? {
+					method: 'PUT',
+					body: new ReadableStream({
+						start(controller) {
+							controller.enqueue(new TextEncoder().encode(payload!));
+							controller.close();
+						},
+					}),
+				}
+				: { method: 'PUT', headers: { 'Content-Type': 'text/plain' }, body: payload };
+		const res = await request(path, init);
+		expect(res.status).toBe(409);
+		expect(methods.every(method => method === 'GET')).toBe(true);
+		expect(drive.children('root').some(f => f.name === 'missing')).toBe(false);
+		expect(drive.findById('file-a')?.size).toBe(123);
+	});
 });
 
 describe('unknown-length PUT', () => {
@@ -223,6 +259,9 @@ describe('DELETE trash, cache invalidation, and restore semantics', () => {
 		expect((await head()).status).toBe(404);
 		expect((await head('/nested/')).status).toBe(404);
 		expect((await head('/')).status).toBe(404);
+		expect((await request('/dav' + path + '/nested/', { method: 'MKCOL' })).status).toBe(409);
+		expect((await head('/')).status).toBe(404);
+		expect((await request('/dav' + path + '/', { method: 'MKCOL' })).status).toBe(201);
 		expect((await request('/dav' + path + '/nested/', { method: 'MKCOL' })).status).toBe(201);
 		expect((await request('/dav' + path + '/nested/leaf.txt', { method: 'PUT', body: 'replacement', headers: { 'Content-Type': 'text/plain', 'Content-Length': '11' } })).status).toBe(201);
 		const recreated = await head();
@@ -337,6 +376,9 @@ describe('Google Workspace native docs and Shortcuts coexistence (7A)', () => {
 		drive.add({ id: dir + '-doc', name: 'Notes', mimeType: 'application/vnd.google-apps.document', parents: [dir] });
 		drive.add({ id: dir + '-shortcut', name: 'Linked', mimeType: 'application/vnd.google-apps.shortcut', parents: [dir] });
 		drive.add({ id: dir + '-sheet', name: 'Budget', mimeType: 'application/vnd.google-apps.spreadsheet', parents: [dir] });
+
+		expect((await request('/dav/' + dir + '/Notes/child.txt', { method: 'PUT', body: 'x' })).status).toBe(409);
+		expect((await request('/dav/' + dir + '/Notes/sub', { method: 'MKCOL' })).status).toBe(409);
 
 		expect((await request('/dav/' + dir + '/Notes', {
 			method: 'PUT',

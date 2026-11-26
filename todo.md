@@ -18,7 +18,7 @@
 - [x] **移除全站非 TUS `PATCH` 转发 `COPY` 的遗留路由（`9.1A`）**
   - 删除 [src/router.ts](src/router.ts) 中非 `tus_uploads/` 路径将 `PATCH` 改写为 `COPY` 的遗留代码，全站对非 TUS `PATCH` 统一返回 `405 Method Not Allowed`。
 
-- [ ] **全站移除 `ensureDir` 自动建父目录，统一按 RFC 4918 返回 `409`（`9.2B`）**
+- [x] **全站移除 `ensureDir` 自动建父目录，统一按 RFC 4918 返回 `409`（`9.2B`）**
   - 移除 [src/webdav/handler.ts](src/webdav/handler.ts)、[src/webdav/upload.ts](src/webdav/upload.ts) 与 [src/tus/handler.ts](src/tus/handler.ts) 中 `MKCOL`、`PUT` 与 TUS `POST` 的 `ensureDir` 调用，父目录缺失或非文件夹时全站统一返回 `409 Conflict`（与 `MOVE`/`COPY` 一致，防止同步场景复活已删/改名父目录）；同步更新 [test/worker/dav-write.test.ts](test/worker/dav-write.test.ts) 中依赖自动建父目录的用例。
 
 - [ ] **统一路由并调整通用 WebDAV 默认路径为 `/webdav/`（`9.3`）**

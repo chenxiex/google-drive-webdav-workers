@@ -173,28 +173,10 @@ export class DriveClient {
         return this.parseTransferId(response, 'Drive write for ' + id, copy ? id : undefined, copy ? undefined : id);
     }
 
-    // Create any missing folder along the way to `path`, so a client can PUT
-    // `/a/b/c.txt` without having to MKCOL `/a` and `/a/b` first.
-    async ensureDir(path: string): Promise<any | null> {
-        let current = await this.getMetadata('/');
-        if (!current) return null;
-        const dir = path.endsWith('/') ? path : path + '/';
-        if (dir === '/') return current;
-
-        const names = dir.split('/').filter(Boolean);
-        for (let i = 0; i < names.length; i++) {
-            const sub = '/' + names.slice(0, i + 1).join('/') + '/';
-            let meta = await this.getMetadata(sub);
-            if (!meta) {
-                const created = await this.createFolder(names[i], current.id);
-                if (!created.ok) return null;
-                await this.cache.invalidateFileAndParent(sub, current.id);
-                meta = await this.getMetadata(sub);
-                if (!meta) return null;
-            }
-            current = meta;
-        }
-        return current;
+    /** Resolves `path` only when it refers to an existing visible folder, otherwise `null`. */
+    async getFolderMetadata(path: string): Promise<any | null> {
+        const metadata = await this.getMetadata(path || '/');
+        return metadata?.mimeType === FOLDER_MIME ? metadata : null;
     }
 
     async getMetadata(path: string): Promise<any> {

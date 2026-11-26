@@ -177,8 +177,8 @@ async function handleTransfer(drive: DriveClient, request: Request, copy: boolea
     // the destination parent when needed; do not add read-after-write probes.
     const parentMetadata = parent === destParent && sourceParentId
         ? { id: sourceParentId, mimeType: FOLDER_MIME }
-        : await drive.getMetadata(destParent || '/');
-    if (!parentMetadata || parentMetadata.mimeType !== FOLDER_MIME) {
+        : await drive.getFolderMetadata(destParent);
+    if (!parentMetadata) {
         return new Response('Destination parent is not a collection', { status: 409 });
     }
     if (parentMetadata.id === source.id || parentMetadata.id === target?.id) {

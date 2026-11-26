@@ -38,7 +38,7 @@
     - `> 5 MiB` 分块路径未先检查初始化 `!initRes.ok` 透传上游状态码，把失败全折叠成 `500`；
     - 分块循环未校验 `308` `Range`、末块收 `308` 报假成功，且输入流提前 `done` 时会静默提交截断体。
 
-- [ ] **修复顶层异常捕获复用 `errorStatus()`**
+- [x] **修复顶层异常捕获复用 `errorStatus()`**
   - [src/router.ts](src/router.ts) 顶层 `catch` 直接读取 `e.status || e.code || 500`，若异常带非 HTTP 数字或字符串的 `e.code` 会导致 `new Response` 再抛出 `RangeError`；应统一改用已定义的 `errorStatus(e)`。
 
 - [ ] **将下载与 ETag 从 Drive v2 迁移至统一的 Drive v3（`4A-1`）**

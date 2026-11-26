@@ -1,5 +1,6 @@
 import { createExecutionContext, env, waitOnExecutionContext } from 'cloudflare:test';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { StatusError } from '../../src/http';
 import worker from '../../src/index';
 import { AUTH, ORIGIN, basic } from '../support/client';
 
@@ -166,5 +167,34 @@ describe('path routing', () => {
 		}
 		expect((await run('/robots.txt')).status).toBe(200);
 		expect(fetch).not.toHaveBeenCalled();
+	});
+});
+
+describe('top-level error handling', () => {
+	it.each<[string, unknown, number, string]>([
+		['string e.code', Object.assign(new Error('socket reset'), { code: 'ECONNRESET' }), 500, '500: socket reset'],
+		['non-HTTP numeric e.code', Object.assign(new Error('sqlite busy'), { code: 5 }), 500, '500: sqlite busy'],
+		['HTTP-like e.code without status', Object.assign(new Error('code ignored'), { code: 404 }), 500, '500: code ignored'],
+		['DOMException with numeric code', new DOMException('Aborted', 'AbortError'), 500, '500: Aborted'],
+		['valid StatusError status', new StatusError('Rate limited', 429), 429, '429: Rate limited'],
+		['non-error 204 status', Object.assign(new Error('no content'), { status: 204 }), 500, '500: no content'],
+		['out-of-range status', Object.assign(new Error('out of range'), { status: 999 }), 500, '500: out of range'],
+		['fractional status', Object.assign(new Error('fractional'), { status: 404.5 }), 500, '500: fractional'],
+		['non-numeric status', Object.assign(new Error('string status'), { status: '404' }), 500, '500: string status'],
+		['plain object with valid status', { status: 503, message: 'upstream down' }, 503, '503: upstream down'],
+		['thrown string', 'unexpected string failure', 500, '500: unexpected string failure'],
+		['thrown null', null, 500, '500: null'],
+	])('normalizes %s via errorStatus()', async (_label, thrown, expectedStatus, expectedBody) => {
+		const fetch = vi.fn(async () => { throw thrown; });
+		vi.stubGlobal('fetch', fetch);
+		const bindings = { ...env, CLIENT_ID: 'err-' + crypto.randomUUID() } as unknown as Env;
+
+		const ctx = createExecutionContext();
+		const res = await worker.fetch(new Request(ORIGIN + '/webdav/err-probe.txt', { method: 'HEAD', headers: AUTH }), bindings, ctx);
+		await waitOnExecutionContext(ctx);
+
+		expect(fetch).toHaveBeenCalledOnce();
+		expect(res.status).toBe(expectedStatus);
+		expect(await res.text()).toBe(expectedBody);
 	});
 });

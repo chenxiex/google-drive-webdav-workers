@@ -1,6 +1,5 @@
 export class StatusError extends Error {
     status: number;
-    code?: number;
 
     constructor(message: string, status: number) {
         super(message);
@@ -18,7 +17,7 @@ export class TransferError extends StatusError {
 // collapsing every error into a 500.
 export function errorStatus(e: unknown): number {
     const status = (e as any)?.status;
-    return typeof status === 'number' && status >= 400 && status <= 599 ? status : 500;
+    return typeof status === 'number' && Number.isInteger(status) && status >= 400 && status <= 599 ? status : 500;
 }
 
 export const pathJoin = (...args: string[]): string => args.join('/').replace(/\\/g, '/').replace(/(?<!^)\/+/g, '/').replace(/\/\//g, '/');

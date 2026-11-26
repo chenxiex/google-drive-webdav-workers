@@ -1,6 +1,7 @@
 import { basicAuthentication, isValidUser } from './auth/basic';
 import { resolveConfig } from './config';
 import { DriveClient } from './drive/client';
+import { errorStatus } from './http';
 import { handleTusCreate, handleTusUpload } from './tus/handler';
 import { handleDelete, handleGet, handleHead, handleLock, handleMkcol, handleOptions } from './webdav/handler';
 import { handlePropfind, handleProppatch } from './webdav/properties';
@@ -88,8 +89,13 @@ export async function handleRequest(request: Request, env: Env, _ctx?: Execution
                 return handleLock();
         }
         return new Response('Method Not Allowed', { status: 405 });
-    } catch (e: any) {
-        const status = e.status || e.code || 500;
-        return new Response(status + ': ' + e.message, { status });
+    } catch (e: unknown) {
+        const status = errorStatus(e);
+        const message = e instanceof Error
+            ? e.message
+            : typeof (e as any)?.message === 'string'
+                ? (e as any).message
+                : String(e);
+        return new Response(status + ': ' + message, { status });
     }
 }

@@ -22,7 +22,7 @@ Worker routes extend the existing Drive/WebDAV handler; SQLite-backed Durable Ob
 
 Drive resumable uploads are sequential; bounded journal/tail storage bridges arbitrary client chunks to Drive's 256 KiB alignment. Metadata and listing caching is isolate-local memory only (no Workers KV binding) and is never the source of truth for upload offsets, auth sessions, or sync generations.
 
-All URLs returned to clients use the configured external HTTPS origin and base path (never trust unchecked `Host` or forwarded headers). Generic WebDAV (default `/webdav/`, configurable via `WEBDAV_PATH`) and oCIS DAV/Space routes (`/dav/spaces/<spaceId>/`, `/remote.php/webdav/`, `/remote.php/dav/files/<username>/`) are always enabled on the same Drive/WebDAV handler without an `OCIS_ENABLED` toggle.
+All URLs returned to clients use the configured external HTTPS origin and base path (never trust unchecked `Host` or forwarded headers). Generic WebDAV (default `/webdav/`, configurable via `WEBDAV_PATH`) and oCIS DAV/Space routes (`/dav/spaces/<spaceId>/`, `/remote.php/webdav/`, `/remote.php/dav/files/<username>/`) are always enabled on the same Drive/WebDAV handler.
 
 ## 3. Authentication and bootstrap contract
 
@@ -125,7 +125,7 @@ Map upstream failures accurately (`401`, `403`, `404`, `409`, `412`, `413`, `429
 
 ### Unified route layout and migration boundary
 
-No `OCIS_ENABLED` opt-in switch or legacy-vs-compat split (`9.3`):
+Unified single-handler routing (`9.3`):
 - Default generic WebDAV `WEBDAV_PATH` changes from `/dav/` to **`/webdav/`** (still configurable via `WEBDAV_PATH`). Reject `WEBDAV_PATH` values equal to `/` or overlapping reserved oCIS prefixes (`/dav/spaces/`, `/remote.php/`, `/ocs/`, `/graph/`, `/oauth/`, `/status.php`, `/.well-known/`) with a `500` configuration error so generic DAV routes never shadow oCIS endpoints.
 - Always expose oCIS WebDAV and discovery endpoints at origin root (`/dav/spaces/<spaceId>/...`, `/remote.php/webdav/...`, `/remote.php/dav/files/<username>/...`, `/status.php`, `/ocs/*`, `/graph/*`, `/.well-known/*`) backed by the same Drive/WebDAV handler. OIDC `/oauth/*` routes activate automatically only when Cloudflare Access configuration is present (otherwise HTTP Basic `USERS` only).
 - Decode each path segment once; treat literal `$` and `%24` in Space IDs identically while blocking traversal or mount escapes.

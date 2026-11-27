@@ -19,7 +19,20 @@ const patch = (url: string, offset: number, body: Uint8Array, headers: Record<st
     method: 'PATCH', body, headers: { 'Content-Type': 'application/offset+octet-stream', 'Upload-Offset': String(offset), ...headers },
 });
 const head = (url: string) => send(url, { method: 'HEAD' });
-const bytes = (size: number) => Uint8Array.from({ length: size }, (_, i) => i * 73 % 251);
+const bytes = (size: number) => {
+    const out = new Uint8Array(size);
+    for (let i = 0; i < size; i++) out[i] = (i * 73) % 251;
+    return out;
+};
+const expectBytesEqual = (actual: Uint8Array | undefined, expected: Uint8Array) => {
+    expect(actual).toBeInstanceOf(Uint8Array);
+    expect(actual!.length).toBe(expected.length);
+    for (let i = 0; i < expected.length; i++) {
+        if (actual![i] !== expected[i]) {
+            expect.fail(`Byte mismatch at offset ${i}: expected ${expected[i]}, got ${actual![i]}`);
+        }
+    }
+};
 
 beforeEach(() => { drive = new MockDrive(); installDriveMock(drive); });
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
@@ -38,7 +51,7 @@ describe('durable TUS', () => {
             await abortAllDurableObjects();
             expect((await head(url)).headers.get('Upload-Offset')).toBe(String(offset));
         }
-        expect(drive.files.find(file => file.name === name)?.content).toEqual(data);
+        expectBytesEqual(drive.files.find(file => file.name === name)?.content, data);
         const completed = await head(url);
         expect(completed.status).toBe(200);
         expect(completed.headers.get('Upload-Length')).toBe(String(data.length));
@@ -82,7 +95,7 @@ describe('durable TUS', () => {
         const offset = Number(recovered.headers.get('Upload-Offset'));
         expect(offset).toBe(final ? data.length : 1024 * 1024);
         if (!final) expect((await patch(url, offset, data.slice(offset))).status).toBe(204);
-        expect(drive.files.find(file => file.name === name)?.content).toEqual(data);
+        expectBytesEqual(drive.files.find(file => file.name === name)?.content, data);
     });
 
     it('keeps pending bytes durable when Drive fails before accepting and does not turn expiry into offset zero', async () => {
@@ -97,7 +110,7 @@ describe('durable TUS', () => {
         await abortAllDurableObjects();
         installDriveMock(drive);
         expect((await head(url)).headers.get('Upload-Offset')).toBe(String(data.length));
-        expect(drive.files.find(file => file.name === name)?.content).toEqual(data);
+        expectBytesEqual(drive.files.find(file => file.name === name)?.content, data);
         const next = await create(data.length);
         vi.stubGlobal('fetch', async () => new Response(null, { status: 404 }));
         expect((await patch(next.url, 0, data)).status).toBe(410);
@@ -130,7 +143,7 @@ describe('durable TUS', () => {
         // Replay the original aligned block: Google safely ignores its
         // already-confirmed prefix, even if a future Range ends unaligned.
         expect(ranges[1]).toBe(`bytes 0-1048575/${data.length}`);
-        expect(drive.files.find(file => file.name === name)?.content).toEqual(data);
+        expectBytesEqual(drive.files.find(file => file.name === name)?.content, data);
     });
 
     it('handles empty creation and overwrite without a resumable zero-byte request', async () => {

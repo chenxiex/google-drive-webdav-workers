@@ -12,6 +12,13 @@ export const RESERVED_OCIS_PREFIXES = [
     '/.well-known/',
 ] as const;
 
+export interface OidcConfig {
+    accessAud: string;
+    accessTeamDomain: string;
+    signingKey: string;
+    signingKid?: string;
+}
+
 export interface RuntimeConfig {
     client_id: string;
     client_secret: string;
@@ -21,6 +28,56 @@ export interface RuntimeConfig {
     rootId: string;
     name: string;
     users: Record<string, string>;
+    publicOrigin?: string;
+    oidc?: OidcConfig;
+}
+
+function normalizeOrigin(raw: string, label: string, allowImplicitHttps: boolean): string {
+    const candidate = allowImplicitHttps && !raw.includes('://') ? `https://${raw}` : raw;
+    let url: URL;
+    try {
+        url = new URL(candidate);
+    } catch {
+        throw new StatusError(`Server not configured: ${label} must be an https:// origin without path, query, or fragment`, 500);
+    }
+    if (
+        url.protocol !== 'https:'
+        || !url.hostname
+        || url.username !== ''
+        || url.password !== ''
+        || url.pathname !== '/'
+        || url.search !== ''
+        || url.hash !== ''
+    ) {
+        throw new StatusError(`Server not configured: ${label} must be an https:// origin without path, query, or fragment`, 500);
+    }
+    return url.origin;
+}
+
+function resolveOidcConfig(env?: Partial<Env>): OidcConfig | undefined {
+    const accessAud = env?.CF_ACCESS_AUD?.trim() || '';
+    const rawTeamDomain = env?.CF_ACCESS_TEAM_DOMAIN?.trim() || '';
+    const signingKey = env?.OIDC_SIGNING_KEY?.trim() || '';
+    const signingKid = env?.OIDC_SIGNING_KID?.trim() || '';
+
+    if (!accessAud && !rawTeamDomain && !signingKey && !signingKid) {
+        return undefined;
+    }
+
+    const missing: string[] = [];
+    if (!accessAud) missing.push('CF_ACCESS_AUD');
+    if (!rawTeamDomain) missing.push('CF_ACCESS_TEAM_DOMAIN');
+    if (!signingKey) missing.push('OIDC_SIGNING_KEY');
+    if (missing.length > 0) {
+        throw new StatusError('Server not configured: missing ' + missing.join(', '), 500);
+    }
+
+    return {
+        accessAud,
+        accessTeamDomain: normalizeOrigin(rawTeamDomain, 'CF_ACCESS_TEAM_DOMAIN', true),
+        signingKey,
+        ...(signingKid ? { signingKid } : {}),
+    };
 }
 
 function resolveMountPath(rawPath?: string): { path: string; basePath: string } {
@@ -68,6 +125,9 @@ export function parseUsers(raw: unknown): Record<string, string> {
 
 export function resolveConfig(env?: Partial<Env>): RuntimeConfig {
     const { path, basePath } = resolveMountPath(env?.WEBDAV_PATH);
+    const rawPublicOrigin = env?.PUBLIC_ORIGIN?.trim() || '';
+    const publicOrigin = rawPublicOrigin ? normalizeOrigin(rawPublicOrigin, 'PUBLIC_ORIGIN', false) : undefined;
+    const oidc = resolveOidcConfig(env);
     return {
         client_id: env?.CLIENT_ID?.trim() || '',
         client_secret: env?.CLIENT_SECRET?.trim() || '',
@@ -77,5 +137,7 @@ export function resolveConfig(env?: Partial<Env>): RuntimeConfig {
         rootId: env?.ROOT_ID || 'root',
         name: env?.NAME || 'My Cloud Drive',
         users: parseUsers(env?.USERS),
+        ...(publicOrigin ? { publicOrigin } : {}),
+        ...(oidc ? { oidc } : {}),
     };
 }

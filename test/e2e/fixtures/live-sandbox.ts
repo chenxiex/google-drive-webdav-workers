@@ -67,19 +67,36 @@ function parseEnvFile(filePath: string): Map<string, string> {
 	const result = new Map<string, string>();
 	if (!existsSync(filePath)) return result;
 	const text = readFileSync(filePath, 'utf8');
-	for (const line of text.split(/\r?\n/)) {
-		const trimmed = line.trim();
+	const lines = text.split(/\r?\n/);
+	for (let i = 0; i < lines.length; i++) {
+		const trimmed = lines[i].trim();
 		if (!trimmed || trimmed.startsWith('#')) continue;
 		const eqIndex = trimmed.indexOf('=');
 		if (eqIndex === -1) continue;
 		const key = trimmed.slice(0, eqIndex).trim().replace(/^export\s+/, '');
 		if (!key) continue;
 		let value = trimmed.slice(eqIndex + 1).trim();
-		if (
-			value.length >= 2 &&
-			((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")))
-		) {
-			value = value.slice(1, -1);
+		const quote = value[0] === '"' || value[0] === "'" ? value[0] : null;
+		if (quote) {
+			if (value.length >= 2 && value.endsWith(quote)) {
+				value = value.slice(1, -1);
+			} else {
+				const parts = [value.slice(1)];
+				let closed = false;
+				while (++i < lines.length) {
+					const endTrimmed = lines[i].trimEnd();
+					if (endTrimmed.endsWith(quote)) {
+						parts.push(endTrimmed.slice(0, -1));
+						closed = true;
+						break;
+					}
+					parts.push(lines[i]);
+				}
+				if (!closed) {
+					throw new Error(`Unterminated quoted value for ${key} in ${filePath}`);
+				}
+				value = parts.join('\n');
+			}
 		}
 		result.set(key, value);
 	}

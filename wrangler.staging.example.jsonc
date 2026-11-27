@@ -15,6 +15,14 @@
 	// either delete it so Custom Domains can manage it, or replace with:
 	// { "pattern": "dav-staging.example.com/*", "zone_name": "example.com" }
 	"routes": [{ "pattern": "dav-staging.example.com", "custom_domain": true }],
-	"durable_objects": { "bindings": [{ "name": "TUS_UPLOADS", "class_name": "TusUpload" }] },
-	"migrations": [{ "tag": "v1-tus", "new_sqlite_classes": ["TusUpload"] }]
+	"durable_objects": {
+		"bindings": [
+			{ "name": "TUS_UPLOADS", "class_name": "TusUpload" },
+			{ "name": "AUTH_DO", "class_name": "AuthStore" }
+		]
+	},
+	"migrations": [
+		{ "tag": "v1-tus", "new_sqlite_classes": ["TusUpload"] },
+		{ "tag": "v2-auth", "new_sqlite_classes": ["AuthStore"] }
+	]
 }

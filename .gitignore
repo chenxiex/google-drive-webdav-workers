@@ -167,3 +167,4 @@ playground
 !.env.example
 .wrangler/
 wrangler.staging.jsonc
+*.pem

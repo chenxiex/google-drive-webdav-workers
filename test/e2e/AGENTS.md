@@ -26,7 +26,7 @@ All tests under `test/e2e/` are **opt-in** and excluded from the default offline
 ### 2. Deploy, Test, and Tear Down
 
 ```bash
-# 1. Deploy isolated staging Worker + TUS_UPLOADS SQLite DO
+# 1. Deploy isolated staging Worker + TUS_UPLOADS and AUTH_DO SQLite DOs
 pnpm exec wrangler deploy -c wrangler.staging.jsonc
 
 # 2. Sync allowlisted runtime bindings from .env (excludes X_DEV_GATE; Worker validates config at runtime)
@@ -42,7 +42,7 @@ LIVE_WEBDAV_URL=https://<staging-host> LIVE_PUT_MB=95 LIVE_TUS_MB=105 LIVE_TUS_C
 pnpm exec wrangler delete -c wrangler.staging.jsonc --force
 ```
 
-`scripts/sync-staging-secrets.mjs` uploads only non-empty keys from the runtime allowlist (`CLIENT_ID`, `CLIENT_SECRET`, `REFRESH_TOKEN`, `USERS`, `ROOT_ID`, `WEBDAV_PATH`, `NAME`).
+`scripts/sync-staging-secrets.mjs` uploads only non-empty keys from the runtime allowlist (`CLIENT_ID`, `CLIENT_SECRET`, `REFRESH_TOKEN`, `USERS`, `ROOT_ID`, `WEBDAV_PATH`, `NAME`, `CF_ACCESS_AUD`, `CF_ACCESS_TEAM_DOMAIN`, `OIDC_SIGNING_KEY`, `OIDC_SIGNING_KID`, `PUBLIC_ORIGIN`).
 
 ---
 

@@ -65,7 +65,7 @@
   - 支持 PKCE `S256`、短效一次性授权码及客户端/回调白名单绑定（Desktop 机密客户端 `127.0.0.1`/`localhost` 变端口、Android 公有客户端 `OpenCloudAndroid` `oc://android.opencloud.eu`）；Auth DO 保存 opaque `access_token` 与可撤销、可重复使用的 `refresh_token`。
   - 使用 Worker Secret 中的静态 `RS256` 非对称密钥（固定 `kid`）签发 `id_token`；在其余路径保留 `USERS` Basic Auth，并明确共享 `ROOT_ID` 的视图语义；`/oauth/*` 路由随 Cloudflare Access 配置（如 `CF_ACCESS_AUD`）存在而自动启用，未配置时仅运行 HTTP Basic `USERS` 模式。
 
-- [ ] **OC-04：实现引导发现、OCS 与单 personal Space**
+- [x] **OC-04：实现引导发现、OCS 与单 personal Space**
   - 实现 `GET /status.php`（返回兼容版本档案与非空 `version` + `productversion`，禁重定向，非 `package.json` 版本）、`GET /ocs/{v1,v2}.php/cloud/{user,capabilities}`（含 `ocs.data.version`，同时支持 XML/JSON 与 v1 `meta.statuscode=100` / v2 `200` 及 `Ocs-Api-Version: 1`）、未认证 `/remote.php/webdav/` 返回 401 Bearer 质询、认证后 `OPTIONS /remote.php/webdav`、`HEAD /remote.php/dav/files/<user>/Personal/`（保留 404 回退到发现接口）、`GET /graph/v1.0/me/drives`（同时填充顶层 `eTag` 与 `root.eTag`、`drive.id === root.id`、`root.webDavUrl` 字面 `$` 且无尾斜杠）。
   - 在 `files.tus_support` 中公告用户选定默认值 `max_chunk_size: 10485760`（10 MiB），在 `core.pollinterval` 中公告 `30000`（毫秒，30 秒，`#12`），`core.webdav-root` 设为 `"webdav"`，在 `checksums` 中公告小写 `supportedTypes: ["sha1","md5","sha256"]` 与 `preferredUploadType: "sha1"`，显式设置 `files_sharing.api_enabled=false`、`files_sharing.public.enabled=false`、`files_sharing.user.profile_picture=false`、`spaces.version="1.0.0"`、`spaces.projects=false`，省略 `notifications`/锁/团队 Space 等未实现能力。
   - Space 视图按 `15A` 如实表达共享 `ROOT_ID`（鉴权主体、OAuth token 与 TUS 会话按用户隔离，底层共享同一 `ROOT_ID`）：Graph `/me/drives` 中 `owner` 省略或如实填当前登录主体，`quota` 使用 `BigInt` 精确透传 Drive `storageQuota` 整数（无有限上限或字段不全时省略，不伪造 `0`）。

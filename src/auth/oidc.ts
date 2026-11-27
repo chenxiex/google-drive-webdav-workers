@@ -1,4 +1,4 @@
-import { type RuntimeConfig } from '../config';
+import { type RuntimeConfig, resolvePublicOrigin } from '../config';
 import { StatusError } from '../http';
 import {
     SUPPORTED_SCOPES,
@@ -17,6 +17,7 @@ import {
 
 const ACCESS_TOKEN_TTL_SEC = 3600;
 const MAX_PARAM_LENGTH = 1024;
+const OIDC_HTTPS_ERROR = 'HTTPS is required for OAuth/OIDC endpoints';
 
 export interface BearerPrincipal {
     sub: string;
@@ -42,17 +43,6 @@ function noStoreJson(body: unknown, status: number, extraHeaders?: Record<string
 
 function methodNotAllowed(allow: string): Response {
     return new Response('Method Not Allowed', { status: 405, headers: { Allow: allow } });
-}
-
-function resolvePublicOrigin(request: Request, config: RuntimeConfig): string {
-    if (config.publicOrigin) {
-        return config.publicOrigin;
-    }
-    const url = new URL(request.url);
-    if (url.protocol !== 'https:') {
-        throw new StatusError('HTTPS is required for OAuth/OIDC endpoints', 400);
-    }
-    return url.origin;
 }
 
 function getAuthStore(env: Env): DurableObjectStub {
@@ -107,7 +97,7 @@ export function handleOidcDiscovery(request: Request, config: RuntimeConfig): Re
     if (method !== 'GET' && method !== 'HEAD') {
         return methodNotAllowed('GET, HEAD');
     }
-    const origin = resolvePublicOrigin(request, config);
+    const origin = resolvePublicOrigin(request, config, OIDC_HTTPS_ERROR);
     const document = {
         issuer: origin,
         authorization_endpoint: `${origin}/oauth/authorize`,
@@ -137,7 +127,7 @@ export async function handleJwks(request: Request, config: RuntimeConfig): Promi
     if (method !== 'GET' && method !== 'HEAD') {
         return methodNotAllowed('GET, HEAD');
     }
-    resolvePublicOrigin(request, config);
+    resolvePublicOrigin(request, config, OIDC_HTTPS_ERROR);
     const bundle = await loadSigningKey(config.oidc!.signingKey, config.oidc!.signingKid);
     return new Response(method === 'HEAD' ? null : JSON.stringify({ keys: [bundle.publicJwk] }), {
         status: 200,
@@ -152,7 +142,7 @@ export async function handleAuthorize(request: Request, env: Env, config: Runtim
     if (request.method.toUpperCase() !== 'GET') {
         return methodNotAllowed('GET');
     }
-    resolvePublicOrigin(request, config);
+    resolvePublicOrigin(request, config, OIDC_HTTPS_ERROR);
 
     const assertion = request.headers.get('Cf-Access-Jwt-Assertion') || '';
     let identity;
@@ -269,7 +259,7 @@ export async function handleToken(request: Request, env: Env, config: RuntimeCon
     if (request.method.toUpperCase() !== 'POST') {
         return methodNotAllowed('POST');
     }
-    const origin = resolvePublicOrigin(request, config);
+    const origin = resolvePublicOrigin(request, config, OIDC_HTTPS_ERROR);
     const params = await parseTokenForm(request);
     if (!params) {
         return noStoreJson({ error: 'invalid_request', error_description: 'Expected application/x-www-form-urlencoded' }, 400);
@@ -437,7 +427,7 @@ export async function handleRevoke(request: Request, env: Env, config: RuntimeCo
     if (request.method.toUpperCase() !== 'POST') {
         return methodNotAllowed('POST');
     }
-    const origin = resolvePublicOrigin(request, config);
+    const origin = resolvePublicOrigin(request, config, OIDC_HTTPS_ERROR);
     const params = await parseTokenForm(request);
     if (!params) {
         return noStoreJson({ error: 'invalid_request', error_description: 'Expected application/x-www-form-urlencoded' }, 400);
@@ -513,7 +503,7 @@ export async function handleUserInfo(request: Request, env: Env, config: Runtime
     if (method !== 'GET' && method !== 'POST') {
         return methodNotAllowed('GET, POST');
     }
-    const origin = resolvePublicOrigin(request, config);
+    const origin = resolvePublicOrigin(request, config, OIDC_HTTPS_ERROR);
     const bearer = extractBearerToken(request);
     if (!bearer.present) {
         return noStoreJson(

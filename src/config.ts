@@ -123,6 +123,21 @@ export function parseUsers(raw: unknown): Record<string, string> {
     return raw && typeof raw === 'object' ? raw as Record<string, string> : {};
 }
 
+export function resolvePublicOrigin(
+    request: Request,
+    config: Pick<RuntimeConfig, 'publicOrigin'>,
+    errorMessage = 'HTTPS is required',
+): string {
+    if (config.publicOrigin) {
+        return config.publicOrigin;
+    }
+    const url = new URL(request.url);
+    if (url.protocol !== 'https:') {
+        throw new StatusError(errorMessage, 400);
+    }
+    return url.origin;
+}
+
 export function resolveConfig(env?: Partial<Env>): RuntimeConfig {
     const { path, basePath } = resolveMountPath(env?.WEBDAV_PATH);
     const rawPublicOrigin = env?.PUBLIC_ORIGIN?.trim() || '';

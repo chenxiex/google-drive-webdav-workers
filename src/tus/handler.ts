@@ -119,7 +119,13 @@ export async function handleTusUpload(drive: DriveClient, env: Env, owner: strin
     const response = await namespace.get(namespace.idFromName(sessionId)).fetch(new Request('https://tus.internal/upload', { method: request.method, headers, body: request.body }));
     if (response.headers.get('x-tus-complete') === '1') {
         const targetPath = decodeURIComponent(response.headers.get('x-tus-target-path')!);
-        await drive.cache.invalidateFileAndParent(targetPath, response.headers.get('x-tus-parent-id')!)
+        const parentId = response.headers.get('x-tus-parent-id')!;
+        const fileId = response.headers.get('x-tus-file-id');
+        await drive.notifySync(fileId
+            ? { type: 'upsert', id: fileId, parentId, isFolder: false }
+            : { type: 'touch', id: parentId, isFolder: true })
+            .catch(() => console.error('TUS sync update failed'));
+        await drive.cache.invalidateFileAndParent(targetPath, parentId)
             .catch(() => console.error('TUS cache invalidation failed'));
     }
     const result = new Response(response.body, response);

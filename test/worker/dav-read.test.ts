@@ -1,5 +1,5 @@
 import { SELF, env, createExecutionContext, waitOnExecutionContext } from 'cloudflare:test';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import worker from '../../src/index';
 import { AUTH, FOLDER, ORIGIN, installDriveMock, seedStandardDrive } from '../support/client';
 import { MockDrive } from '../support/mock-drive';
@@ -16,11 +16,6 @@ beforeEach(() => {
 	drive = new MockDrive();
 	seedStandardDrive(drive);
 	installDriveMock(drive);
-});
-
-afterEach(() => {
-	vi.restoreAllMocks();
-	vi.unstubAllGlobals();
 });
 
 describe('auth', () => {
@@ -694,9 +689,9 @@ describe('Google Workspace native docs and Shortcuts (7A)', () => {
 		expect((await request(path + '/hidden-child.txt')).status).toBe(404);
 		expect(drive.findById(itemId)?.trashed).not.toBe(true);
 		const calls = spy.mock.calls.map(([input, init]) => ({
-			url: String(input),
+			url: input instanceof Request ? input.url : String(input),
 			method: (init?.method ?? (input instanceof Request ? input.method : 'GET')).toUpperCase(),
-		}));
+		})).filter(call => !new URL(call.url).pathname.startsWith('/oauth2/'));
 		expect(calls.some(call => call.url.includes('alt=media') || call.method !== 'GET')).toBe(false);
 	});
 

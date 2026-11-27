@@ -88,7 +88,9 @@ export async function handleGraphMeDrives(
     }
 
     const spaceId = personalSpaceId(config.rootId);
-    const rootEtag = computeSpaceRootEtag(rootMeta, config.rootId);
+    const rootEtag = drive.sync
+        ? (await drive.sync.poll()).rootEtag
+        : computeSpaceRootEtag(rootMeta, config.rootId);
     const body = method === 'HEAD'
         ? null
         : serializeGraphDrivesJson({

@@ -1,9 +1,10 @@
 import { SELF, createExecutionContext, env, runInDurableObject, waitOnExecutionContext } from 'cloudflare:test';
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { base64UrlDecode, base64UrlEncode } from '../../src/auth/jwt';
 import worker from '../../src/index';
 import { AUTH, ORIGIN, basic } from '../support/client';
 import { MockDrive } from '../support/mock-drive';
+import { setFetchMock } from '../support/network';
 
 const DESKTOP_ID = 'xdXOt13JKxym1B1QcEncf2XDkLAexMBFwiT9j6EfhhHFJhs2KM9jbjTmf8JBXE69';
 const DESKTOP_SECRET = 'UBntmLjC2yYCeHwsyj73Uwo9TAaecAetRwMw0xYcvNL9yRdLSUi0hUAHfvCHFeFh';
@@ -99,7 +100,7 @@ async function callWorker(bindings: Env, url: string, init: RequestInit = {}): P
 }
 
 function installFetchRouter(drive?: MockDrive): void {
-    vi.stubGlobal('fetch', async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+    setFetchMock(async (input, init) => {
         const req = new Request(input, init);
         const url = new URL(req.url);
         if (url.origin === ACCESS_TEAM && url.pathname === '/cdn-cgi/access/certs') {
@@ -189,11 +190,6 @@ async function authorizeAndExchange(
 
 beforeAll(async () => {
     [signingFixture, accessFixture] = await Promise.all([createRsaFixture(), createRsaFixture()]);
-});
-
-afterEach(() => {
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
 });
 
 describe('OIDC auto-activation and config boundaries', () => {

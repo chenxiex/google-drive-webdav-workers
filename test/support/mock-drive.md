@@ -18,6 +18,8 @@ pnpm run build
 | --- | --- |
 | `POST /oauth2/v4/token` | Form-encoded `refresh_token` grant; checks `client_id`, `client_secret`, and `refresh_token` errors (`invalid_request`, `invalid_client`, `invalid_grant`, `unsupported_grant_type`). |
 | `GET /drive/v3/about` | Requires `fields`; projects `storageQuota` subfields with quota integers serialized as JSON decimal strings. |
+| `GET /drive/v3/changes/startPageToken` | Returns `{ kind: "drive#startPageToken", startPageToken }` with optional `fields` projection. |
+| `GET /drive/v3/changes` | Requires valid `pageToken`; supports `pageSize` (1–1000), `includeRemoved`, deduplicated monotonic change pagination (`nextPageToken` vs `newStartPageToken`), nested `fields` projection, and invalid-cursor injection (`invalidateChangeTokens()`) or shared-item permission loss (`revokeAccess()`). |
 | `GET /drive/v3/files` | Supports `fields` projection, `q` conjunctions (`'id' in parents`, `name`/`mimeType` `=`/`!=`, `trashed`), escaped `'` and `\`, `orderBy` (`folder`, `name`, `name_natural`, `modifiedTime`), `pageSize` (1–1000), and `pageToken` validation. |
 | `POST /drive/v3/files` | Persistent UUID identity, parent validation (`404`/`403`), `Untitled` default name, zero-byte file size with `md5Checksum` only (omitting `sha1Checksum`/`sha256Checksum`) vs omitted folder size/checksums, `description`, `starred`, `modifiedTime`, `appProperties`, and quantized `folderColorRgb` on folders (`403 colorNotSupportedForItem` on non-folders). |
 | `PATCH /drive/v3/files/{id}` | Rename, `addParents`/`removeParents` (adding a single new parent moves the item even without `removeParents`), direct `parents` replacement (`403 fieldNotWritable`), empty `name` and metadata-only binary MIME updates ignored, monotonic `version` increment, existing content digests preserved. |
@@ -46,7 +48,6 @@ pnpm run build
 - Media downloads of folders/Workspace documents, missing fixture bytes/mismatched size, and open/suffix/multipart/out-of-bounds ranges (other than `start >= length` `416`)
 - Unverified `folderColorRgb` values, `createdTime` on `create`, writes to `root`, Workspace conversions, nested non-`files` `fields` selectors, and unmodeled `q` operators or `orderBy` keys
 - Moving items from/into Trash, changing trash state under a trashed ancestor, and folder cycles
-- `changes.list` / `getStartPageToken` (not yet implemented; must be audited and modeled before `OC-05`)
 - Media/upload operations inside `POST /batch/drive/v3` (rejected by Google Drive)
 - `headRevisionId` and `revisions.get?alt=media` (including immutable post-overwrite `Range` reads and `416`) are modeled; read-only shared `403` and `cannotDownloadAbusiveFile` responses are injected at the fetch boundary in tests.
 - Shared-drive permissions, cross-app 100-property aggregate quotas, real OAuth token expiry/revocation, network/rate-limit retries, and asynchronous trash propagation delays (covered via fault injection in tests).

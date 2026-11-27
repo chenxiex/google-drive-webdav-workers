@@ -10,11 +10,13 @@
 	"durable_objects": {
 		"bindings": [
 			{ "name": "TUS_UPLOADS", "class_name": "TusUpload" },
-			{ "name": "AUTH_DO", "class_name": "AuthStore" }
+			{ "name": "AUTH_DO", "class_name": "AuthStore" },
+			{ "name": "SYNC_INDEX", "class_name": "SyncIndex" }
 		]
 	},
 	"migrations": [
 		{ "tag": "v1-tus", "new_sqlite_classes": ["TusUpload"] },
-		{ "tag": "v2-auth", "new_sqlite_classes": ["AuthStore"] }
+		{ "tag": "v2-auth", "new_sqlite_classes": ["AuthStore"] },
+		{ "tag": "v3-sync", "new_sqlite_classes": ["SyncIndex"] }
 	]
 }

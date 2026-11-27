@@ -1,11 +1,12 @@
 import { DOMParser } from '@xmldom/xmldom';
 import { createExecutionContext, env, waitOnExecutionContext } from 'cloudflare:test';
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import pkg from '../../package.json';
 import { base64UrlEncode } from '../../src/auth/jwt';
 import worker from '../../src/index';
 import { AUTH, FOLDER, ORIGIN } from '../support/client';
 import { MockDrive } from '../support/mock-drive';
+import { setFetchMock } from '../support/network';
 
 const ANDROID_ID = 'OpenCloudAndroid';
 const ANDROID_REDIRECT = 'oc://android.opencloud.eu';
@@ -67,7 +68,7 @@ async function callWorker(bindings: Env, url: string, init: RequestInit = {}): P
 }
 
 function installFetchRouter(drive?: MockDrive): void {
-    vi.stubGlobal('fetch', async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+    setFetchMock(async (input, init) => {
         const req = new Request(input, init);
         const url = new URL(req.url);
         if (url.origin === ACCESS_TEAM && url.pathname === '/cdn-cgi/access/certs') {
@@ -135,15 +136,10 @@ beforeAll(async () => {
     [signingFixture, accessFixture] = await Promise.all([createRsaFixture(), createRsaFixture()]);
 });
 
-afterEach(() => {
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-});
-
 describe('status.php bootstrap discovery', () => {
     it('serves tested oCIS status profile unauthenticated on GET/HEAD without redirects', async () => {
         const fetch = vi.fn(() => { throw new Error('Unexpected external request'); });
-        vi.stubGlobal('fetch', fetch);
+        setFetchMock(fetch);
 
         const getRes = await callWorker({} as Env, '/status.php');
         expect(getRes.status).toBe(200);
@@ -407,7 +403,8 @@ describe('Graph /graph/v1.0/me/drives personal Space', () => {
         expect(customRes.status).toBe(200);
         const customBody = await customRes.json<{ value: Array<Record<string, any>> }>();
         expect(customBody.value[0].id).toBe('personal$space-folder');
-        expect(customBody.value[0].eTag).toBe('"space-folder-1"');
+        expect(customBody.value[0].eTag).toMatch(/^"space-folder-[0-9a-f]{8}-1"$/);
+        expect(customBody.value[0].root.eTag).toBe(customBody.value[0].eTag);
         expect(customBody.value[0].root.webDavUrl).toBe(`${ORIGIN}/dav/spaces/personal$space-folder`);
 
         const nonFolder = await callWorker({ ...env, ROOT_ID: 'not-a-folder' } as Env, '/graph/v1.0/me/drives', { headers: AUTH });
@@ -438,7 +435,7 @@ describe('Graph /graph/v1.0/me/drives personal Space', () => {
     ])('handles Drive storageQuota shape %j accurately', async (aboutMock, expectedFragments) => {
         const drive = new MockDrive();
         const original = drive.handle.bind(drive);
-        vi.stubGlobal('fetch', async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+        setFetchMock(async (input, init) => {
             if (String(input).includes('/drive/v3/about?')) {
                 return new Response(JSON.stringify(aboutMock.body), {
                     status: aboutMock.status,

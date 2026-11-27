@@ -6,6 +6,7 @@ const compat = {
 	durableObjects: {
 		TUS_UPLOADS: { className: 'TusUpload', useSQLite: true },
 		AUTH_DO: { className: 'AuthStore', useSQLite: true },
+		SYNC_INDEX: { className: 'SyncIndex', useSQLite: true },
 	},
 };
 
@@ -19,12 +20,30 @@ const davBindings = {
 export default defineConfig({
 	test: {
 		projects: [
-			{ test: { name: 'unit', include: ['test/unit/**/*.test.ts'] } },
 			{
-				plugins: [cloudflareTest({ main: 'src/index.ts', miniflare: { ...compat, bindings: davBindings } })],
+				test: {
+					name: 'unit',
+					include: ['test/unit/**/*.test.ts'],
+					setupFiles: ['test/support/setup-unit.ts'],
+				},
+			},
+			{
+				plugins: [
+					cloudflareTest({
+						main: 'src/index.ts',
+						miniflare: {
+							...compat,
+							bindings: davBindings,
+							outboundService(request) {
+								throw new Error(`Blocked outbound network request in worker test: ${request.method} ${request.url}`);
+							},
+						},
+					}),
+				],
 				test: {
 					name: 'worker',
 					include: ['test/worker/**/*.test.ts'],
+					setupFiles: ['test/support/setup-worker.ts'],
 				},
 			},
 		],

@@ -5,6 +5,13 @@ import { StatusError, encodeQueryString } from '../http';
 let tokenCache: { key: string; access_token: string; expires: number } | null = null;
 const fetchingTokens = new Map<string, Promise<string>>();
 
+export function invalidateAccessToken(config: Pick<RuntimeConfig, 'client_id' | 'refresh_token'>): void {
+    const cacheKey = `${config.client_id}\0${config.refresh_token}`;
+    if (tokenCache?.key === cacheKey) {
+        tokenCache = null;
+    }
+}
+
 export async function getAccessToken(config: Pick<RuntimeConfig, 'client_id' | 'client_secret' | 'refresh_token'>): Promise<string> {
     const cacheKey = `${config.client_id}\0${config.refresh_token}`;
     if (tokenCache && tokenCache.key === cacheKey && tokenCache.expires > Date.now()) return tokenCache.access_token;

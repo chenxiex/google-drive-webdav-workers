@@ -1,5 +1,5 @@
 import { SELF } from 'cloudflare:test';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AUTH, FOLDER, ORIGIN, type Mutation, installDriveMock, recordMutations, seedStandardDrive } from '../support/client';
 import { MockDrive } from '../support/mock-drive';
 
@@ -15,11 +15,6 @@ beforeEach(() => {
 	drive = new MockDrive();
 	seedStandardDrive(drive);
 	installDriveMock(drive);
-});
-
-afterEach(() => {
-	vi.restoreAllMocks();
-	vi.unstubAllGlobals();
 });
 
 const overwrite = (method: string, target = '/webdav/dest.txt') => request('/webdav/a.txt', {

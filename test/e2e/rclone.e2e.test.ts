@@ -28,7 +28,10 @@ test('real rclone uploads more than the simulated ingress limit using bounded TU
     const bundle = await build({ entryPoints: ['src/index.ts'], bundle: true, write: false, format: 'esm', external: ['cloudflare:workers'] });
     const mf = new Miniflare({
         modules: true, script: bundle.outputFiles[0].text, compatibilityDate: '2026-04-15',
-        durableObjects: { TUS_UPLOADS: { className: 'TusUpload', useSQLite: true } },
+        durableObjects: {
+            TUS_UPLOADS: { className: 'TusUpload', useSQLite: true },
+            SYNC_INDEX: { className: 'SyncIndex', useSQLite: true },
+        },
         bindings: { USERS: JSON.stringify({ test: 'pass' }), CLIENT_ID: 'test-client-id', CLIENT_SECRET: 'test-client-secret', REFRESH_TOKEN: 'test-refresh-token-history' },
         outboundService: async (request: Request) => {
             const body = request.body ? new Uint8Array(await request.arrayBuffer()) : undefined;

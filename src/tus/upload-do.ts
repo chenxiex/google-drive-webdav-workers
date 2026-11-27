@@ -19,6 +19,7 @@ interface UploadState extends TusSession {
     tail: Uint8Array;
     pending?: Uint8Array;
     pendingStart?: number;
+    fileId?: string;
     expires: number;
 }
 
@@ -62,6 +63,7 @@ export class TusUpload extends DurableObject {
                 headers.set('x-tus-complete', '1');
                 headers.set('x-tus-target-path', encodeURIComponent(state.targetPath));
                 headers.set('x-tus-parent-id', state.parentId);
+                if (state.fileId) headers.set('x-tus-file-id', state.fileId);
             }
         }
         return new Response(message ?? null, { status, headers });
@@ -94,7 +96,13 @@ export class TusUpload extends DurableObject {
             delete state.pending;
             delete state.pendingStart;
         }
-        if (response.status === 200 || response.status === 201) state.completed = true;
+        if (response.status === 200 || response.status === 201) {
+            state.completed = true;
+            const completedFile = await response.json<{ id?: string }>().catch(() => null);
+            if (typeof completedFile?.id === 'string' && completedFile.id) {
+                state.fileId = completedFile.id;
+            }
+        }
         await this.save(state);
     }
 
@@ -105,7 +113,7 @@ export class TusUpload extends DurableObject {
                 method: 'PUT', headers: { 'Content-Length': '0', 'Content-Range': `bytes */${state.totalSize}` }
             });
             try { await this.applyConfirmation(state, response); }
-            finally { await response.body?.cancel(); }
+            finally { if (!response.bodyUsed) await response.body?.cancel().catch(() => undefined); }
         }
         while (state.pending) {
             const before = state.driveOffset;
@@ -120,7 +128,7 @@ export class TusUpload extends DurableObject {
                 body: bytes
             });
             try { await this.applyConfirmation(state, response); }
-            finally { await response.body?.cancel(); }
+            finally { if (!response.bodyUsed) await response.body?.cancel().catch(() => undefined); }
             if (state.driveOffset === before) throw new UploadError('Drive did not acknowledge upload bytes', 503);
         }
     }

@@ -1,5 +1,5 @@
 import { SELF, env, createExecutionContext, waitOnExecutionContext } from 'cloudflare:test';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import worker from '../../src/index';
 import { UPLOAD_CHUNK_SIZE } from '../../src/webdav/upload-stream';
 import { AUTH, FOLDER, ORIGIN, installDriveMock, recordMutations, seedStandardDrive } from '../support/client';
@@ -50,10 +50,25 @@ beforeEach(() => {
 	installDriveMock(drive);
 });
 
-afterEach(() => {
-	vi.restoreAllMocks();
-	vi.unstubAllGlobals();
-});
+function expectFilledBytes(content: Uint8Array | undefined, expectedLength: number, fillByte: number): void {
+	expect(content).toBeInstanceOf(Uint8Array);
+	expect(content!.length).toBe(expectedLength);
+	const bytes = content!;
+	if (bytes.byteOffset % 4 === 0 && bytes.length >= 4) {
+		const word = ((fillByte << 24) | (fillByte << 16) | (fillByte << 8) | fillByte) >>> 0;
+		const words = new Uint32Array(bytes.buffer, bytes.byteOffset, bytes.length >>> 2);
+		for (let i = 0; i < words.length; i++) {
+			if (words[i] !== word) expect.fail(`Byte mismatch at word offset ${i * 4}`);
+		}
+		for (let i = words.length * 4; i < bytes.length; i++) {
+			if (bytes[i] !== fillByte) expect.fail(`Byte mismatch at offset ${i}`);
+		}
+		return;
+	}
+	for (let i = 0; i < bytes.length; i++) {
+		if (bytes[i] !== fillByte) expect.fail(`Byte mismatch at offset ${i}`);
+	}
+}
 
 describe('PUT and MKCOL', () => {
 	it.each([11, 5 * MEGA])('PUT creates a %i-byte multipart file', async (size) => {
@@ -65,7 +80,7 @@ describe('PUT and MKCOL', () => {
 		expect(res.status).toBe(201);
 		const created = drive.children('root').find((f) => f.name === 'put-new.txt');
 		expect(created?.size).toBe(size);
-		expect(created?.content?.every(byte => byte === 120)).toBe(true);
+		expectFilledBytes(created?.content, size, 120);
 	});
 
 	it('PUT over an existing file returns 204', async () => {
@@ -87,7 +102,7 @@ describe('PUT and MKCOL', () => {
 		expect(res.status).toBe(201);
 		const created = drive.children('root').find((f) => f.name === 'big.dat');
 		expect(created?.size).toBe(11 * MEGA);
-		expect(created?.content?.every(byte => byte === 120)).toBe(true);
+		expectFilledBytes(created?.content, 11 * MEGA, 120);
 	});
 
 	it('MKCOL on an existing resource returns 405', async () => {
@@ -115,7 +130,10 @@ describe('PUT and MKCOL', () => {
 		const methods: string[] = [];
 		const original = drive.handle.bind(drive);
 		vi.spyOn(drive, 'handle').mockImplementation((input, init) => {
-			methods.push(new Request(input, init).method);
+			const req = new Request(input, init);
+			if (!new URL(req.url).pathname.startsWith('/oauth2/')) {
+				methods.push(req.method);
+			}
 			return original(input, init);
 		});
 		const init: RequestInit = kind === 'MKCOL'
@@ -151,7 +169,7 @@ describe('PUT and MKCOL', () => {
 		expect(res.status).toBe(expectedStatus);
 		const file = drive.children('root').find(f => f.name === path.split('/').at(-1));
 		expect(Number(file?.size)).toBe(size);
-		expect(file?.content?.every(byte => byte === 120)).toBe(true);
+		expectFilledBytes(file?.content, size, 120);
 	});
 
 	it.each(['-1', 'abc', '12abc', '1.5', '', String(Number.MAX_SAFE_INTEGER + 1)])(
@@ -175,7 +193,10 @@ describe('PUT and MKCOL', () => {
 		const methods: string[] = [];
 		const original = drive.handle.bind(drive);
 		vi.spyOn(drive, 'handle').mockImplementation((input, init) => {
-			methods.push(new Request(input, init).method);
+			const req = new Request(input, init);
+			if (!new URL(req.url).pathname.startsWith('/oauth2/')) {
+				methods.push(req.method);
+			}
 			return original(input, init);
 		});
 		const body = typeof payload === 'function' ? payload() : payload;
@@ -318,7 +339,7 @@ describe('unknown-length PUT', () => {
 		expect(response.status).toBe(status);
 		const file = drive.children('root').find(f => f.name === path.split('/').at(-1));
 		expect(file?.size).toBe(size);
-		expect(file?.content?.every(byte => byte === 97)).toBe(true);
+		expectFilledBytes(file?.content, size, 97);
 		expect(ranges).toEqual(size === UPLOAD_CHUNK_SIZE
 			? [`bytes 0-${size - 1}/${size}`]
 			: [`bytes 0-${UPLOAD_CHUNK_SIZE - 1}/*`, `bytes ${UPLOAD_CHUNK_SIZE}-${2 * UPLOAD_CHUNK_SIZE - 1}/*`, `bytes ${2 * UPLOAD_CHUNK_SIZE}-${size - 1}/${size}`]);

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
     authenticateTokenClient,
     getOAuthClient,
@@ -17,6 +17,7 @@ import {
 } from '../../src/auth/jwt';
 import { type OidcConfig } from '../../src/config';
 import { StatusError } from '../../src/http';
+import { setFetchMock } from '../support/network';
 
 const DESKTOP_ID = 'xdXOt13JKxym1B1QcEncf2XDkLAexMBFwiT9j6EfhhHFJhs2KM9jbjTmf8JBXE69';
 const DESKTOP_SECRET = 'UBntmLjC2yYCeHwsyj73Uwo9TAaecAetRwMw0xYcvNL9yRdLSUi0hUAHfvCHFeFh';
@@ -65,12 +66,6 @@ async function pkceChallenge(verifier: string): Promise<string> {
     const digest = await crypto.subtle.digest('SHA-256', encoder.encode(verifier));
     return base64UrlEncode(new Uint8Array(digest));
 }
-
-afterEach(() => {
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-    vi.useRealTimers();
-});
 
 describe('PKCE S256', () => {
     it('accepts valid 43-128 char verifiers matching S256 challenges', async () => {
@@ -289,7 +284,7 @@ describe('Cloudflare Access JWT verification', () => {
 
         let jwksKeys = [{ ...key1.publicJwk, kid: 'kid-1', alg: 'RS256', use: 'sig' }];
         const fetchMock = vi.fn(async () => new Response(JSON.stringify({ keys: jwksKeys }), { status: 200 }));
-        vi.stubGlobal('fetch', fetchMock);
+        setFetchMock(fetchMock);
 
         const jwt1 = await signJwt(
             key1.privateKey,
@@ -334,7 +329,7 @@ describe('Cloudflare Access JWT verification', () => {
         const config = makeConfig(teamDomain);
         const nowSec = 1_700_000_000;
 
-        vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+        setFetchMock(vi.fn(async () => new Response(JSON.stringify({
             keys: [{ ...key.publicJwk, kid: 'kid-1', alg: 'RS256', use: 'sig' }],
         }), { status: 200 })));
 
@@ -376,7 +371,7 @@ describe('Cloudflare Access JWT verification', () => {
             { iss: teamDomain, aud: baseAud, sub: 'user-1', exp: nowSec + 300 },
         );
 
-        vi.stubGlobal('fetch', vi.fn(async () => new Response('down', { status: 502 })));
+        setFetchMock(vi.fn(async () => new Response('down', { status: 502 })));
         await expect(verifyCfAccessJwt(jwt, config, nowSec)).rejects.toMatchObject({ status: 503 });
     });
 });

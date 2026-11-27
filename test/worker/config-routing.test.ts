@@ -1,10 +1,9 @@
 import { createExecutionContext, env, waitOnExecutionContext } from 'cloudflare:test';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { StatusError } from '../../src/http';
 import worker from '../../src/index';
 import { AUTH, ORIGIN, basic } from '../support/client';
-
-afterEach(() => vi.unstubAllGlobals());
+import { clearFetchMock, drainUnmockedFetches, setFetchMock } from '../support/network';
 
 // Invoke with an empty env: missing USERS must fail closed rather than falling
 // back to any placeholder "user"/"password" credentials.
@@ -37,7 +36,7 @@ describe('env config without USERS binding', () => {
 describe('explicit OAuth bindings', () => {
 	it.each([1, 2, 4, 7])('rejects incomplete credentials before any Google request (mask=%i)', async mask => {
 		const fetch = vi.fn(() => { throw new Error('Unexpected external request'); });
-		vi.stubGlobal('fetch', fetch);
+		setFetchMock(fetch);
 		const keys = ['CLIENT_ID', 'CLIENT_SECRET', 'REFRESH_TOKEN'] as const;
 		const bindings: Record<string, unknown> = { ...env };
 		const missing = keys.filter((_, index) => mask & (1 << index));
@@ -66,7 +65,7 @@ describe('path routing', () => {
 		'/status.php-alt/',
 	])('routes from bindings per request (%s) and preserves authentication', async path => {
 		const fetch = vi.fn(() => { throw new Error('Unexpected external request'); });
-		vi.stubGlobal('fetch', fetch);
+		setFetchMock(fetch);
 		const bindings: Record<string, unknown> = { ...env };
 		if (path === undefined) delete bindings.WEBDAV_PATH;
 		else bindings.WEBDAV_PATH = path;
@@ -150,7 +149,7 @@ describe('path routing', () => {
 		'/%64av/',
 	])('rejects invalid or conflicting WEBDAV_PATH (%s) with a 500 configuration error', async invalidPath => {
 		const fetch = vi.fn(() => { throw new Error('Unexpected external request'); });
-		vi.stubGlobal('fetch', fetch);
+		setFetchMock(fetch);
 		const bindings = { ...env, WEBDAV_PATH: invalidPath } as unknown as Env;
 
 		const run = async (urlPath: string, headers?: HeadersInit) => {
@@ -186,7 +185,7 @@ describe('top-level error handling', () => {
 		['thrown null', null, 500, '500: null'],
 	])('normalizes %s via errorStatus()', async (_label, thrown, expectedStatus, expectedBody) => {
 		const fetch = vi.fn(async () => { throw thrown; });
-		vi.stubGlobal('fetch', fetch);
+		setFetchMock(fetch);
 		const bindings = { ...env, CLIENT_ID: 'err-' + crypto.randomUUID() } as unknown as Env;
 
 		const ctx = createExecutionContext();
@@ -196,5 +195,30 @@ describe('top-level error handling', () => {
 		expect(fetch).toHaveBeenCalledOnce();
 		expect(res.status).toBe(expectedStatus);
 		expect(await res.text()).toBe(expectedBody);
+	});
+});
+
+describe('offline network isolation guard', () => {
+	it('blocks and records unmocked outbound fetch even when handlers swallow errors or globals unstub', async () => {
+		await expect(fetch('https://example.invalid/worker-unmocked')).rejects.toThrow(/Blocked unmocked outbound fetch/);
+
+		const ctx = createExecutionContext();
+		const res = await worker.fetch(new Request(ORIGIN + '/webdav/leak-probe.txt', { method: 'HEAD', headers: AUTH }), env as Env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(res.status).toBe(500);
+
+		setFetchMock(async () => new Response('mocked-ok', { status: 200 }));
+		expect(await (await fetch('https://example.invalid/worker-mocked')).text()).toBe('mocked-ok');
+		clearFetchMock();
+
+		vi.stubGlobal('fetch', async () => new Response('ok'));
+		vi.unstubAllGlobals();
+
+		await expect(fetch('https://example.invalid/worker-after-unstub')).rejects.toThrow(/Blocked unmocked outbound fetch/);
+		expect(drainUnmockedFetches()).toEqual([
+			'GET https://example.invalid/worker-unmocked',
+			'POST https://www.googleapis.com/oauth2/v4/token',
+			'GET https://example.invalid/worker-after-unstub',
+		]);
 	});
 });

@@ -45,8 +45,14 @@ function extractBatchError(res: DriveBatchResponse): string {
     return res.json?.error?.message || res.text || `Drive batch sub-request failed with status ${res.status}`;
 }
 
-async function populateFolderCopy(drive: DriveClient, sourceId: string, stageId: string, budget: BatchBudget): Promise<void> {
+async function populateFolderCopy(
+    drive: DriveClient,
+    sourceId: string,
+    stageId: string,
+    budget: BatchBudget,
+): Promise<Array<{ id: string; parentId: string; isFolder: boolean }>> {
     const visited = new Set<string>([sourceId, stageId]);
+    const copiedItems: Array<{ id: string; parentId: string; isFolder: boolean }> = [];
     let totalItems = 0;
     let frontier: Array<{ srcId: string; dstId: string }> = [{ srcId: sourceId, dstId: stageId }];
     let reqCounter = 0;
@@ -127,7 +133,9 @@ async function populateFolderCopy(drive: DriveClient, sourceId: string, stageId:
             if (typeof createdId !== 'string' || !createdId || (child.mimeType !== FOLDER_MIME && createdId === child.id)) {
                 throw new TransferError('Drive batch write returned no valid ID', 502, false);
             }
-            if (child.mimeType === FOLDER_MIME) {
+            const childIsFolder = child.mimeType === FOLDER_MIME;
+            copiedItems.push({ id: createdId, parentId: discovered[i].dstParentId, isFolder: childIsFolder });
+            if (childIsFolder) {
                 visited.add(child.id);
                 visited.add(createdId);
                 nextFrontier.push({ srcId: child.id, dstId: createdId });
@@ -135,6 +143,7 @@ async function populateFolderCopy(drive: DriveClient, sourceId: string, stageId:
         }
         frontier = nextFrontier;
     }
+    return copiedItems;
 }
 
 // Drive has no atomic replace-by-name operation. Keep the old destination
@@ -193,16 +202,21 @@ async function handleTransfer(drive: DriveClient, request: Request, copy: boolea
     let targetTrashed = false;
     let publishAttempted = false;
     let stageId: string | undefined;
+    let createdRootId: string | undefined;
+    let copiedItems: Array<{ id: string; parentId: string; isFolder: boolean }> = [];
+    let completed = false;
     const stageName = needsStage ? '.webdav-copy-' + crypto.randomUUID() : undefined;
     try {
         if (copy && isFolder) {
             const created = await drive.transferCreate(folderCopyBody(source, stageName || name, parentId), headers);
+            createdRootId = created.id;
             if (needsStage) stageId = created.id;
             if (isRecursiveFolderCopy) {
-                await populateFolderCopy(drive, source.id, stageId!, { usedBatches: 0, maxBatches: FOLDER_COPY_LIMITS.maxBatches });
+                copiedItems = await populateFolderCopy(drive, source.id, stageId!, { usedBatches: 0, maxBatches: FOLDER_COPY_LIMITS.maxBatches });
             }
         } else if (copy) {
             const staged = await drive.transferWrite(source.id, fileCopyBody(source, stageName || name, parentId), headers, true);
+            createdRootId = staged.id;
             if (needsStage) stageId = staged.id;
         }
         if (target) {
@@ -222,6 +236,28 @@ async function handleTransfer(drive: DriveClient, request: Request, copy: boolea
                 ? '&addParents=' + encodeURIComponent(parentId) + (sourceParentId ? '&removeParents=' + encodeURIComponent(sourceParentId) : '')
                 : '';
             await drive.transferWrite(source.id, { name }, headers, false, parents);
+        }
+        completed = true;
+        if (!copy) {
+            await drive.notifySync({
+                type: 'move',
+                id: source.id,
+                oldParentId: sourceParentId,
+                newParentId: parentId,
+                isFolder,
+                replacedId: target?.id,
+            });
+        } else if (isFolder) {
+            await drive.notifySync({
+                type: 'upsert_tree',
+                parentId,
+                replacedId: target?.id,
+                items: [{ id: createdRootId!, parentId, isFolder: true }, ...copiedItems],
+            });
+        } else {
+            await drive.notifySync(target
+                ? { type: 'upsert_tree', parentId, replacedId: target.id, items: [{ id: createdRootId!, parentId, isFolder: false }] }
+                : { type: 'upsert', id: createdRootId!, parentId, isFolder: false });
         }
         return new Response(null, {
             status: target ? 204 : 201,
@@ -263,6 +299,13 @@ async function handleTransfer(drive: DriveClient, request: Request, copy: boolea
         // Evict after Drive writes so the confirmed result is visible locally.
         // Cache failures must not hide the Drive outcome/recovery IDs or
         // prevent invalidating the other path. Local subtree eviction comes first.
+        if (!completed && (targetTrashed || publishAttempted)) {
+            const touches = [drive.notifySync({ type: 'touch', id: parentId, isFolder: true })];
+            if (!copy && sourceParentId && sourceParentId !== parentId) {
+                touches.push(drive.notifySync({ type: 'touch', id: sourceParentId, isFolder: true }));
+            }
+            await Promise.all(touches.map(promise => promise.catch(error => console.error('Transfer sync invalidation failed:', error))));
+        }
         const invalidations = [drive.cache.invalidateTransferPath(destPath, parentId, target?.mimeType === FOLDER_MIME || isFolder)];
         if (!copy) invalidations.push(drive.cache.invalidateTransferPath(fpath, sourceParentId, isFolder));
         await Promise.all(invalidations.map(promise => promise.catch(error => console.error('Transfer cache invalidation failed:', error))));

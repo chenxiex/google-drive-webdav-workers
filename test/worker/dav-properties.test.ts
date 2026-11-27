@@ -1,6 +1,6 @@
 import { SELF } from 'cloudflare:test';
 import { DOMParser } from '@xmldom/xmldom';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AUTH, FOLDER, ORIGIN, installDriveMock } from '../support/client';
 import { MockDrive } from '../support/mock-drive';
 
@@ -27,7 +27,6 @@ beforeEach(() => {
     drive.add({ id: 'folder-docs', name: 'docs', mimeType: FOLDER, parents: ['root'] });
     installDriveMock(drive);
 });
-afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe('persisted WebDAV properties', () => {
     it('persists a dead property and distinguishes empty from absent', async () => {

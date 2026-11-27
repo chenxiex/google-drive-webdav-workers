@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 export const FOLDER = 'application/vnd.google-apps.folder';
 
 export interface DriveFile {
@@ -82,56 +84,38 @@ function parseMetadata(bytes: Uint8Array): Metadata | Response {
 
 // Drive partial-response selectors used by this worker. Unknown supported-API
 // features fail loudly instead of pretending that the real API accepted them.
+type FieldSpec = { fields: Set<string>; nested?: Record<string, FieldSpec> };
 const fileFields = new Set(['kind', 'id', 'version', 'headRevisionId', 'name', 'mimeType', 'size', 'modifiedTime', 'createdTime', 'starred', 'folderColorRgb', 'appProperties', 'parents', 'trashed', 'explicitlyTrashed', 'description', 'iconLink', 'thumbnailLink', 'imageMediaMetadata', 'md5Checksum', 'sha1Checksum', 'sha256Checksum']);
+const fileSpec: FieldSpec = { fields: fileFields };
+const fileListSpec: FieldSpec = {
+	fields: new Set(['kind', 'incompleteSearch', 'nextPageToken', 'files']),
+	nested: { files: fileSpec },
+};
+const startPageTokenSpec: FieldSpec = {
+	fields: new Set(['kind', 'startPageToken']),
+};
+const changeFields = new Set(['kind', 'type', 'changeType', 'time', 'removed', 'fileId', 'file']);
+const changeSpec: FieldSpec = {
+	fields: changeFields,
+	nested: { file: fileSpec },
+};
+const changeListSpec: FieldSpec = {
+	fields: new Set(['kind', 'nextPageToken', 'newStartPageToken', 'changes']),
+	nested: { changes: changeSpec },
+};
 const EMPTY_MD5 = 'd41d8cd98f00b204e9800998ecf8427e';
-const MD5_SHIFTS = [
-	7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22,
-	5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20,
-	4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23,
-	6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
-];
-const MD5_K = Array.from({ length: 64 }, (_, i) => Math.floor(Math.abs(Math.sin(i + 1)) * 0x100000000) >>> 0);
-const toHex = (buffer: ArrayBuffer): string => Array.from(new Uint8Array(buffer), b => b.toString(16).padStart(2, '0')).join('');
+const CHECKSUM_FIELD_PATTERN = /\*|\b(?:md5|sha1|sha256)Checksum\b/;
 
-function md5Hex(bytes: Uint8Array): string {
-	const bitLen = bytes.length * 8;
-	const paddedLen = (((bytes.length + 8) >>> 6) + 1) * 64;
-	const padded = new Uint8Array(paddedLen);
-	padded.set(bytes);
-	padded[bytes.length] = 0x80;
-	const view = new DataView(padded.buffer);
-	view.setUint32(paddedLen - 8, bitLen >>> 0, true);
-	view.setUint32(paddedLen - 4, Math.floor(bitLen / 0x100000000) >>> 0, true);
-	let a0 = 0x67452301, b0 = 0xefcdab89, c0 = 0x98badcfe, d0 = 0x10325476;
-	for (let offset = 0; offset < paddedLen; offset += 64) {
-		let a = a0, b = b0, c = c0, d = d0;
-		for (let i = 0; i < 64; i++) {
-			let f: number, g: number;
-			if (i < 16) { f = (b & c) | (~b & d); g = i; }
-			else if (i < 32) { f = (d & b) | (~d & c); g = (5 * i + 1) & 15; }
-			else if (i < 48) { f = b ^ c ^ d; g = (3 * i + 5) & 15; }
-			else { f = c ^ (b | ~d); g = (7 * i) & 15; }
-			const sum = (a + f + MD5_K[i] + view.getUint32(offset + g * 4, true)) >>> 0;
-			const shift = MD5_SHIFTS[i];
-			const rot = ((sum << shift) | (sum >>> (32 - shift))) >>> 0;
-			a = d; d = c; c = b; b = (b + rot) >>> 0;
-		}
-		a0 = (a0 + a) >>> 0; b0 = (b0 + b) >>> 0; c0 = (c0 + c) >>> 0; d0 = (d0 + d) >>> 0;
-	}
-	return [a0, b0, c0, d0].map(word => {
-		const out = new Uint8Array(4);
-		new DataView(out.buffer).setUint32(0, word, true);
-		return toHex(out.buffer);
-	}).join('');
+function requestsChecksums(fields: string | null): boolean {
+	return fields !== null && CHECKSUM_FIELD_PATTERN.test(fields);
 }
 
-async function computeChecksums(bytes: Uint8Array): Promise<{ md5Checksum: string; sha1Checksum: string; sha256Checksum: string }> {
-	const copy = bytes.slice();
-	const [sha1, sha256] = await Promise.all([
-		crypto.subtle.digest('SHA-1', copy),
-		crypto.subtle.digest('SHA-256', copy),
-	]);
-	return { md5Checksum: md5Hex(copy), sha1Checksum: toHex(sha1), sha256Checksum: toHex(sha256) };
+function computeChecksums(bytes: Uint8Array): { md5Checksum: string; sha1Checksum: string; sha256Checksum: string } {
+	return {
+		md5Checksum: createHash('md5').update(bytes).digest('hex'),
+		sha1Checksum: createHash('sha1').update(bytes).digest('hex'),
+		sha256Checksum: createHash('sha256').update(bytes).digest('hex'),
+	};
 }
 function selections(fields: string): string[] {
 	let depth = 0;
@@ -146,24 +130,33 @@ function selections(fields: string): string[] {
 	result.push(fields.slice(start).trim());
 	return result;
 }
-function project(data: Record<string, unknown>, fields: string, allowed: Set<string>, nested?: { key: string; fields: Set<string> }): Record<string, unknown> | Response {
+function project(data: Record<string, unknown>, fields: string, spec: FieldSpec): Record<string, unknown> | Response {
 	if (fields === '*') return data;
 	const parts = selections(fields);
 	if (!parts.length) return invalid('fields');
 	const result: Record<string, unknown> = {};
 	for (const part of parts) {
 		const match = part.match(/^(\w+)(?:\((.*)\)|\/(.*))?$/);
-		if (!match || !allowed.has(match[1])) return apiError(400, 'invalidParameter', `Invalid field selection ${part}`, 'fields');
+		if (!match || !spec.fields.has(match[1])) return apiError(400, 'invalidParameter', `Invalid field selection ${part}`, 'fields');
 		const [, key, group, path] = match;
 		const subfields = group ?? path;
 		if (subfields !== undefined) {
-			if (nested?.key !== key) unsupported(`nested fields selector ${part}`);
-			const values = Array.isArray(data[key]) ? data[key] as Record<string, unknown>[] : [data[key] as Record<string, unknown>];
-			// Validate masks even on an empty list.
-			const checked = project({}, subfields, nested.fields);
+			const childSpec = spec.nested?.[key];
+			if (!childSpec) unsupported(`nested fields selector ${part}`);
+			const rawValue = data[key];
+			const isArr = Array.isArray(rawValue);
+			const values = isArr ? rawValue as Record<string, unknown>[] : [rawValue as Record<string, unknown>];
+			// Validate masks even on an empty list or omitted optional object.
+			const checked = project({}, subfields, childSpec);
 			if (checked instanceof Response) return checked;
-			const projected = values.filter(Boolean).map(v => project(v, subfields, nested.fields));
-			result[key] = Array.isArray(data[key]) ? projected : projected[0];
+			const projected: Record<string, unknown>[] = [];
+			for (const v of values) {
+				if (!v) continue;
+				const item = project(v, subfields, childSpec);
+				if (item instanceof Response) return item;
+				projected.push(item);
+			}
+			if (key in data) result[key] = isArr ? projected : projected[0];
 		} else if (key in data) result[key] = data[key];
 	}
 	return result;
@@ -222,8 +215,27 @@ export class MockDrive {
 	private hashedContent = new WeakMap<DriveFile, Uint8Array>();
 	private revSeq = 0;
 	private revisions = new Map<string, Map<string, { content: Uint8Array; mimeType: string }>>();
+	private changeSeq = 0;
+	private changeLog: Array<{ token: number; fileId: string; removed: boolean; time: string }> = [];
+	private minValidChangeToken = 1;
 	constructor(private oauth = { clientId: 'test-client-id', clientSecret: 'test-client-secret', refreshToken: 'test-refresh-token-history' }) {}
 
+	private recordChange(fileId: string, removed = false): void {
+		this.changeSeq++;
+		this.changeLog.push({ token: this.changeSeq, fileId, removed, time: new Date().toISOString() });
+	}
+	invalidateChangeTokens(): void {
+		this.changeSeq++;
+		this.minValidChangeToken = this.changeSeq + 1;
+	}
+	revokeAccess(id: string): void {
+		if (id === 'root') unsupported('revoking access on My Drive root');
+		const lost = new Set([id]);
+		for (const parent of lost) for (const child of this.children(parent)) lost.add(child.id);
+		for (const lostId of lost) this.revisions.delete(lostId);
+		this.files = this.files.filter(f => !lost.has(f.id));
+		this.recordChange(id, true);
+	}
 	private nextRevisionId(): string {
 		return 'rev-' + (++this.revSeq);
 	}
@@ -251,6 +263,7 @@ export class MockDrive {
 		this.hashedContent.delete(file);
 		if (!options?.preserveModifiedTime) file.modifiedTime = new Date().toISOString();
 		this.recordRevision(file);
+		this.recordChange(file.id, false);
 		return file;
 	}
 	add(file: DriveFile): DriveFile {
@@ -270,23 +283,27 @@ export class MockDrive {
 		this.recordRevision(file);
 		this.files.push(file);
 		this.refreshTrashState();
+		this.recordChange(file.id, false);
 		return file;
 	}
-	private async ensureChecksums(file: DriveFile): Promise<void> {
+	private ensureChecksums(file: DriveFile): void {
 		if (file.mimeType.startsWith('application/vnd.google-apps.') || file.content === undefined) return;
 		if (this.hashedContent.get(file) === file.content) return;
-		Object.assign(file, await computeChecksums(file.content));
+		Object.assign(file, computeChecksums(file.content));
 		this.hashedContent.set(file, file.content);
 	}
-	private async fileResponse(file: DriveFile, fields: string | null): Promise<Response> {
-		await this.ensureChecksums(file);
-		const selected = project(representation(file), fields ?? 'kind,id,name,mimeType', fileFields);
+	private fileResponse(file: DriveFile, fields: string | null): Response {
+		if (requestsChecksums(fields)) this.ensureChecksums(file);
+		const selected = project(representation(file), fields ?? 'kind,id,name,mimeType', fileSpec);
 		return selected instanceof Response ? selected : json(selected);
 	}
 	remove(id: string): void {
 		const removed = new Set([id]);
 		for (const parent of removed) for (const child of this.children(parent)) removed.add(child.id);
-		for (const removedId of removed) this.revisions.delete(removedId);
+		for (const removedId of removed) {
+			this.revisions.delete(removedId);
+			this.recordChange(removedId, true);
+		}
 		this.files = this.files.filter(f => !removed.has(f.id));
 	}
 	findById(id: string): DriveFile | undefined { return this.files.find(f => f.id === id) ?? (id === 'root' ? this.root : undefined); }
@@ -342,10 +359,10 @@ export class MockDrive {
 		if (Object.keys(next).length > 30) return apiError(403, 'propertyCountLimitExceeded', "The file's property and app property limit has been reached. Files can have up to 30 properties and 30 app properties per app, with a maximum of 100 in total.");
 		return next;
 	}
-	private async create(
+	private create(
 		meta: Metadata,
 		options: { content?: Uint8Array; mimeType?: string; size?: number | string; md5Checksum?: string; sha1Checksum?: string; sha256Checksum?: string } = {},
-	): Promise<DriveFile | Response> {
+	): DriveFile | Response {
 		if (meta.createdTime !== undefined) unsupported('unverified timestamps on create');
 		if (meta.mimeType?.startsWith('application/vnd.google-apps.') && meta.mimeType !== FOLDER) unsupported('Google Workspace document conversion');
 		const resolvedMime = meta.mimeType || options.mimeType || 'application/octet-stream';
@@ -365,9 +382,9 @@ export class MockDrive {
 				...(options.sha1Checksum !== undefined ? { sha1Checksum: options.sha1Checksum } : {}),
 				...(options.sha256Checksum !== undefined ? { sha256Checksum: options.sha256Checksum } : {}),
 			}
-			: options.content !== undefined ? await computeChecksums(content!)
-			: { md5Checksum: EMPTY_MD5 };
-		const created = this.add({
+			: options.content === undefined && options.size === undefined ? { md5Checksum: EMPTY_MD5 }
+			: {};
+		return this.add({
 			appProperties, description: meta.description ?? undefined, starred: meta.starred, folderColorRgb, createdTime: meta.createdTime,
 			id: crypto.randomUUID(), name: meta.name || 'Untitled', mimeType: resolvedMime, parents,
 			...(content !== undefined ? { content } : {}),
@@ -376,10 +393,8 @@ export class MockDrive {
 			trashed: meta.trashed ?? false,
 			modifiedTime: meta.modifiedTime === undefined ? new Date().toISOString() : new Date(meta.modifiedTime).toISOString(),
 		});
-		if (created.content !== undefined) this.hashedContent.set(created, created.content);
-		return created;
 	}
-	private async update(file: DriveFile, meta: Metadata, url: URL, content?: Uint8Array): Promise<Response | undefined> {
+	private update(file: DriveFile, meta: Metadata, url: URL, content?: Uint8Array): Response | undefined {
 		if (file === this.root) unsupported('writing My Drive root metadata');
 		if (meta.createdTime !== undefined) return apiError(403, 'fieldNotWritable', 'The resource body includes fields which are not directly writable.');
 		const appProperties = this.properties(file.appProperties, meta.appProperties);
@@ -427,15 +442,18 @@ export class MockDrive {
 		if (content !== undefined) {
 			file.content = content.slice(); file.size = content.length;
 			file.headRevisionId = this.nextRevisionId();
-			Object.assign(file, await computeChecksums(file.content));
-			this.hashedContent.set(file, file.content);
+			delete file.md5Checksum;
+			delete file.sha1Checksum;
+			delete file.sha256Checksum;
+			this.hashedContent.delete(file);
 			this.recordRevision(file);
 			// Updating a binary file's bytes preserves its existing MIME type,
 			// even when the media request declares a different Content-Type.
 			if (meta.modifiedTime === undefined) file.modifiedTime = new Date().toISOString();
 		}
+		this.recordChange(file.id, false);
 	}
-	private async list(url: URL): Promise<Response> {
+	private list(url: URL): Response {
 		const q = url.searchParams.get('q') ?? '';
 		let files = [...this.files];
 		let remaining = q.trim();
@@ -481,10 +499,67 @@ export class MockDrive {
 		const offset = page?.offset ?? 0;
 		let nextPageToken: string | undefined;
 		if (offset + size < files.length) { nextPageToken = crypto.randomUUID(); this.pages.set(nextPageToken, { offset: offset + size, query: q, order }); }
+		const fields = url.searchParams.get('fields');
 		const pageFiles = files.slice(offset, offset + size);
-		await Promise.all(pageFiles.map(file => this.ensureChecksums(file)));
+		if (requestsChecksums(fields)) {
+			for (const file of pageFiles) this.ensureChecksums(file);
+		}
 		const data = { kind: 'drive#fileList', incompleteSearch: false, ...(nextPageToken ? { nextPageToken } : {}), files: pageFiles.map(representation) };
-		const result = project(data, url.searchParams.get('fields') ?? 'kind,incompleteSearch,nextPageToken,files(kind,id,name,mimeType)', new Set(['kind', 'incompleteSearch', 'nextPageToken', 'files']), { key: 'files', fields: fileFields });
+		const result = project(data, fields ?? 'kind,incompleteSearch,nextPageToken,files(kind,id,name,mimeType)', fileListSpec);
+		return result instanceof Response ? result : json(result);
+	}
+	private listChanges(url: URL, fields: string | null): Response {
+		const rawToken = url.searchParams.get('pageToken');
+		if (rawToken === null) return apiError(400, 'required', 'Required parameter: pageToken', 'pageToken');
+		if (!/^[1-9]\d*$/.test(rawToken)) return invalid('pageToken');
+		const tokenNum = Number(rawToken);
+		if (!Number.isSafeInteger(tokenNum) || tokenNum < this.minValidChangeToken || tokenNum > this.changeSeq + 1) {
+			return invalid('pageToken');
+		}
+		const size = Number(url.searchParams.get('pageSize') ?? 100);
+		if (!Number.isInteger(size) || size < 1 || size > 1000) return invalid('pageSize');
+		const includeRemoved = url.searchParams.get('includeRemoved') !== 'false';
+		const needChecksums = requestsChecksums(fields);
+
+		const latestByFile = new Map<string, { token: number; fileId: string; removed: boolean; time: string }>();
+		for (const entry of this.changeLog) {
+			if (entry.token >= tokenNum) latestByFile.set(entry.fileId, entry);
+		}
+		const sorted = [...latestByFile.values()].sort((a, b) => a.token - b.token);
+		const allChanges: Array<{ token: number; change: Record<string, unknown> }> = [];
+		for (const entry of sorted) {
+			const file = entry.removed ? undefined : this.findById(entry.fileId);
+			const removed = entry.removed || !file;
+			if (removed && !includeRemoved) continue;
+			if (removed) {
+				allChanges.push({
+					token: entry.token,
+					change: { kind: 'drive#change', type: 'file', changeType: 'file', time: entry.time, removed: true, fileId: entry.fileId },
+				});
+			} else {
+				if (needChecksums) this.ensureChecksums(file);
+				allChanges.push({
+					token: entry.token,
+					change: { kind: 'drive#change', type: 'file', changeType: 'file', time: entry.time, removed: false, fileId: entry.fileId, file: representation(file) },
+				});
+			}
+		}
+
+		const pageItems = allChanges.slice(0, size);
+		const hasMore = allChanges.length > size;
+		const nextPageToken = hasMore ? String(pageItems[pageItems.length - 1].token + 1) : undefined;
+		const newStartPageToken = hasMore ? undefined : String(this.changeSeq + 1);
+		const data = {
+			kind: 'drive#changeList',
+			...(nextPageToken ? { nextPageToken } : {}),
+			...(newStartPageToken ? { newStartPageToken } : {}),
+			changes: pageItems.map(item => item.change),
+		};
+		const result = project(
+			data,
+			fields ?? 'kind,nextPageToken,newStartPageToken,changes(kind,type,changeType,time,removed,fileId,file(kind,id,name,mimeType))',
+			changeListSpec,
+		);
 		return result instanceof Response ? result : json(result);
 	}
 	private async uploadSession(url: URL, method: string, headers: Headers, bytes: Uint8Array): Promise<Response> {
@@ -534,10 +609,10 @@ export class MockDrive {
 		if (session.id) {
 			const existing = this.findById(session.id);
 			if (!existing) return notFound(session.id);
-			const error = await this.update(existing, session.metadata, url, accumulated);
+			const error = this.update(existing, session.metadata, url, accumulated);
 			if (error) return error;
 			file = existing;
-		} else file = await this.create(session.metadata, { content: accumulated, mimeType: session.mimeType });
+		} else file = this.create(session.metadata, { content: accumulated, mimeType: session.mimeType });
 		if (file instanceof Response) return file;
 		session.completed = file;
 		return this.fileResponse(file, session.fields);
@@ -679,8 +754,16 @@ export class MockDrive {
 		if (url.pathname === '/drive/v3/about' && method === 'GET') {
 			if (!fields) return apiError(400, 'required', "The 'fields' parameter is required for this method.", 'fields');
 			const data = { storageQuota: { limit: '1073741824', usage: '4096', usageInDrive: '4096', usageInDriveTrash: '0' } };
-			const result = project(data, fields, new Set(['storageQuota']), { key: 'storageQuota', fields: new Set(Object.keys(data.storageQuota)) });
+			const result = project(data, fields, { fields: new Set(['storageQuota']), nested: { storageQuota: { fields: new Set(Object.keys(data.storageQuota)) } } });
 			return result instanceof Response ? result : json(result);
+		}
+		if (url.pathname === '/drive/v3/changes/startPageToken' && method === 'GET') {
+			const data = { kind: 'drive#startPageToken', startPageToken: String(this.changeSeq + 1) };
+			const result = project(data, fields ?? 'kind,startPageToken', startPageTokenSpec);
+			return result instanceof Response ? result : json(result);
+		}
+		if (url.pathname === '/drive/v3/changes' && method === 'GET') {
+			return this.listChanges(url, fields);
 		}
 		const upload = url.pathname.match(/^\/upload\/drive\/v3\/files(?:\/([^/]+))?$/);
 		if (upload) {
@@ -693,7 +776,7 @@ export class MockDrive {
 			const bytes = await bodyBytes(input, init);
 			// Unlike metadata-only writes, upload endpoints reject bad masks
 			// before committing media. This distinction was observed live.
-			if (fields) { const selection = project({}, fields, fileFields); if (selection instanceof Response) return selection; }
+			if (fields) { const selection = project({}, fields, fileSpec); if (selection instanceof Response) return selection; }
 			if (type === 'resumable') {
 				const meta = parseMetadata(bytes); if (meta instanceof Response) return meta;
 				if (meta.parents && id) return apiError(403, 'fieldNotWritable', 'The parents field is not directly writable in update requests. Use the addParents and removeParents parameters instead.');
@@ -708,8 +791,8 @@ export class MockDrive {
 				const parsed = multipart(bytes, mimeType); if (parsed instanceof Response) return parsed;
 				meta = parsed.metadata; content = parsed.content; mimeType = meta.mimeType ?? parsed.mimeType;
 			} else if (type !== 'media') unsupported(`uploadType ${type}`);
-			if (file) { const error = await this.update(file, meta, url, content); return error ?? this.fileResponse(file, fields); }
-			const created = await this.create(meta, { content, mimeType });
+			if (file) { const error = this.update(file, meta, url, content); return error ?? this.fileResponse(file, fields); }
+			const created = this.create(meta, { content, mimeType });
 			return created instanceof Response ? created : this.fileResponse(created, fields);
 		}
 		const copy = url.pathname.match(/^\/drive\/v3\/files\/([^/]+)\/copy$/);
@@ -718,10 +801,18 @@ export class MockDrive {
 			const meta = parseMetadata(await bodyBytes(input, init)); if (meta instanceof Response) return meta;
 			if (!source) return notFound(copy[1]);
 			if (source.mimeType === FOLDER) return apiError(403, 'cannotCopyFile', 'This file cannot be copied by the user.');
-			await this.ensureChecksums(source);
-			const created = await this.create(
+			const keepChecksums = source.content === undefined || this.hashedContent.get(source) === source.content;
+			const created = this.create(
 				{ name: source.name, parents: source.parents, description: source.description, starred: source.starred, ...meta, mimeType: source.mimeType },
-				{ content: source.content, size: source.size ?? 0, md5Checksum: source.md5Checksum, sha1Checksum: source.sha1Checksum, sha256Checksum: source.sha256Checksum },
+				{
+					content: source.content,
+					size: source.size ?? 0,
+					...(keepChecksums ? {
+						md5Checksum: source.md5Checksum,
+						sha1Checksum: source.sha1Checksum,
+						sha256Checksum: source.sha256Checksum,
+					} : {}),
+				},
 			);
 			if (created instanceof Response) return created;
 			return this.fileResponse(created, fields);
@@ -730,7 +821,7 @@ export class MockDrive {
 			if (method === 'GET') return this.list(url);
 			if (method === 'POST') {
 				const meta = parseMetadata(await bodyBytes(input, init)); if (meta instanceof Response) return meta;
-				const created = await this.create(meta);
+				const created = this.create(meta);
 				return created instanceof Response ? created : this.fileResponse(created, fields);
 			}
 		}
@@ -770,7 +861,7 @@ export class MockDrive {
 			if (!file) return notFound(match[1]);
 			if (method === 'DELETE') { this.remove(file.id); return new Response(null, { status: 204 }); }
 			const meta = parseMetadata(bytes); if (meta instanceof Response) return meta;
-			const error = await this.update(file, meta, url);
+			const error = this.update(file, meta, url);
 			return error ?? this.fileResponse(file, fields);
 		}
 		unsupported(`${method} ${url.pathname}`);

@@ -24,6 +24,10 @@ export async function handleMkcol(drive: DriveClient, request: Request): Promise
     const response = await drive.createFolder(name, parentMetadata.id);
 
     if (response.ok) {
+        const created = await response.json<{ id?: string }>().catch(() => null);
+        await drive.notifySync(created?.id
+            ? { type: 'upsert', id: created.id, parentId: parentMetadata.id, isFolder: true }
+            : { type: 'touch', id: parentMetadata.id, isFolder: true });
         await drive.cache.invalidateFileAndParent(fpath, parentMetadata.id);
         return new Response(null, { status: 201 });
     }
@@ -126,14 +130,33 @@ export async function handleDelete(drive: DriveClient, request: Request): Promis
     if (fpath === '/') return new Response(null, { status: 403 });
     const metadata = await drive.getMetadata(fpath);
     if (metadata) {
+        let confirmed = false;
+        let uncertain = false;
         try {
             const response = await drive.trashFile(metadata.id);
             if (response.ok) {
+                confirmed = true;
                 await response.body?.cancel();
                 return new Response(null, { status: 204 });
             }
             return new Response(await response.text(), { status: response.status });
+        } catch (error) {
+            uncertain = true;
+            throw error;
         } finally {
+            if (confirmed) {
+                await drive.notifySync({
+                    type: 'delete',
+                    id: metadata.id,
+                    parentId: metadata.parents?.[0],
+                }).catch(error => console.error('DELETE sync update failed:', error));
+            } else if (uncertain) {
+                await drive.notifySync({
+                    type: 'touch',
+                    id: metadata.parents?.[0] ?? drive.config.rootId,
+                    isFolder: true,
+                }).catch(error => console.error('DELETE sync touch failed:', error));
+            }
             // Evict even after an ambiguous upstream failure. Clear local paths
             // first, and never replace the Drive outcome with a cache error.
             await drive.cache.invalidateTransferPath(fpath, metadata.parents?.[0], metadata.mimeType === FOLDER_MIME)

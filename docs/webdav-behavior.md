@@ -2,8 +2,8 @@
 
 ## Routing and mount path
 
-- Generic WebDAV is mounted at `PATH` (default `/webdav/`). Requests to `<basePath without trailing slash>` redirect (`301`) to `<basePath>`, and requests outside `<basePath>` return `404 Not Found`.
-- There is no `OCIS_ENABLED` switch. To avoid shadowing oCIS endpoints, `PATH` cannot be `/`, contain query/fragment/dot/empty/percent-encoded/whitespace segments, or overlap reserved oCIS prefixes (`/dav/spaces/`, `/remote.php/`, `/ocs/`, `/graph/`, `/oauth/`, `/status.php`, `/.well-known/`), including `/dav/` (which overlaps `/dav/spaces/`). Misconfigured `PATH` values fail closed with `500`.
+- Generic WebDAV is mounted at `WEBDAV_PATH` (default `/webdav/`). Requests to `<basePath without trailing slash>` redirect (`301`) to `<basePath>`, and requests outside `<basePath>` return `404 Not Found`.
+- There is no `OCIS_ENABLED` switch. To avoid shadowing oCIS endpoints, `WEBDAV_PATH` cannot be `/`, contain query/fragment/dot/empty/percent-encoded/whitespace segments, or overlap reserved oCIS prefixes (`/dav/spaces/`, `/remote.php/`, `/ocs/`, `/graph/`, `/oauth/`, `/status.php`, `/.well-known/`), including `/dav/` (which overlaps `/dav/spaces/`). Misconfigured `WEBDAV_PATH` values fail closed with `500`.
 
 ## Locking
 

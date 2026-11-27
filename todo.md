@@ -23,7 +23,7 @@
 
 - [x] **统一路由并调整通用 WebDAV 默认路径为 `/webdav/`（`9.3`）**
   - 移除 `OCIS_ENABLED` 开关与新旧双轨语义：oCIS WebDAV 与发现路由（`/dav/spaces/<spaceId>/`、`/remote.php/webdav/`、`/remote.php/dav/files/<username>/`、`/status.php`、`/ocs/*`、`/graph/*`、`/.well-known/*`）常驻同一 Drive/WebDAV 处理器；OIDC `/oauth/*` 按是否配置 Cloudflare Access 自动启用（未配置时仅运行 HTTP Basic `USERS`）。
-  - 将通用 WebDAV 默认 `PATH` 从 `/dav/` 调整为 `/webdav/`（保留 `PATH` 可配置），并对 `/` 或与 oCIS 保留前缀（`/dav/spaces/`、`/remote.php/`、`/ocs/`、`/graph/`、`/oauth/`、`/status.php`、`/.well-known/`）冲突的配置返回 `500` 配置错误；实现时同步更新 [README.md](README.md)、[.env.example](.env.example) 与 [docs/webdav-behavior.md](docs/webdav-behavior.md)。
+  - 将通用 WebDAV 默认 `WEBDAV_PATH` 从 `/dav/` 调整为 `/webdav/`（保留 `WEBDAV_PATH` 可配置），并对 `/` 或与 oCIS 保留前缀（`/dav/spaces/`、`/remote.php/`、`/ocs/`、`/graph/`、`/oauth/`、`/status.php`、`/.well-known/`）冲突的配置返回 `500` 配置错误；实现时同步更新 [README.md](README.md)、[.env.example](.env.example) 与 [docs/webdav-behavior.md](docs/webdav-behavior.md)。
 
 - [x] **保留 WebDAV 自定义属性并精简 `src/webdav/property-xml.ts`（`10.1A`）**
   - 保留基于 Drive `appProperties`（`wdp00`–`wdp29`）的通用 XML dead properties 与 `DAV:displayname` tombstone，以满足 RFC 4918 `SHOULD` 兼容度；精简 [src/webdav/property-xml.ts](src/webdav/property-xml.ts) 中的过度正则/标签配对校验与读取已存 `wdp*` 时的重复 `parseXml`，去除 [src/webdav/properties.ts](src/webdav/properties.ts) 二次 `DOMParser` 解析并合并冗余属性测试。
@@ -82,7 +82,7 @@
   - 通过实际 Worker 兼容层验证 `10,000,000` 字节 POST（余 `38,528` mod 256 KiB）及 10 MiB / 不规则 / 变块续传的跨块对齐与尾块持久恢复。
 
 - [ ] **OC-07：按矩阵验收统一路由与 DAV 语义**
-  - 实现并验收统一路由（`9.3`，无 `OCIS_ENABLED` 开关）：通用 WebDAV 默认 `/webdav/`（校验 `PATH` 不与 `/` 或 oCIS 保留前缀冲突）、常驻 `/dav/spaces/<spaceId>/...`、`/remote.php/webdav/...`、`/remote.php/dav/files/<username>/...`，单次段解码、`$`/`%24` 等价、全站缺父统一返回 409（`9.2B`）、全站非 TUS `PATCH` 统一返回 405（`9.1A`）。
+  - 实现并验收统一路由（`9.3`，无 `OCIS_ENABLED` 开关）：通用 WebDAV 默认 `/webdav/`（校验 `WEBDAV_PATH` 不与 `/` 或 oCIS 保留前缀冲突）、常驻 `/dav/spaces/<spaceId>/...`、`/remote.php/webdav/...`、`/remote.php/dav/files/<username>/...`，单次段解码、`$`/`%24` 等价、全站缺父统一返回 409（`9.2B`）、全站非 TUS `PATCH` 统一返回 405（`9.1A`）。
   - 验收 `4A-1` 统一 v3 ETag（`GET`/`HEAD`/`PROPFIND` 共用 `headRevisionId`、`revisions/{headRevisionId}?alt=media` 不可变读取与实时 `If-Range`）、`Prefer: return=minimal`、`oc:*` 属性（含 `10.2A` `oc:checksums` 真实摘要动态计算与 `PROPPATCH` 静默忽略）、`7A` 原生文档过滤与真实权限字段；验收 `PUT`/`TUS` `If-Match` 失配返回 `412`（`#11`）及 `8B` 文件夹 COPY（`Depth: 0` / `infinity` 与预算上限）。
 
 - [ ] **OC-08：实现 Android 预览代理**

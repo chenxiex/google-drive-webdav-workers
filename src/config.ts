@@ -28,26 +28,26 @@ function resolveMountPath(rawPath?: string): { path: string; basePath: string } 
         return { path: DEFAULT_WEBDAV_PATH, basePath: DEFAULT_WEBDAV_PATH };
     }
     if (!rawPath.startsWith('/')) {
-        throw new StatusError('Server not configured: PATH must start with "/"', 500);
+        throw new StatusError('Server not configured: WEBDAV_PATH must start with "/"', 500);
     }
     if (/[\s\x00-\x1f\x7f?#\\%]/u.test(rawPath)) {
-        throw new StatusError('Server not configured: PATH contains unsupported characters', 500);
+        throw new StatusError('Server not configured: WEBDAV_PATH contains unsupported characters', 500);
     }
     const trimmed = rawPath.endsWith('/') ? rawPath.slice(0, -1) : rawPath;
     if (trimmed === '') {
-        throw new StatusError('Server not configured: PATH cannot be "/"', 500);
+        throw new StatusError('Server not configured: WEBDAV_PATH cannot be "/"', 500);
     }
     if (trimmed.slice(1).split('/').some(segment => segment === '' || segment === '.' || segment === '..')) {
-        throw new StatusError('Server not configured: PATH cannot contain empty or dot segments', 500);
+        throw new StatusError('Server not configured: WEBDAV_PATH cannot contain empty or dot segments', 500);
     }
     const basePath = trimmed + '/';
     if (new URL(basePath, 'https://example.com').pathname !== basePath) {
-        throw new StatusError('Server not configured: PATH must be a canonical URL path', 500);
+        throw new StatusError('Server not configured: WEBDAV_PATH must be a canonical URL path', 500);
     }
     for (const reserved of RESERVED_OCIS_PREFIXES) {
         const reservedPrefix = reserved.endsWith('/') ? reserved : reserved + '/';
         if (basePath.startsWith(reservedPrefix) || reservedPrefix.startsWith(basePath)) {
-            throw new StatusError(`Server not configured: PATH "${rawPath}" conflicts with reserved prefix "${reserved}"`, 500);
+            throw new StatusError(`Server not configured: WEBDAV_PATH "${rawPath}" conflicts with reserved prefix "${reserved}"`, 500);
         }
     }
     return { path: rawPath, basePath };
@@ -67,7 +67,7 @@ export function parseUsers(raw: unknown): Record<string, string> {
 }
 
 export function resolveConfig(env?: Partial<Env>): RuntimeConfig {
-    const { path, basePath } = resolveMountPath(env?.PATH);
+    const { path, basePath } = resolveMountPath(env?.WEBDAV_PATH);
     return {
         client_id: env?.CLIENT_ID?.trim() || '',
         client_secret: env?.CLIENT_SECRET?.trim() || '',

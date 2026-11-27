@@ -68,8 +68,8 @@ describe('path routing', () => {
 		const fetch = vi.fn(() => { throw new Error('Unexpected external request'); });
 		vi.stubGlobal('fetch', fetch);
 		const bindings: Record<string, unknown> = { ...env };
-		if (path === undefined) delete bindings.PATH;
-		else bindings.PATH = path;
+		if (path === undefined) delete bindings.WEBDAV_PATH;
+		else bindings.WEBDAV_PATH = path;
 
 		const run = async (urlPath: string, init: RequestInit = {}) => {
 			const ctx = createExecutionContext();
@@ -148,10 +148,10 @@ describe('path routing', () => {
 		'/webdav?x=1',
 		'/webdav#frag',
 		'/%64av/',
-	])('rejects invalid or conflicting PATH (%s) with a 500 configuration error', async invalidPath => {
+	])('rejects invalid or conflicting WEBDAV_PATH (%s) with a 500 configuration error', async invalidPath => {
 		const fetch = vi.fn(() => { throw new Error('Unexpected external request'); });
 		vi.stubGlobal('fetch', fetch);
-		const bindings = { ...env, PATH: invalidPath } as unknown as Env;
+		const bindings = { ...env, WEBDAV_PATH: invalidPath } as unknown as Env;
 
 		const run = async (urlPath: string, headers?: HeadersInit) => {
 			const ctx = createExecutionContext();
@@ -163,7 +163,7 @@ describe('path routing', () => {
 		const probePath = invalidPath.startsWith('/') && !/[?#\s]/.test(invalidPath) ? invalidPath : '/webdav/';
 		for (const res of [await run('/webdav/', AUTH), await run(probePath)]) {
 			expect(res.status).toBe(500);
-			expect(await res.text()).toContain('Server not configured: PATH');
+			expect(await res.text()).toContain('Server not configured: WEBDAV_PATH');
 		}
 		expect((await run('/robots.txt')).status).toBe(200);
 		expect(fetch).not.toHaveBeenCalled();

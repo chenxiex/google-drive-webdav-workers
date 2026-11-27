@@ -10,7 +10,7 @@ declare namespace Cloudflare {
 		CLIENT_ID: string;
 		CLIENT_SECRET: string;
 		REFRESH_TOKEN: string;
-		PATH: string;
+		WEBDAV_PATH: string;
 		ROOT_ID: string;
 		USERS: string;
 		NAME: string;

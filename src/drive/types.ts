@@ -17,6 +17,7 @@ export function fileEtag(file: {
 }
 
 export interface StorageQuota {
+    limit?: string;
     available?: string;
     used: string;
 }

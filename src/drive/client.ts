@@ -8,6 +8,17 @@ const FOLDER_META_TTL = 300000;
 const FILE_META_TTL = 30000;
 const OBJECTS_TTL = 30000;
 
+function parseNonNegativeBigInt(value: unknown): bigint | undefined {
+    if (typeof value === 'string') {
+        const trimmed = value.trim();
+        return /^\d+$/.test(trimmed) ? BigInt(trimmed) : undefined;
+    }
+    if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) {
+        return BigInt(value);
+    }
+    return undefined;
+}
+
 export class DriveClient {
     readonly config: RuntimeConfig;
     readonly cache: MemoryCache;
@@ -302,13 +313,24 @@ export class DriveClient {
         const response = await fetch('https://www.googleapis.com/drive/v3/about?fields=storageQuota', {
             headers: { Authorization: 'Bearer ' + (await this.getAccessToken()) },
         });
-        const result: any = await response.json();
-        if (result.storageQuota) {
-            const { limit, usage } = result.storageQuota;
-            const used = BigInt(usage || '0');
-            if (limit === undefined) return { used: used.toString() };
-            const available = BigInt(limit) - used;
-            return { available: (available < 0n ? 0n : available).toString(), used: used.toString() };
+        if (!response.ok) {
+            await response.body?.cancel();
+            return undefined;
         }
+        const result: any = await response.json().catch(() => null);
+        const quota = result?.storageQuota;
+        if (!quota || typeof quota !== 'object') {
+            return undefined;
+        }
+        const used = parseNonNegativeBigInt(quota.usage);
+        if (used === undefined) {
+            return undefined;
+        }
+        const limit = parseNonNegativeBigInt(quota.limit);
+        if (limit === undefined) {
+            return { used: used.toString() };
+        }
+        const available = limit > used ? limit - used : 0n;
+        return { limit: limit.toString(), available: available.toString(), used: used.toString() };
     }
 }

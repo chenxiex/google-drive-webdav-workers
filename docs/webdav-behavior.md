@@ -3,7 +3,22 @@
 ## Routing and mount path
 
 - Generic WebDAV is mounted at `WEBDAV_PATH` (default `/webdav/`). Requests to `<basePath without trailing slash>` redirect (`301`) to `<basePath>`, and requests outside `<basePath>` return `404 Not Found`.
-- There is no `OCIS_ENABLED` switch. To avoid shadowing oCIS endpoints, `WEBDAV_PATH` cannot be `/`, contain query/fragment/dot/empty/percent-encoded/whitespace segments, or overlap reserved oCIS prefixes (`/dav/spaces/`, `/remote.php/`, `/ocs/`, `/graph/`, `/oauth/`, `/status.php`, `/.well-known/`), including `/dav/` (which overlaps `/dav/spaces/`). Misconfigured `WEBDAV_PATH` values fail closed with `500`.
+- To avoid shadowing oCIS endpoints, `WEBDAV_PATH` cannot be `/`, contain query/fragment/dot/empty/percent-encoded/whitespace segments, or overlap reserved oCIS prefixes (`/dav/spaces/`, `/remote.php/`, `/ocs/`, `/graph/`, `/oauth/`, `/status.php`, `/.well-known/`), including `/dav/` (which overlaps `/dav/spaces/`). Misconfigured `WEBDAV_PATH` values fail closed with `500`.
+
+## Authentication and OAuth/OIDC
+
+- **WebDAV authentication & activation**: WebDAV supports HTTP Basic authentication against `USERS` and Bearer token authentication when Cloudflare Access OIDC is configured. Without OIDC configured, missing or empty `USERS` fails closed with `500`. Setting any of `CF_ACCESS_AUD`, `CF_ACCESS_TEAM_DOMAIN`, `OIDC_SIGNING_KEY`, or `OIDC_SIGNING_KID` auto-activates OIDC; partial or invalid configuration (including non-`https://` `CF_ACCESS_TEAM_DOMAIN` or `PUBLIC_ORIGIN`) fails closed with `500`. When OIDC is active, `USERS` becomes optional (omitting it runs Bearer-only mode). All OAuth/OIDC endpoints require HTTPS.
+- **Shared Drive view & principal isolation**: Basic (`basic:<username>`) and Bearer (`oidc:<sub>`) principals share the configured Google Drive `ROOT_ID` view while keeping OAuth tokens and TUS upload session ownership isolated per authenticated principal.
+- **Cloudflare Access boundary**: Cloudflare Access must protect **only** `/oauth/authorize`; `/.well-known/*`, `/oauth/token`, `/oauth/userinfo`, `/oauth/jwks`, `/oauth/revoke`, and WebDAV paths must bypass Access so non-browser clients are not redirected.
+- **Discovery & JWKS**:
+  - `GET` and `HEAD` on `/.well-known/webfinger` return `404 Not Found` (`405` for other methods) in this single-instance Worker profile while keeping `/.well-known/` reserved.
+  - `GET` and `HEAD` on `/.well-known/openid-configuration` return the issuer and `/oauth/*` endpoints resolved from `PUBLIC_ORIGIN` (or the incoming HTTPS request origin), advertising `response_types_supported: ["code"]`, `grant_types_supported: ["authorization_code", "refresh_token"]`, `code_challenge_methods_supported: ["S256"]`, `id_token_signing_alg_values_supported: ["RS256"]`, `token_endpoint_auth_methods_supported: ["client_secret_basic", "client_secret_post", "none"]`, and omitting `registration_endpoint`.
+  - `GET` and `HEAD` on `/oauth/jwks` publish the public RSA JWK derived from `OIDC_SIGNING_KEY` (which accepts PKCS#8 PEM with literal or `\n`-escaped newlines, base64-encoded PKCS#8 DER/PEM, or private RSA JWK JSON; uses explicit `OIDC_SIGNING_KID` or its RFC 7638 JWK thumbprint `kid`) and never expose private key material.
+- **Authorization (`/oauth/authorize`)**: Accepts `GET` only and requires a valid `Cf-Access-Jwt-Assertion` header verified against `CF_ACCESS_AUD` and `${CF_ACCESS_TEAM_DOMAIN}/cdn-cgi/access/certs` (JWKS cached in-isolate with key-rotation refresh). Enforces PKCE `S256` and allowlisted clients/redirects (ownCloud Desktop confidential client with loopback `http://127.0.0.1:<port>` or `http://localhost:<port>`; OpenCloud Android public client `OpenCloudAndroid` with exact `oc://android.opencloud.eu`), records a short-lived single-use authorization code in `AuthStore`, and redirects (`302`) with `code` and original `state`.
+- **Token, UserInfo, and Revocation**:
+  - `POST /oauth/token` supports `authorization_code` (atomic single-use code consumption, PKCE `S256` verification, exact `redirect_uri` check) and reusable `refresh_token` grants, authenticates clients via `client_secret_basic`, `client_secret_post`, or `none` (public clients), and returns opaque `access_token` (`expires_in: 3600`), `refresh_token`, and an `RS256`-signed `id_token` (`sub`, `preferred_username`, `email`, `name`, optional `nonce`).
+  - `GET /oauth/userinfo` returns `sub`, `preferred_username`, `email`, and `name` for a valid Bearer access token (`401` with a `Bearer` challenge otherwise).
+  - `POST /oauth/revoke` implements RFC 7009 revocation for access and refresh tokens (revoking a refresh token cascades to access tokens issued from it; unknown tokens return `200`).
 
 ## Locking
 
@@ -68,7 +83,7 @@ Each upload session uses its own SQLite Durable Object (`TusUpload`):
 - `PATCH` requests are accepted only on TUS upload session URLs (`<basePath>tus_uploads/<sessionId>`) and are serialized per session; non-TUS `PATCH` requests anywhere else return `405 Method Not Allowed` (without aliasing `COPY`), and `OPTIONS` omits `PATCH` from `Allow` on non-TUS paths. Unaligned or small client chunks are durably buffered (in 1 MiB blocks with a `< 256 KiB` alignment tail) and flushed as 256 KiB-aligned chunks to Drive; no entire upload is buffered in memory or storage.
 - A write-ahead `pending` record persists bytes before flushing to Drive, and recovery reconciles via `bytes */<total>` against Drive's actual acknowledged `Range`.
 - Returned `Upload-Offset` includes bytes safely persisted in the Durable Object journal as well as bytes already in Drive. Offset mismatches return `409`, expired Drive upload URLs return `410`, and upstream failures return `503`/`502` without resetting offset to zero.
-- Sessions (including completed upload receipts for lost final responses) expire 24 hours after creation. The expiry alarm cleans up session state only, not the destination file. Sessions are scoped to the authenticated WebDAV username.
+- Sessions (including completed upload receipts for lost final responses) expire 24 hours after creation. The expiry alarm cleans up session state only, not the destination file. Sessions are scoped to the authenticated principal (`basic:<username>` or `oidc:<sub>`).
 
 For rclone, configure its WebDAV remote with `vendor = infinitescale` to use TUS:
 

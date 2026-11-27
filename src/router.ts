@@ -1,4 +1,15 @@
 import { basicAuthentication, isValidUser } from './auth/basic';
+import {
+    extractBearerToken,
+    handleAuthorize,
+    handleJwks,
+    handleOidcDiscovery,
+    handleRevoke,
+    handleToken,
+    handleUserInfo,
+    handleWebFinger,
+    introspectBearerToken,
+} from './auth/oidc';
 import { resolveConfig } from './config';
 import { DriveClient } from './drive/client';
 import { errorStatus } from './http';
@@ -18,6 +29,31 @@ export async function handleRequest(request: Request, env: Env, _ctx?: Execution
 
     try {
         const config = resolveConfig(env);
+
+        if (pathname === '/.well-known/webfinger') {
+            return handleWebFinger(request);
+        }
+        if (pathname === '/.well-known/openid-configuration') {
+            return config.oidc ? handleOidcDiscovery(request, config) : new Response('404 Not Found', { status: 404 });
+        }
+        if (pathname.startsWith('/oauth/')) {
+            if (!config.oidc) return new Response('404 Not Found', { status: 404 });
+            switch (pathname) {
+                case '/oauth/authorize':
+                    return await handleAuthorize(request, env, config);
+                case '/oauth/token':
+                    return await handleToken(request, env, config);
+                case '/oauth/userinfo':
+                    return await handleUserInfo(request, env, config);
+                case '/oauth/jwks':
+                    return await handleJwks(request, config);
+                case '/oauth/revoke':
+                    return await handleRevoke(request, env, config);
+                default:
+                    return new Response('404 Not Found', { status: 404 });
+            }
+        }
+
         const basePath = config.basePath;
         if (pathname + '/' === basePath) {
             const u = new URL(request.url);
@@ -28,20 +64,60 @@ export async function handleRequest(request: Request, env: Env, _ctx?: Execution
             return new Response('404 Not Found', { status: 404 });
         }
 
-        // Global Basic Authentication
-        if (Object.keys(config.users).length === 0) {
+        const hasUsers = Object.keys(config.users).length > 0;
+        if (!hasUsers && !config.oidc) {
             return new Response('Server not configured: set the USERS variable', { status: 500 });
         }
-        if (!request.headers.has('Authorization')) {
+
+        const buildChallenges = (bearerError: boolean): Headers => {
+            const headers = new Headers();
+            if (hasUsers) {
+                headers.append('WWW-Authenticate', `Basic realm="${config.name}", charset="UTF-8"`);
+            }
+            if (config.oidc) {
+                headers.append(
+                    'WWW-Authenticate',
+                    bearerError
+                        ? `Bearer realm="${config.name}", error="invalid_token"`
+                        : `Bearer realm="${config.name}", charset="UTF-8"`,
+                );
+            }
+            return headers;
+        };
+
+        const authHeader = request.headers.get('Authorization');
+        if (!authHeader) {
             return new Response('Authentication Required.', {
                 status: 401,
-                headers: { 'WWW-Authenticate': `Basic realm="${config.name}", charset="UTF-8"` },
+                headers: buildChallenges(false),
             });
         }
 
-        const auth = basicAuthentication(request);
-        if (!auth || !isValidUser(config.users, auth)) {
-            return new Response('Unauthorized', { status: 401 });
+        let owner: string;
+        const spaceIndex = authHeader.indexOf(' ');
+        const scheme = (spaceIndex === -1 ? '' : authHeader.slice(0, spaceIndex)).toLowerCase();
+
+        if (scheme === 'bearer') {
+            if (!config.oidc) {
+                return new Response('Unauthorized', { status: 401, headers: buildChallenges(false) });
+            }
+            const bearer = extractBearerToken(request);
+            const principal = bearer.token ? await introspectBearerToken(bearer.token, env) : null;
+            if (!principal) {
+                return new Response('Unauthorized', { status: 401, headers: buildChallenges(true) });
+            }
+            owner = `oidc:${principal.sub}`;
+        } else if (scheme === 'basic') {
+            if (!hasUsers) {
+                return new Response('Unauthorized', { status: 401, headers: buildChallenges(false) });
+            }
+            const auth = basicAuthentication(request);
+            if (!auth || !isValidUser(config.users, auth)) {
+                return new Response('Unauthorized', { status: 401 });
+            }
+            owner = `basic:${auth.user}`;
+        } else {
+            return new Response('Unauthorized', { status: 401, headers: buildChallenges(false) });
         }
 
         const missing = [
@@ -70,13 +146,13 @@ export async function handleRequest(request: Request, env: Env, _ctx?: Execution
             case 'GET':
                 return await handleGet(drive, request);
             case 'HEAD':
-                return await (isTusPath ? handleTusUpload(drive, env, auth.user, request) : handleHead(drive, request));
+                return await (isTusPath ? handleTusUpload(drive, env, owner, request) : handleHead(drive, request));
             case 'PUT':
                 return await handlePut(drive, request);
             case 'POST':
-                return await handleTusCreate(drive, env, auth.user, request);
+                return await handleTusCreate(drive, env, owner, request);
             case 'PATCH':
-                if (isTusPath) return await handleTusUpload(drive, env, auth.user, request);
+                if (isTusPath) return await handleTusUpload(drive, env, owner, request);
                 break;
             case 'MOVE':
                 return await handleMove(drive, request);

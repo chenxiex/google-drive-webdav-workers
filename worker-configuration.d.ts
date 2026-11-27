@@ -3,10 +3,11 @@
 // Runtime types generated with workerd@1.20260507.1 2026-04-15 
 declare namespace Cloudflare {
 	interface GlobalProps {
-		mainModule: typeof import("./src/worker");
+		mainModule: typeof import("./src/index");
 	}
 	interface Env {
-		TUS_UPLOADS: DurableObjectNamespace<import("./src/tus-upload").TusUpload>;
+		TUS_UPLOADS: DurableObjectNamespace<import("./src/tus/upload-do").TusUpload>;
+		AUTH_DO?: DurableObjectNamespace<import("./src/auth/auth-do").AuthStore>;
 		CLIENT_ID: string;
 		CLIENT_SECRET: string;
 		REFRESH_TOKEN: string;
@@ -14,6 +15,11 @@ declare namespace Cloudflare {
 		ROOT_ID: string;
 		USERS: string;
 		NAME: string;
+		CF_ACCESS_AUD?: string;
+		CF_ACCESS_TEAM_DOMAIN?: string;
+		OIDC_SIGNING_KEY?: string;
+		OIDC_SIGNING_KID?: string;
+		PUBLIC_ORIGIN?: string;
 	}
 }
 interface Env extends Cloudflare.Env {}

@@ -3,7 +3,10 @@ import { cloudflareTest } from '@cloudflare/vitest-pool-workers';
 
 const compat = {
 	compatibilityDate: '2026-04-15',
-	durableObjects: { TUS_UPLOADS: { className: 'TusUpload', useSQLite: true } },
+	durableObjects: {
+		TUS_UPLOADS: { className: 'TusUpload', useSQLite: true },
+		AUTH_DO: { className: 'AuthStore', useSQLite: true },
+	},
 };
 
 const davBindings = {

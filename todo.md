@@ -45,7 +45,7 @@
   - 已于 2026-11-24 实测验证 Drive v3：`headRevisionId` 在 `multipart`/`media`/`resumable` 终块 `200`/空创建/`files.get`/`files.list` 均立即可用（仅改 `appProperties` 时保持不变、覆写内容时变化）；`revisions/{headRevisionId}?alt=media` 支持 `200`/`Range 206`/越界 `416`/空文件 `200`，且在文件被覆写为 `rev2` 后仍可从旧 `rev1` 不可变读取 `206`。
   - 统一将 `GET`/`HEAD`/`PROPFIND` 文件 ETag 迁至 `"<id>-<headRevisionId>"`（无 `headRevisionId` 时回退 `version`），`GET` 优先走 `revisions/{headRevisionId}?alt=media`（只读共享 `403` 或版本淘汰 `404` 时回退 `files/{id}?alt=media`），`If-Range` 绕过内存缓存实时校验 `headRevisionId`；移除 Drive v2 依赖并同步更新 `MockDrive`。
 
-- [ ] **核验线上 Cloudflare 部署限制与凭据边界**
+- [x] **核验线上 Cloudflare 部署限制与凭据边界**
   - 在真实 Cloudflare 环境中核验单请求入口体上限与内存上限（区分 TUS 分块多请求与单次大 `PUT`）。
   - 部署前配置加密 secrets（`CLIENT_ID`、`CLIENT_SECRET`、`REFRESH_TOKEN`、`USERS`）；Workers KV 绑定已全面移除，元数据缓存仅存 isolate 内存，上传状态存 `TUS_UPLOADS` Durable Object。
   - 核实 OAuth 应用发布状态及 Refresh Token 长期有效性；留意所有 `USERS` 账号共用同一 Google OAuth 身份，`ROOT_ID` 仅作应用路径映射，不会缩窄令牌本身的权限范围。

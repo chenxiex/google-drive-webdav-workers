@@ -1,7 +1,8 @@
 import { SELF, env, abortAllDurableObjects, runInDurableObject } from 'cloudflare:test';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AUTH, FOLDER, ORIGIN, installDriveMock } from '../support/client';
 import { MockDrive } from '../support/mock-drive';
+import { setFetchMock } from '../support/network';
 
 let drive: MockDrive;
 const TUS = { 'Tus-Resumable': '1.0.0' };
@@ -35,7 +36,6 @@ const expectBytesEqual = (actual: Uint8Array | undefined, expected: Uint8Array) 
 };
 
 beforeEach(() => { drive = new MockDrive(); installDriveMock(drive); });
-afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe('durable TUS', () => {
     it('persists arbitrary PATCH tails across eviction and returns an exact completed receipt', async () => {
@@ -75,7 +75,7 @@ describe('durable TUS', () => {
         const original = drive.handle.bind(drive);
         let dropped = false;
         let probes = 0;
-        vi.stubGlobal('fetch', async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+        setFetchMock(async (input, init) => {
             const range = new Headers(init?.headers).get('Content-Range');
             const response = await original(input, init);
             if (range?.startsWith('bytes */')) probes++;
@@ -102,7 +102,7 @@ describe('durable TUS', () => {
         const data = bytes(262144);
         const { url, name } = await create(data.length);
         const original = drive.handle.bind(drive);
-        vi.stubGlobal('fetch', async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+        setFetchMock(async (input, init) => {
             if (new Headers(init?.headers).has('Content-Range')) return new Response(null, { status: 503 });
             return original(input, init);
         });
@@ -112,7 +112,7 @@ describe('durable TUS', () => {
         expect((await head(url)).headers.get('Upload-Offset')).toBe(String(data.length));
         expectBytesEqual(drive.files.find(file => file.name === name)?.content, data);
         const next = await create(data.length);
-        vi.stubGlobal('fetch', async () => new Response(null, { status: 404 }));
+        setFetchMock(async () => new Response(null, { status: 404 }));
         expect((await patch(next.url, 0, data)).status).toBe(410);
         expect((await head(next.url)).status).toBe(410);
     });
@@ -122,7 +122,7 @@ describe('durable TUS', () => {
         const { url, name } = await create(data.length);
         const original = drive.handle.bind(drive);
         const ranges: string[] = [];
-        vi.stubGlobal('fetch', async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+        setFetchMock(async (input, init) => {
             const headers = new Headers(init?.headers);
             const range = headers.get('Content-Range');
             if (range && !range.startsWith('bytes */')) {
@@ -190,7 +190,10 @@ describe('durable TUS', () => {
         const methods: string[] = [];
         const original = drive.handle.bind(drive);
         vi.spyOn(drive, 'handle').mockImplementation((input, init) => {
-            methods.push(new Request(input, init).method);
+            const req = new Request(input, init);
+            if (!new URL(req.url).pathname.startsWith('/oauth2/')) {
+                methods.push(req.method);
+            }
             return original(input, init);
         });
         const response = await send(path, { method: 'POST', headers });

@@ -70,7 +70,7 @@
   - 在 `files.tus_support` 中公告用户选定默认值 `max_chunk_size: 10485760`（10 MiB），在 `core.pollinterval` 中公告 `30000`（毫秒，30 秒，`#12`），`core.webdav-root` 设为 `"webdav"`，在 `checksums` 中公告小写 `supportedTypes: ["sha1","md5","sha256"]` 与 `preferredUploadType: "sha1"`，显式设置 `files_sharing.api_enabled=false`、`files_sharing.public.enabled=false`、`files_sharing.user.profile_picture=false`、`spaces.version="1.0.0"`、`spaces.projects=false`，省略 `notifications`/锁/团队 Space 等未实现能力。
   - Space 视图按 `15A` 如实表达共享 `ROOT_ID`（鉴权主体、OAuth token 与 TUS 会话按用户隔离，底层共享同一 `ROOT_ID`）：Graph `/me/drives` 中 `owner` 省略或如实填当前登录主体，`quota` 使用 `BigInt` 精确透传 Drive `storageQuota` 整数（无有限上限或字段不全时省略，不伪造 `0`）。
 
-- [ ] **OC-05：实现轻量目录/文件索引 DO 与 Drive `changes.list` 局部冒泡**
+- [x] **OC-05：实现轻量目录/文件索引 DO 与 Drive `changes.list` 局部冒泡**
   - 先审计 Drive `changes.list` / `getStartPageToken` 并扩展 `MockDrive`（Google changes token 官方不失效，需覆盖游标丢失/无效重初始化、分页与权限失效恢复）。
   - 在 SQLite DO 维护轻量 `items(id, parent_id, is_folder, etag_gen)` 与游标 `pageToken`（DO 内存保留热 `root.eTag` 与节流时间戳）；本地变更与节流轮询仅沿受影响项及旧父目录向上冒泡递增 `etag_gen` 至 `ROOT_ID`，忽略 `ROOT_ID` 外部改动（支持外部编辑、移动与永久删除）。
   - 将 isolate 内存元数据/列表缓存键绑定至对应目录 `etag_gen`（并固定在途请求的起始 generation），避免新 ETag 搭配旧列表。

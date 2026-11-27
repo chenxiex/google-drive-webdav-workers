@@ -1,7 +1,9 @@
 import { type RuntimeConfig } from '../config';
 import { StatusError, TransferError, encodeQueryString, escapeQuery, trimString } from '../http';
-import { type MemoryCache, isolateCache } from './cache';
-import { getAccessToken } from './oauth';
+import { type SyncIndexClient } from '../sync/client';
+import { type SyncMutation } from '../sync/types';
+import { type MemoryCache, isolateCache, scopedCacheKey } from './cache';
+import { getAccessToken, invalidateAccessToken } from './oauth';
 import { FOLDER_MIME, PROPERTY_FIELDS, type StorageQuota, isVisibleDriveItem } from './types';
 
 const FOLDER_META_TTL = 300000;
@@ -22,14 +24,25 @@ function parseNonNegativeBigInt(value: unknown): bigint | undefined {
 export class DriveClient {
     readonly config: RuntimeConfig;
     readonly cache: MemoryCache;
+    readonly sync: SyncIndexClient | null;
 
-    constructor(config: RuntimeConfig) {
+    constructor(config: RuntimeConfig, sync: SyncIndexClient | null = null) {
         this.config = config;
         this.cache = isolateCache;
+        this.sync = sync;
     }
 
     getAccessToken(): Promise<string> {
         return getAccessToken(this.config);
+    }
+
+    refreshAccessToken(): Promise<string> {
+        invalidateAccessToken(this.config);
+        return getAccessToken(this.config);
+    }
+
+    async notifySync(mutation: SyncMutation): Promise<void> {
+        await this.sync?.mutate(mutation);
     }
 
     private rootMetadata() {
@@ -199,7 +212,7 @@ export class DriveClient {
         path = path.endsWith('/') ? path : path + '/';
         if (path === '/') return this.rootMetadata();
         const bypassLeafCache = options?.bypassLeafCache ?? false;
-        if (!bypassLeafCache) {
+        if (!this.sync && !bypassLeafCache) {
             const cached = await this.cache.get(path, 'meta');
             if (cached) return cached;
         }
@@ -214,7 +227,10 @@ export class DriveClient {
             const isLeaf = i === fragments.length - 1;
             if (metadata.mimeType !== FOLDER_MIME) return null;
             fullpath += name + '/';
-            let meta = !(isLeaf && bypassLeafCache) ? await this.cache.get(fullpath, 'meta') : null;
+            const parentScope = this.sync ? await this.sync.getGeneration(metadata.id) : null;
+            const canUseCache = !this.sync || parentScope !== null;
+            const cacheKey = scopedCacheKey(fullpath, parentScope);
+            let meta = canUseCache && !(isLeaf && bypassLeafCache) ? await this.cache.get(cacheKey, 'meta') : null;
             if (!meta) {
                 // `getUrl` already decoded the path once; decoding again here
                 // threw a URIError for any name containing a literal "%".
@@ -236,8 +252,10 @@ export class DriveClient {
                     if (isLeaf && bypassLeafCache) await this.cache.delete(fullpath, 'meta');
                     return null;
                 }
-                const ttl = visible.mimeType === FOLDER_MIME ? FOLDER_META_TTL : FILE_META_TTL;
-                await this.cache.put(fullpath, visible, 'meta', ttl);
+                if (canUseCache) {
+                    const ttl = visible.mimeType === FOLDER_MIME ? FOLDER_META_TTL : FILE_META_TTL;
+                    await this.cache.put(cacheKey, visible, 'meta', ttl);
+                }
                 meta = visible;
             }
             metadata = meta;
@@ -246,7 +264,10 @@ export class DriveClient {
     }
 
     async getObjects(id: string): Promise<any[]> {
-        const cachedList = await this.cache.get(id, 'objects');
+        const scope = this.sync ? await this.sync.getGeneration(id) : null;
+        const canUseCache = !this.sync || scope !== null;
+        const cacheKey = scopedCacheKey(id, scope);
+        const cachedList = canUseCache ? await this.cache.get(cacheKey, 'objects') : null;
         if (cachedList) return cachedList;
 
         let pageToken: string | undefined;
@@ -266,7 +287,9 @@ export class DriveClient {
             if (result.files) list.push(...result.files.filter(isVisibleDriveItem));
         } while (pageToken);
 
-        await this.cache.put(id, list, 'objects', OBJECTS_TTL);
+        if (canUseCache) {
+            await this.cache.put(cacheKey, list, 'objects', OBJECTS_TTL);
+        }
         return list;
     }
 

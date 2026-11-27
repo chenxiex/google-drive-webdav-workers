@@ -4,9 +4,27 @@ import { splitPath } from '../http';
 // large listings are fetched normally rather than retained in memory.
 const CACHE_ENTRIES = 128;
 const CACHE_ENTRY_BYTES = 64 * 1024;
+const CACHE_SCOPE_PREFIX = /^[0-9a-f]+:\d+:/;
+
+export interface CacheScope {
+    epoch: string;
+    gen: number;
+}
+
+export function scopedCacheKey(key: string, scope?: CacheScope | null): string {
+    return scope ? `${scope.epoch}:${scope.gen}:${key}` : key;
+}
+
+function stripCacheScope(key: string): string {
+    return key.replace(CACHE_SCOPE_PREFIX, '');
+}
 
 export class MemoryCache {
     private store: Record<string, Record<string, { data: any; expire: number }>> = {};
+
+    clear(): void {
+        this.store = {};
+    }
 
     async get(k: string, ns: string): Promise<any> {
         const entries = this.store[ns];
@@ -32,7 +50,11 @@ export class MemoryCache {
     async delete(k: string, ns: string): Promise<void> {
         if (ns === 'meta' && !k.endsWith('/')) k += '/';
         if (ns === 'meta' && k === '/') return;
-        if (this.store[ns]) delete this.store[ns][k];
+        const entries = this.store[ns];
+        if (!entries) return;
+        for (const key of Object.keys(entries)) {
+            if (stripCacheScope(key) === k) delete entries[key];
+        }
     }
 
     async invalidateFileAndParent(fpath: string, parentId?: string | null): Promise<void> {
@@ -46,7 +68,7 @@ export class MemoryCache {
         const prefix = path.replace(/\/+$/, '') + '/';
         if (tree && this.store.meta) {
             for (const key of Object.keys(this.store.meta)) {
-                if (key.startsWith(prefix)) delete this.store.meta[key];
+                if (stripCacheScope(key).startsWith(prefix)) delete this.store.meta[key];
             }
         }
         await this.invalidateFileAndParent(path, parentId);

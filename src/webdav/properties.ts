@@ -121,7 +121,7 @@ function fileChecksums(file: any): string | undefined {
     return parts.length ? parts.join(' ') : undefined;
 }
 
-function davProperties(file: any, quota?: { used: string; available?: string }): Map<string, DavProperty> {
+function davProperties(file: any, quota?: { used: string; available?: string }, folderEtagOverride?: string): Map<string, DavProperty> {
     const result = new Map<string, DavProperty>();
     const add = (name: string, value: unknown, namespace = DAV_NAMESPACE, raw = false) => {
         const prefix = namespace === DAV_NAMESPACE ? 'D' : namespace === OC_NAMESPACE ? 'oc' : 'G';
@@ -135,7 +135,7 @@ function davProperties(file: any, quota?: { used: string; available?: string }):
         add('getcontentlength', Number(file.size) || 0);
         add('getcontenttype', file.mimeType || 'application/octet-stream');
     }
-    const etag = fileEtag(file);
+    const etag = folder ? (folderEtagOverride ?? fileEtag(file)) : fileEtag(file);
     if (etag) add('getetag', etag);
     if (file.modifiedTime) add('getlastmodified', new Date(file.modifiedTime).toUTCString());
     if (file.createdTime) add('creationdate', file.createdTime);
@@ -164,6 +164,9 @@ function davProperties(file: any, quota?: { used: string; available?: string }):
 export async function handlePropfind(drive: DriveClient, request: Request): Promise<Response> {
     const selection = parseFind(await readPropertyBody(request));
     const { rpath, fpath } = getUrl(request.url, drive.config.basePath);
+    if (drive.sync) {
+        await drive.sync.poll();
+    }
     let metadata = await drive.getMetadata(fpath);
     if (!metadata) return new Response(null, { status: 404 });
     // The mapping root is otherwise synthetic; properties belong to the
@@ -171,12 +174,21 @@ export async function handlePropfind(drive: DriveClient, request: Request): Prom
     if (fpath === '/') metadata = await drive.getPropertyMetadata(metadata.id);
     const depth = request.headers.get('Depth');
     const files = [{ ...metadata, href: rpath }];
-    if (metadata.mimeType === FOLDER_MIME && depth !== '0') {
-        files.push(...(await drive.getObjects(metadata.id)).map(file => ({ ...file, href: pathJoin(rpath, file.name) })));
+    if (metadata.mimeType === FOLDER_MIME) {
+        if (drive.sync) {
+            await drive.sync.getGeneration(metadata.id);
+        }
+        if (depth !== '0') {
+            files.push(...(await drive.getObjects(metadata.id)).map(file => ({ ...file, href: pathJoin(rpath, file.name) })));
+        }
     }
+    const folderIds = files.filter(file => file.mimeType === FOLDER_MIME).map(file => file.id as string);
+    const folderEtags = drive.sync && folderIds.length > 0
+        ? await drive.sync.getFolderEtags(folderIds)
+        : undefined;
     const quota = metadata.mimeType === FOLDER_MIME && depth === '0' && fpath === '/' ? await drive.getQuota() : undefined;
     const responses = files.map((file, index) => {
-        const properties = davProperties(file, index === 0 ? quota : undefined);
+        const properties = davProperties(file, index === 0 ? quota : undefined, folderEtags?.get(file.id));
         const requested = selection.mode === 'prop' ? selection.properties
             : [...properties.values(), ...selection.properties.filter(prop => !properties.has(propertyKey(prop)))];
         const found: string[] = [], missing: string[] = [];
@@ -256,10 +268,22 @@ export async function handleProppatch(drive: DriveClient, request: Request): Pro
             const status = ['propertyLengthLimitExceeded', 'propertyCountLimitExceeded'].includes(reason) ? 507 : response.status;
             return result(status);
         }
+        await drive.notifySync({
+            type: 'touch',
+            id: metadata.id,
+            parentId: metadata.parents?.[0],
+            isFolder: metadata.mimeType === FOLDER_MIME,
+        });
         return result(200);
     } catch {
         // A lost response does not prove the PATCH failed. Do not claim
         // success or undo a potentially completed operation.
+        await drive.notifySync({
+            type: 'touch',
+            id: metadata.id,
+            parentId: metadata.parents?.[0],
+            isFolder: metadata.mimeType === FOLDER_MIME,
+        }).catch(error => console.error('PROPPATCH sync invalidation failed:', error));
         return new Response('Drive property update outcome uncertain; read properties before retrying', { status: 502 });
     } finally {
         await drive.cache.invalidateFileAndParent(fpath, metadata.parents?.[0])

@@ -1,16 +1,14 @@
 import { vi } from 'vitest';
 import { FOLDER, type MockDrive } from './mock-drive';
+import { setFetchMock } from './network';
 
 export { FOLDER } from './mock-drive';
 export const ORIGIN = 'https://example.com';
 export const basic = (username: string, password: string): string => 'Basic ' + btoa(`${username}:${password}`);
 export const AUTH = { Authorization: basic('test', 'pass') };
 
-type FetchInput = Parameters<typeof fetch>[0];
-type FetchInit = Parameters<typeof fetch>[1];
-
 export function installDriveMock(drive: MockDrive): void {
-	vi.stubGlobal('fetch', (input: FetchInput, init?: FetchInit): Promise<Response> => drive.handle(input, init));
+	setFetchMock((input, init) => drive.handle(input, init));
 }
 
 export function seedStandardDrive(drive: MockDrive): void {

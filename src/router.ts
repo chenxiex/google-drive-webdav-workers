@@ -12,10 +12,12 @@ import {
 } from './auth/oidc';
 import { type RuntimeConfig, resolveConfig } from './config';
 import { DriveClient } from './drive/client';
+import { getAccessToken, invalidateAccessToken } from './drive/oauth';
 import { decodePath, errorStatus } from './http';
 import { handleGraphMeDrives } from './ocis/graph';
 import { handleOcsCapabilities, handleOcsUser } from './ocis/ocs';
 import { type AuthPrincipal, handleOcisDavOptions, handleStatusPhp } from './ocis/profile';
+import { SyncIndexClient } from './sync/client';
 import { handleTusCreate, handleTusUpload } from './tus/handler';
 import { handleDelete, handleGet, handleHead, handleLock, handleMkcol, handleOptions } from './webdav/handler';
 import { handlePropfind, handleProppatch } from './webdav/properties';
@@ -122,6 +124,21 @@ function assertDriveConfigured(config: RuntimeConfig): Response | null {
     return null;
 }
 
+function createDriveClient(config: RuntimeConfig, env: Env): DriveClient {
+    const sync = env.SYNC_INDEX
+        ? new SyncIndexClient(
+            env.SYNC_INDEX,
+            config.rootId,
+            () => getAccessToken(config),
+            () => {
+                invalidateAccessToken(config);
+                return getAccessToken(config);
+            },
+        )
+        : null;
+    return new DriveClient(config, sync);
+}
+
 export async function handleRequest(request: Request, env: Env, _ctx?: ExecutionContext): Promise<Response> {
     const { pathname } = new URL(request.url);
     const method = request.method.toUpperCase();
@@ -181,7 +198,7 @@ export async function handleRequest(request: Request, env: Env, _ctx?: Execution
             }
             const missingDrive = assertDriveConfigured(config);
             if (missingDrive) return missingDrive;
-            return await handleGraphMeDrives(request, config, new DriveClient(config));
+            return await handleGraphMeDrives(request, config, createDriveClient(config, env));
         }
         if (pathname === '/remote.php/webdav' || pathname.startsWith('/remote.php/webdav/')) {
             const auth = await authenticateRequest(request, env, config, { preferBearer: true });
@@ -215,7 +232,7 @@ export async function handleRequest(request: Request, env: Env, _ctx?: Execution
         if (missingDrive) return missingDrive;
 
         const owner = auth.owner;
-        const drive = new DriveClient(config);
+        const drive = createDriveClient(config, env);
         const isTusPath = pathname.startsWith(basePath + 'tus_uploads/');
 
         switch (method) {

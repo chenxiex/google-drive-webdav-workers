@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
 	type DriveBatchRequest,
 	MAX_BATCH_SIZE,
@@ -6,6 +6,7 @@ import {
 	parseBatchResponse,
 	serializeBatchRequest,
 } from '../../src/drive/batch';
+import { setFetchMock } from '../support/network';
 
 const noopDelay = async () => {};
 
@@ -24,11 +25,6 @@ function batchHttpResponse(boundary: string, parts: Array<{ id: string; status: 
 		headers: { 'Content-Type': `multipart/mixed; boundary=${boundary}` },
 	});
 }
-
-afterEach(() => {
-	vi.restoreAllMocks();
-	vi.unstubAllGlobals();
-});
 
 describe('Drive batch serialization and parsing', () => {
 	it('serializes GET without body and POST with UTF-8 byte Content-Length', () => {
@@ -87,7 +83,7 @@ describe('executeBatchWithRetry', () => {
 		const delays: number[] = [];
 		let callCount = 0;
 
-		vi.stubGlobal('fetch', vi.fn(async (_input: any, init?: RequestInit) => {
+		setFetchMock(vi.fn(async (_input: any, init?: RequestInit) => {
 			callCount++;
 			const ct = (init?.headers as Record<string, string>)['Content-Type'];
 			const boundary = ct.match(/boundary=([^\s;]+)/)![1];
@@ -134,7 +130,7 @@ describe('executeBatchWithRetry', () => {
 	it('does not retry non-retriable 403 sub-item and stops after exhausted 503 retries', async () => {
 		const reqs: DriveBatchRequest[] = [{ id: 'r0', method: 'POST', path: '/drive/v3/files', body: { name: 'a' } }];
 
-		vi.stubGlobal('fetch', vi.fn(async (_input: any, init?: RequestInit) => {
+		setFetchMock(vi.fn(async (_input: any, init?: RequestInit) => {
 			const boundary = (init?.headers as Record<string, string>)['Content-Type'].match(/boundary=([^\s;]+)/)![1];
 			return batchHttpResponse(boundary, [{ id: 'r0', status: 403, body: '{"error":{"message":"forbidden"}}' }]);
 		}));
@@ -143,7 +139,7 @@ describe('executeBatchWithRetry', () => {
 		expect(r403[0].status).toBe(403);
 		expect(b1.usedBatches).toBe(1);
 
-		vi.stubGlobal('fetch', vi.fn(async (_input: any, init?: RequestInit) => {
+		setFetchMock(vi.fn(async (_input: any, init?: RequestInit) => {
 			const boundary = (init?.headers as Record<string, string>)['Content-Type'].match(/boundary=([^\s;]+)/)![1];
 			return batchHttpResponse(boundary, [{ id: 'r0', status: 503, body: '{"error":{"message":"down"}}' }]);
 		}));
@@ -156,7 +152,7 @@ describe('executeBatchWithRetry', () => {
 	it('retries outer 503 and rejects with 413 when batch budget is exhausted', async () => {
 		const reqs: DriveBatchRequest[] = [{ id: 'r0', method: 'GET', path: '/drive/v3/files/root' }];
 		let calls = 0;
-		vi.stubGlobal('fetch', vi.fn(async (_input: any, init?: RequestInit) => {
+		setFetchMock(vi.fn(async (_input: any, init?: RequestInit) => {
 			calls++;
 			if (calls === 1) return new Response('try again', { status: 503 });
 			const boundary = (init?.headers as Record<string, string>)['Content-Type'].match(/boundary=([^\s;]+)/)![1];
@@ -177,7 +173,7 @@ describe('executeBatchWithRetry', () => {
 			{ id: 'r0', method: 'GET', path: '/drive/v3/files/root' },
 			{ id: 'r1', method: 'GET', path: '/drive/v3/files/root' },
 		];
-		vi.stubGlobal('fetch', vi.fn(async (_input: any, init?: RequestInit) => {
+		setFetchMock(vi.fn(async (_input: any, init?: RequestInit) => {
 			const boundary = (init?.headers as Record<string, string>)['Content-Type'].match(/boundary=([^\s;]+)/)![1];
 			return batchHttpResponse(boundary, [{ id: 'r0', status: 200, body: '{"id":"root"}' }]);
 		}));

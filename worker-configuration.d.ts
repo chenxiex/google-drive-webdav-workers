@@ -8,6 +8,7 @@ declare namespace Cloudflare {
 	interface Env {
 		TUS_UPLOADS: DurableObjectNamespace<import("./src/tus/upload-do").TusUpload>;
 		AUTH_DO?: DurableObjectNamespace<import("./src/auth/auth-do").AuthStore>;
+		SYNC_INDEX?: DurableObjectNamespace<import("./src/sync/index-do").SyncIndex>;
 		CLIENT_ID: string;
 		CLIENT_SECRET: string;
 		REFRESH_TOKEN: string;

@@ -21,11 +21,14 @@ export async function putEmpty(
     if (existingFileId) {
         const response = await drive.truncateFile(existingFileId, mimeType);
         if (response.ok) {
+            await response.body?.cancel().catch(() => undefined);
             let metadataStatus = 204;
             if (modifiedTime !== undefined) {
                 const updated = await drive.updateFileMetadata(existingFileId, { modifiedTime });
                 if (!updated.ok) metadataStatus = updated.status;
+                else await updated.body?.cancel().catch(() => undefined);
             }
+            await drive.notifySync({ type: 'touch', id: existingFileId, parentId, isFolder: false });
             await drive.cache.invalidateFileAndParent(fpath, parentId);
             return new Response(null, { status: metadataStatus });
         }
@@ -33,6 +36,10 @@ export async function putEmpty(
     }
     const response = await drive.createEmptyFile(name, parentId, mimeType, modifiedTime);
     if (response.ok) {
+        const created = await response.json<{ id?: string }>().catch(() => null);
+        await drive.notifySync(created?.id
+            ? { type: 'upsert', id: created.id, parentId, isFolder: false }
+            : { type: 'touch', id: parentId, isFolder: true });
         await drive.cache.invalidateFileAndParent(fpath, parentId);
         return new Response(null, { status: 201 });
     }
@@ -125,7 +132,11 @@ async function putSmallKnownLength(
         return new Response('Upload failed', { status: 502 });
     }
     if (res.ok) {
-        await res.body?.cancel().catch(() => undefined);
+        const created = await res.json<{ id?: string }>().catch(() => null);
+        const fileId = existingFileId ?? created?.id;
+        await drive.notifySync(fileId
+            ? { type: 'upsert', id: fileId, parentId, isFolder: false }
+            : { type: 'touch', id: parentId, isFolder: true });
         await drive.cache.invalidateFileAndParent(fpath, parentId);
         return new Response(null, { status: existingFileId ? 204 : 201 });
     }
@@ -144,6 +155,7 @@ async function putResumable(
 ): Promise<Response> {
     let uploadUrl: string | null = null;
     let offset = 0;
+    let uploadedId: string | null = existingFileId;
     try {
         for await (const { bytes, final } of uploadChunks(body)) {
             if (!bytes.length) {
@@ -174,19 +186,29 @@ async function putResumable(
                 `bytes ${offset}-${end - 1}/${total}`,
                 bytes,
             );
-            await response.body?.cancel().catch(() => undefined);
             // Never report success or continue from an unconfirmed offset.
             // Ambiguous failures are not retried: the upload may have committed.
             if (final ? response.status !== 200 && response.status !== 201 : response.status !== 308) {
+                await response.body?.cancel().catch(() => undefined);
                 return new Response('Google Drive upload did not confirm the chunk', {
                     status: response.status >= 400 && response.status <= 599 ? response.status : 502,
                 });
             }
             if (!final && response.headers.get('Range') !== `bytes=0-${end - 1}`) {
+                await response.body?.cancel().catch(() => undefined);
                 return new Response('Google Drive upload offset mismatch', { status: 502 });
+            }
+            if (final) {
+                const result = await response.json<{ id?: string }>().catch(() => null);
+                uploadedId = existingFileId ?? result?.id ?? null;
+            } else {
+                await response.body?.cancel().catch(() => undefined);
             }
             offset = end;
         }
+        await drive.notifySync(uploadedId
+            ? { type: 'upsert', id: uploadedId, parentId, isFolder: false }
+            : { type: 'touch', id: parentId, isFolder: true });
         await drive.cache.invalidateFileAndParent(fpath, parentId);
         return new Response(null, { status: existingFileId ? 204 : 201 });
     } catch {

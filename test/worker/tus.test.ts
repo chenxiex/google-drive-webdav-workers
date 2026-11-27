@@ -9,7 +9,7 @@ const send = (url: string, init: RequestInit = {}) => SELF.fetch(new URL(url, OR
     ...init, headers: { ...AUTH, ...TUS, ...Object.fromEntries(new Headers(init.headers)) },
 });
 const create = async (length: number, name = crypto.randomUUID() + '.bin', metadata = '') => {
-    const response = await send('/dav/', { method: 'POST', headers: {
+    const response = await send('/webdav/', { method: 'POST', headers: {
         'Upload-Length': String(length), 'Upload-Metadata': 'filename ' + btoa(name) + metadata,
     } });
     expect(response.status, response.status === 201 ? '' : await response.text()).toBe(201);
@@ -149,7 +149,7 @@ describe('durable TUS', () => {
     });
 
     it('rejects unsupported/malformed creation before writing Drive and advertises only implemented extensions', async () => {
-        const options = await send('/dav/', { method: 'OPTIONS' });
+        const options = await send('/webdav/', { method: 'OPTIONS' });
         expect(options.headers.get('Tus-Extension')).toBe('creation');
         expect(options.headers.get('Tus-Version')).toBe('1.0.0');
         for (const headers of [
@@ -158,11 +158,32 @@ describe('durable TUS', () => {
             { 'Upload-Length': '2', 'Upload-Metadata': 'filename ###' },
             { 'Upload-Length': '2', 'Upload-Metadata': 'filetype ' + btoa(String.fromCharCode(...new TextEncoder().encode('text/☃'))) },
             { 'Upload-Length': '2', 'Upload-Defer-Length': '1' },
-        ] as Record<string, string>[]) expect((await send('/dav/', { method: 'POST', headers })).status).toBe(400);
-        expect((await send('/dav/', { method: 'POST', headers: { 'Upload-Length': '1' }, body: 'x' })).status).toBe(400);
-        expect((await send('/dav/', { method: 'POST', headers: { 'Tus-Resumable': '0.2', 'Upload-Length': '1' } })).status).toBe(412);
+        ] as Record<string, string>[]) expect((await send('/webdav/', { method: 'POST', headers })).status).toBe(400);
+        expect((await send('/webdav/', { method: 'POST', headers: { 'Upload-Length': '1' }, body: 'x' })).status).toBe(400);
+        expect((await send('/webdav/', { method: 'POST', headers: { 'Tus-Resumable': '0.2', 'Upload-Length': '1' } })).status).toBe(412);
         expect(drive.files).toHaveLength(0);
         await create(0, undefined, ',opaque /w==');
+        expect(drive.files).toHaveLength(1);
+    });
+
+    it.each([
+        ['/webdav/missing/', { 'Upload-Length': '5', 'Upload-Metadata': 'filename ' + btoa('a.bin') }],
+        ['/webdav/missing/', { 'Upload-Length': '0', 'Upload-Metadata': 'filename ' + btoa('empty.bin') }],
+        ['/webdav/missing/a.bin', { 'Upload-Length': '5' }],
+        ['/webdav/existing.txt/', { 'Upload-Length': '5', 'Upload-Metadata': 'filename ' + btoa('a.bin') }],
+        ['/webdav/existing.txt/a.bin', { 'Upload-Length': '5' }],
+    ] as const)('rejects creation on %s with 409 when parent collection is missing or not a folder', async (path, headers) => {
+        drive.add({ id: 'file-existing', name: 'existing.txt', mimeType: 'text/plain', size: 1, parents: ['root'] });
+        const methods: string[] = [];
+        const original = drive.handle.bind(drive);
+        vi.spyOn(drive, 'handle').mockImplementation((input, init) => {
+            methods.push(new Request(input, init).method);
+            return original(input, init);
+        });
+        const response = await send(path, { method: 'POST', headers });
+        expect(response.status).toBe(409);
+        expect(response.headers.get('Tus-Resumable')).toBe('1.0.0');
+        expect(methods.every(method => method === 'GET')).toBe(true);
         expect(drive.files).toHaveLength(1);
     });
 
@@ -184,7 +205,7 @@ describe('durable TUS', () => {
         drive.add({ id: 'nested-folder', name: 'folder', mimeType: FOLDER, parents: ['root'] });
         drive.add({ id: 'nested-tus-folder', name: 'tus_uploads', mimeType: FOLDER, parents: ['nested-folder'] });
         drive.add({ id: 'nested-file', name: 'file', mimeType: 'text/plain', parents: ['nested-tus-folder'], size: 7 });
-        const ordinary = await head('/dav/folder/tus_uploads/file');
+        const ordinary = await head('/webdav/folder/tus_uploads/file');
         expect(ordinary.status).toBe(200);
         expect(ordinary.headers.get('Content-Length')).toBe('7');
         expect(ordinary.headers.has('Upload-Offset')).toBe(false);

@@ -70,8 +70,8 @@ export async function handleTusCreate(drive: DriveClient, env: Env, owner: strin
     const targetPath = filename === undefined ? fpath : pathJoin(fpath, filename);
     const { name, parent } = splitPath(targetPath);
     if (!name) return tusError('A filename is required', 400);
-    const parentMetadata = await drive.ensureDir(parent);
-    if (!parentMetadata) return tusError('Parent folder not found', 404);
+    const parentMetadata = await drive.getFolderMetadata(parent);
+    if (!parentMetadata) return tusError('Parent collection is missing or not a collection', 409);
     const existing = await drive.getMetadata(targetPath);
     if (existing?.mimeType === FOLDER_MIME) return tusError('Cannot overwrite a collection', 409);
     const existingFileId = existing?.id || null;

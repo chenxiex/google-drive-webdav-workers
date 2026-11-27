@@ -1,6 +1,7 @@
 import { basicAuthentication, isValidUser } from './auth/basic';
 import { resolveConfig } from './config';
 import { DriveClient } from './drive/client';
+import { errorStatus } from './http';
 import { handleTusCreate, handleTusUpload } from './tus/handler';
 import { handleDelete, handleGet, handleHead, handleLock, handleMkcol, handleOptions } from './webdav/handler';
 import { handlePropfind, handleProppatch } from './webdav/properties';
@@ -18,15 +19,13 @@ export async function handleRequest(request: Request, env: Env, _ctx?: Execution
     try {
         const config = resolveConfig(env);
         const basePath = config.basePath;
-        if (basePath !== '/') {
-            if (pathname + '/' === basePath) {
-                const u = new URL(request.url);
-                u.pathname += '/';
-                return Response.redirect(u.toString(), 301);
-            }
-            if (!pathname.startsWith(basePath)) {
-                return new Response('404 Not Found', { status: 404 });
-            }
+        if (pathname + '/' === basePath) {
+            const u = new URL(request.url);
+            u.pathname += '/';
+            return Response.redirect(u.toString(), 301);
+        }
+        if (!pathname.startsWith(basePath)) {
+            return new Response('404 Not Found', { status: 404 });
         }
 
         // Global Basic Authentication
@@ -61,7 +60,7 @@ export async function handleRequest(request: Request, env: Env, _ctx?: Execution
 
         switch (method) {
             case 'OPTIONS':
-                return handleOptions();
+                return handleOptions(isTusPath);
             case 'PROPFIND':
                 return await handlePropfind(drive, request);
             case 'PROPPATCH':
@@ -77,7 +76,8 @@ export async function handleRequest(request: Request, env: Env, _ctx?: Execution
             case 'POST':
                 return await handleTusCreate(drive, env, auth.user, request);
             case 'PATCH':
-                return await (isTusPath ? handleTusUpload(drive, env, auth.user, request) : handleCopy(drive, request));
+                if (isTusPath) return await handleTusUpload(drive, env, auth.user, request);
+                break;
             case 'MOVE':
                 return await handleMove(drive, request);
             case 'COPY':
@@ -87,11 +87,15 @@ export async function handleRequest(request: Request, env: Env, _ctx?: Execution
             case 'LOCK':
             case 'UNLOCK':
                 return handleLock();
-            default:
-                return new Response('Method Not Allowed', { status: 405 });
         }
-    } catch (e: any) {
-        const status = e.status || e.code || 500;
-        return new Response(status + ': ' + e.message, { status });
+        return new Response('Method Not Allowed', { status: 405 });
+    } catch (e: unknown) {
+        const status = errorStatus(e);
+        const message = e instanceof Error
+            ? e.message
+            : typeof (e as any)?.message === 'string'
+                ? (e as any).message
+                : String(e);
+        return new Response(status + ': ' + message, { status });
     }
 }

@@ -2,7 +2,11 @@ import { type RuntimeConfig } from '../config';
 import { StatusError, TransferError, encodeQueryString, escapeQuery, trimString } from '../http';
 import { type MemoryCache, isolateCache } from './cache';
 import { getAccessToken } from './oauth';
-import { FOLDER_MIME, PROPERTY_FIELDS, type StorageQuota } from './types';
+import { FOLDER_MIME, PROPERTY_FIELDS, type StorageQuota, isVisibleDriveItem } from './types';
+
+const FOLDER_META_TTL = 300000;
+const FILE_META_TTL = 30000;
+const OBJECTS_TTL = 30000;
 
 export class DriveClient {
     readonly config: RuntimeConfig;
@@ -72,11 +76,8 @@ export class DriveClient {
         });
     }
 
-    async deleteFile(id: string): Promise<Response> {
-        return fetch('https://www.googleapis.com/drive/v3/files/' + id + '?supportsAllDrives=true', {
-            method: 'DELETE',
-            headers: { Authorization: 'Bearer ' + (await this.getAccessToken()) },
-        });
+    async trashFile(id: string): Promise<Response> {
+        return this.updateFileMetadata(id, { trashed: true }, 'supportsAllDrives=true&fields=id');
     }
 
     async initResumableUpload(options: {
@@ -146,78 +147,87 @@ export class DriveClient {
         });
     }
 
+    private async parseTransferId(response: Response, label: string, expectedNotId?: string, expectedId?: string): Promise<{ id: string }> {
+        if (!response.ok) {
+            throw new TransferError(label + ' failed: ' + await response.text(), response.status,
+                response.status >= 400 && response.status < 500 && response.status !== 408);
+        }
+        let result: any;
+        try { result = await response.json(); } catch { /* success with an unreadable body is ambiguous */ }
+        if (!result || typeof result.id !== 'string' || !result.id
+            || (expectedNotId !== undefined && result.id === expectedNotId)
+            || (expectedId !== undefined && result.id !== expectedId)) {
+            throw new TransferError(label + ' returned no valid ID; outcome uncertain', 502, false);
+        }
+        return result;
+    }
+
+    async transferCreate(body: Record<string, unknown>, headers: Record<string, string>): Promise<{ id: string }> {
+        const response = await fetch('https://www.googleapis.com/drive/v3/files?supportsAllDrives=true&fields=id', {
+            method: 'POST', headers, body: JSON.stringify(body),
+        });
+        return this.parseTransferId(response, 'Drive create');
+    }
+
     async transferWrite(id: string, body: Record<string, unknown>, headers: Record<string, string>, copy = false, parents = ''): Promise<{ id: string }> {
         const response = await fetch('https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(id)
             + (copy ? '/copy' : '') + '?supportsAllDrives=true&fields=id' + parents, {
             method: copy ? 'POST' : 'PATCH', headers, body: JSON.stringify(body),
         });
-        if (!response.ok) {
-            throw new TransferError('Drive write for ' + id + ' failed: ' + await response.text(), response.status,
-                response.status >= 400 && response.status < 500 && response.status !== 408);
-        }
-        let result: any;
-        try { result = await response.json(); } catch { /* success with an unreadable body is ambiguous */ }
-        if (!result || typeof result.id !== 'string' || !result.id || (copy ? result.id === id : result.id !== id)) {
-            throw new TransferError('Drive write for ' + id + ' returned no valid ID; outcome uncertain', 502, false);
-        }
-        return result;
+        return this.parseTransferId(response, 'Drive write for ' + id, copy ? id : undefined, copy ? undefined : id);
     }
 
-    // Create any missing folder along the way to `path`, so a client can PUT
-    // `/a/b/c.txt` without having to MKCOL `/a` and `/a/b` first.
-    async ensureDir(path: string): Promise<any | null> {
-        let current = await this.getMetadata('/');
-        if (!current) return null;
-        const dir = path.endsWith('/') ? path : path + '/';
-        if (dir === '/') return current;
-
-        const names = dir.split('/').filter(Boolean);
-        for (let i = 0; i < names.length; i++) {
-            const sub = '/' + names.slice(0, i + 1).join('/') + '/';
-            let meta = await this.getMetadata(sub);
-            if (!meta) {
-                const created = await this.createFolder(names[i], current.id);
-                if (!created.ok) return null;
-                await this.cache.invalidateFileAndParent(sub, current.id);
-                meta = await this.getMetadata(sub);
-                if (!meta) return null;
-            }
-            current = meta;
-        }
-        return current;
+    /** Resolves `path` only when it refers to an existing visible folder, otherwise `null`. */
+    async getFolderMetadata(path: string): Promise<any | null> {
+        const metadata = await this.getMetadata(path || '/');
+        return metadata?.mimeType === FOLDER_MIME ? metadata : null;
     }
 
-    async getMetadata(path: string): Promise<any> {
+    async getMetadata(path: string, options?: { bypassLeafCache?: boolean }): Promise<any> {
         path = path.startsWith('/') ? path : '/' + path;
         path = path.endsWith('/') ? path : path + '/';
         if (path === '/') return this.rootMetadata();
-        let meta = await this.cache.get(path, 'meta');
-        if (meta) return meta;
+        const bypassLeafCache = options?.bypassLeafCache ?? false;
+        if (!bypassLeafCache) {
+            const cached = await this.cache.get(path, 'meta');
+            if (cached) return cached;
+        }
 
         let fullpath = '/';
         let metadata: any = this.rootMetadata();
 
-        const fragments = trimString(path, '/').split('/');
+        const fragments = trimString(path, '/').split('/').filter(Boolean);
 
-        for (const name of fragments) {
-            if (!name) continue;
+        for (let i = 0; i < fragments.length; i++) {
+            const name = fragments[i];
+            const isLeaf = i === fragments.length - 1;
+            if (metadata.mimeType !== FOLDER_MIME) return null;
             fullpath += name + '/';
-            meta = await this.cache.get(fullpath, 'meta');
+            let meta = !(isLeaf && bypassLeafCache) ? await this.cache.get(fullpath, 'meta') : null;
             if (!meta) {
                 // `getUrl` already decoded the path once; decoding again here
                 // threw a URIError for any name containing a literal "%".
-                const result = await this.queryDrive({
-                    includeItemsFromAllDrives: true,
-                    supportsAllDrives: true,
-                    q: `'${metadata.id}' in parents and name = '${escapeQuery(name)}' and trashed = false`,
-                    fields: `files(${PROPERTY_FIELDS},thumbnailLink,imageMediaMetadata)`,
-                });
-                if (result.files && result.files.length > 0) {
-                    await this.cache.put(fullpath, result.files[0], 'meta');
-                    meta = result.files[0];
-                } else {
+                let pageToken: string | undefined;
+                let visible: any;
+                do {
+                    const result = await this.queryDrive({
+                        includeItemsFromAllDrives: true,
+                        supportsAllDrives: true,
+                        pageSize: 1000,
+                        q: `'${metadata.id}' in parents and name = '${escapeQuery(name)}' and trashed = false`,
+                        fields: `nextPageToken, files(${PROPERTY_FIELDS},thumbnailLink,imageMediaMetadata)`,
+                        ...(pageToken ? { pageToken } : {}),
+                    });
+                    visible = result.files?.find(isVisibleDriveItem) ?? null;
+                    pageToken = result.nextPageToken;
+                } while (!visible && pageToken);
+                if (!visible) {
+                    if (isLeaf && bypassLeafCache) await this.cache.delete(fullpath, 'meta');
                     return null;
                 }
+                const ttl = visible.mimeType === FOLDER_MIME ? FOLDER_META_TTL : FILE_META_TTL;
+                await this.cache.put(fullpath, visible, 'meta', ttl);
+                meta = visible;
             }
             metadata = meta;
         }
@@ -234,7 +244,7 @@ export class DriveClient {
             pageSize: 1000,
             includeItemsFromAllDrives: true,
             supportsAllDrives: true,
-            q: `'${id}' in parents and trashed = false AND name != '.password'`,
+            q: `'${id}' in parents and trashed = false`,
             fields: `nextPageToken, files(${PROPERTY_FIELDS},thumbnailLink,imageMediaMetadata)`,
             orderBy: 'folder, name',
         };
@@ -242,21 +252,30 @@ export class DriveClient {
             if (pageToken) params.pageToken = pageToken;
             const result = await this.queryDrive(params);
             pageToken = result.nextPageToken;
-            if (result.files) list.push(...result.files);
+            if (result.files) list.push(...result.files.filter(isVisibleDriveItem));
         } while (pageToken);
 
-        await this.cache.put(id, list, 'objects', 30000);
+        await this.cache.put(id, list, 'objects', OBJECTS_TTL);
         return list;
     }
 
-    async getRawContent(id: string, range: string | null, abuse: boolean): Promise<Response> {
+    private async fetchMedia(url: URL, range: string | null, abuse: boolean): Promise<Response> {
         const headers: Record<string, string> = { Authorization: 'Bearer ' + (await this.getAccessToken()) };
         if (range) headers['Range'] = range;
-        const url = new URL(`https://www.googleapis.com/drive/v2/files/${id}`);
-        url.searchParams.set('supportsAllDrives', 'true');
         url.searchParams.set('alt', 'media');
         url.searchParams.set('acknowledgeAbuse', abuse ? 'true' : 'false');
-        return await fetch(url.toString(), { headers });
+        return fetch(url.toString(), { headers });
+    }
+
+    getRevisionContent(id: string, revisionId: string, range: string | null, abuse: boolean): Promise<Response> {
+        const url = new URL(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}/revisions/${encodeURIComponent(revisionId)}`);
+        return this.fetchMedia(url, range, abuse);
+    }
+
+    getFileContent(id: string, range: string | null, abuse: boolean): Promise<Response> {
+        const url = new URL(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}`);
+        url.searchParams.set('supportsAllDrives', 'true');
+        return this.fetchMedia(url, range, abuse);
     }
 
     async queryDrive(params: Record<string, any>, retryCount: number = 0): Promise<any> {

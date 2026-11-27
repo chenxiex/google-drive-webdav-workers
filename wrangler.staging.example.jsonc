@@ -1,0 +1,20 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "google-drive-webdav-workers-staging",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-04-15",
+	"upload_source_maps": false,
+	"send_metrics": false,
+	"keep_names": false,
+	"minify": true,
+	// Disable default *.workers.dev and preview URLs so all traffic must pass
+	// through the custom domain and its Cloudflare WAF gate.
+	"workers_dev": false,
+	"preview_urls": false,
+	// If you already created a manual proxied DNS record for this hostname,
+	// either delete it so Custom Domains can manage it, or replace with:
+	// { "pattern": "dav-staging.example.com/*", "zone_name": "example.com" }
+	"routes": [{ "pattern": "dav-staging.example.com", "custom_domain": true }],
+	"durable_objects": { "bindings": [{ "name": "TUS_UPLOADS", "class_name": "TusUpload" }] },
+	"migrations": [{ "tag": "v1-tus", "new_sqlite_classes": ["TusUpload"] }]
+}

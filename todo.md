@@ -4,48 +4,48 @@
 
 ## 现有 WebDAV 待决项与已知缺口
 
-- [ ] **将普通 DELETE 改为移入回收站（`6A`）**
+- [x] **将普通 DELETE 改为移入回收站（`6A`）**
   - 当前 `MOVE`/`COPY` 覆盖流程已改用回收站（`trashed: true`）并支持失败恢复，但普通 `DELETE` 仍直接调用 Drive 永久删除接口（`DELETE /drive/v3/files/{id}`）。
-  - 将普通 `DELETE` 改为 `PATCH { trashed: true }`（可选保留配置开关支持永久删除），统一覆盖与删除的回收站语义，并验证目录删除、权限要求与恢复语义。
+  - 将普通 `DELETE` 改为 `PATCH { trashed: true }`（不保留永久删除开关），统一覆盖与删除的回收站语义，并验证目录删除、权限要求与恢复语义。
 
-- [ ] **过滤隐藏 Google Workspace 原生文档与 Shortcut（`7A`）**
+- [x] **过滤隐藏 Google Workspace 原生文档与 Shortcut（`7A`）**
   - 在目录列举（`getObjects`）与路径解析（`getMetadata`）中过滤除文件夹外的所有 `application/vnd.google-apps.*` 项（含 Docs/Sheets/Slides 与 Shortcut），避免客户端下载报错或双向同步死循环。
 
-- [ ] **基于 Drive v3 Batch API 实现 RFC 4918 文件夹 COPY（`8B`）**
+- [x] **基于 Drive v3 Batch API 实现 RFC 4918 文件夹 COPY（`8B`）**
   - 支持 `Depth: 0`（浅复制空目录壳及属性）与 `Depth: infinity`/缺省（按层 BFS 打包 `files.list` / `files.create` / `files.copy` 至 `POST /batch/drive/v3`，每批最多 100 个子请求，受安全规模/子请求预算保护，遇偶发 `429`/`5xx` 子项轻量重试 1–2 次）；先建暂存目录再覆盖发布。实现前需审计 `/batch/drive/v3` 并在 `MockDrive` 建模。
   - 统一单文件与文件夹 `COPY` 的暂存失败清理策略：在暂存复制阶段失败、旧目标移入回收站失败、或末步发布重命名遇确定性 `4xx`（非 `408`）拒绝并还原旧目标后，顺手将未发布的 `.webdav-copy-<UUID>` 移入回收站清理并返回单一明确错误码（仅末步重命名遇 `5xx`/`408`/断连等不确定失败时不自动清理或还原）。
 
-- [ ] **移除全站非 TUS `PATCH` 转发 `COPY` 的遗留路由（`9.1A`）**
+- [x] **移除全站非 TUS `PATCH` 转发 `COPY` 的遗留路由（`9.1A`）**
   - 删除 [src/router.ts](src/router.ts) 中非 `tus_uploads/` 路径将 `PATCH` 改写为 `COPY` 的遗留代码，全站对非 TUS `PATCH` 统一返回 `405 Method Not Allowed`。
 
-- [ ] **全站移除 `ensureDir` 自动建父目录，统一按 RFC 4918 返回 `409`（`9.2B`）**
+- [x] **全站移除 `ensureDir` 自动建父目录，统一按 RFC 4918 返回 `409`（`9.2B`）**
   - 移除 [src/webdav/handler.ts](src/webdav/handler.ts)、[src/webdav/upload.ts](src/webdav/upload.ts) 与 [src/tus/handler.ts](src/tus/handler.ts) 中 `MKCOL`、`PUT` 与 TUS `POST` 的 `ensureDir` 调用，父目录缺失或非文件夹时全站统一返回 `409 Conflict`（与 `MOVE`/`COPY` 一致，防止同步场景复活已删/改名父目录）；同步更新 [test/worker/dav-write.test.ts](test/worker/dav-write.test.ts) 中依赖自动建父目录的用例。
 
-- [ ] **统一路由并调整通用 WebDAV 默认路径为 `/webdav/`（`9.3`）**
+- [x] **统一路由并调整通用 WebDAV 默认路径为 `/webdav/`（`9.3`）**
   - 移除 `OCIS_ENABLED` 开关与新旧双轨语义：oCIS WebDAV 与发现路由（`/dav/spaces/<spaceId>/`、`/remote.php/webdav/`、`/remote.php/dav/files/<username>/`、`/status.php`、`/ocs/*`、`/graph/*`、`/.well-known/*`）常驻同一 Drive/WebDAV 处理器；OIDC `/oauth/*` 按是否配置 Cloudflare Access 自动启用（未配置时仅运行 HTTP Basic `USERS`）。
-  - 将通用 WebDAV 默认 `PATH` 从 `/dav/` 调整为 `/webdav/`（保留 `PATH` 可配置），并对 `/` 或与 oCIS 保留前缀（`/dav/spaces/`、`/remote.php/`、`/ocs/`、`/graph/`、`/oauth/`、`/status.php`、`/.well-known/`）冲突的配置返回 `500` 配置错误；实现时同步更新 [README.md](README.md)、[.env.example](.env.example) 与 [docs/webdav-behavior.md](docs/webdav-behavior.md)。
+  - 将通用 WebDAV 默认 `WEBDAV_PATH` 从 `/dav/` 调整为 `/webdav/`（保留 `WEBDAV_PATH` 可配置），并对 `/` 或与 oCIS 保留前缀（`/dav/spaces/`、`/remote.php/`、`/ocs/`、`/graph/`、`/oauth/`、`/status.php`、`/.well-known/`）冲突的配置返回 `500` 配置错误；实现时同步更新 [README.md](README.md)、[.env.example](.env.example) 与 [docs/webdav-behavior.md](docs/webdav-behavior.md)。
 
 - [x] **保留 WebDAV 自定义属性并精简 `src/webdav/property-xml.ts`（`10.1A`）**
   - 保留基于 Drive `appProperties`（`wdp00`–`wdp29`）的通用 XML dead properties 与 `DAV:displayname` tombstone，以满足 RFC 4918 `SHOULD` 兼容度；精简 [src/webdav/property-xml.ts](src/webdav/property-xml.ts) 中的过度正则/标签配对校验与读取已存 `wdp*` 时的重复 `parseXml`，去除 [src/webdav/properties.ts](src/webdav/properties.ts) 二次 `DOMParser` 解析并合并冗余属性测试。
 
-- [ ] **`oc:checksums` 只读动态计算且 `PROPPATCH` 静默忽略（`10.2A`）**
+- [x] **`oc:checksums` 只读动态计算且 `PROPPATCH` 静默忽略（`10.2A`）**
   - `PROPFIND` 中的 `{http://owncloud.org/ns}checksums` 始终基于 Google Drive 真实返回的 `md5Checksum` / `sha1Checksum` / `sha256Checksum` 动态拼装；对 `PROPPATCH` 写入 `oc:checksums`（如 `rclone` 与 `DAV:lastmodified` 同批发送）不落盘至 `appProperties`，直接作为空操作返回 `200`，避免污染摘要或因 `403`/`424` 阻断 `mtime` 更新。
 
-- [ ] **对齐已知长度大文件 PUT 的校验逻辑**
+- [x] **对齐已知长度大文件 PUT 的校验逻辑**
   - 目前仅未知长度流式 `PUT`（`putUnknownLength`）严格校验分块响应状态、308 `Range` 及最终完成状态；已知长度 `PUT` 路径存在四处缺陷：
     - 使用 `parseInt` 解析 `Content-Length`，非法或负值会绕过循环返回假成功 `201`/`204`（应严格校验非负安全整数并在非法时返回 `400`）；
     - 无尾斜杠路径覆盖已有目录（`metadata?.mimeType === FOLDER_MIME`）未提前返回 `405`/`409`；
     - `> 5 MiB` 分块路径未先检查初始化 `!initRes.ok` 透传上游状态码，把失败全折叠成 `500`；
     - 分块循环未校验 `308` `Range`、末块收 `308` 报假成功，且输入流提前 `done` 时会静默提交截断体。
 
-- [ ] **修复顶层异常捕获复用 `errorStatus()`**
+- [x] **修复顶层异常捕获复用 `errorStatus()`**
   - [src/router.ts](src/router.ts) 顶层 `catch` 直接读取 `e.status || e.code || 500`，若异常带非 HTTP 数字或字符串的 `e.code` 会导致 `new Response` 再抛出 `RangeError`；应统一改用已定义的 `errorStatus(e)`。
 
-- [ ] **将下载与 ETag 从 Drive v2 迁移至统一的 Drive v3（`4A-1`）**
+- [x] **将下载与 ETag 从 Drive v2 迁移至统一的 Drive v3（`4A-1`）**
   - 已于 2026-11-24 实测验证 Drive v3：`headRevisionId` 在 `multipart`/`media`/`resumable` 终块 `200`/空创建/`files.get`/`files.list` 均立即可用（仅改 `appProperties` 时保持不变、覆写内容时变化）；`revisions/{headRevisionId}?alt=media` 支持 `200`/`Range 206`/越界 `416`/空文件 `200`，且在文件被覆写为 `rev2` 后仍可从旧 `rev1` 不可变读取 `206`。
   - 统一将 `GET`/`HEAD`/`PROPFIND` 文件 ETag 迁至 `"<id>-<headRevisionId>"`（无 `headRevisionId` 时回退 `version`），`GET` 优先走 `revisions/{headRevisionId}?alt=media`（只读共享 `403` 或版本淘汰 `404` 时回退 `files/{id}?alt=media`），`If-Range` 绕过内存缓存实时校验 `headRevisionId`；移除 Drive v2 依赖并同步更新 `MockDrive`。
 
-- [ ] **核验线上 Cloudflare 部署限制与凭据边界**
+- [x] **核验线上 Cloudflare 部署限制与凭据边界**
   - 在真实 Cloudflare 环境中核验单请求入口体上限与内存上限（区分 TUS 分块多请求与单次大 `PUT`）。
   - 部署前配置加密 secrets（`CLIENT_ID`、`CLIENT_SECRET`、`REFRESH_TOKEN`、`USERS`）；Workers KV 绑定已全面移除，元数据缓存仅存 isolate 内存，上传状态存 `TUS_UPLOADS` Durable Object。
   - 核实 OAuth 应用发布状态及 Refresh Token 长期有效性；留意所有 `USERS` 账号共用同一 Google OAuth 身份，`ROOT_ID` 仅作应用路径映射，不会缩窄令牌本身的权限范围。
@@ -82,7 +82,7 @@
   - 通过实际 Worker 兼容层验证 `10,000,000` 字节 POST（余 `38,528` mod 256 KiB）及 10 MiB / 不规则 / 变块续传的跨块对齐与尾块持久恢复。
 
 - [ ] **OC-07：按矩阵验收统一路由与 DAV 语义**
-  - 实现并验收统一路由（`9.3`，无 `OCIS_ENABLED` 开关）：通用 WebDAV 默认 `/webdav/`（校验 `PATH` 不与 `/` 或 oCIS 保留前缀冲突）、常驻 `/dav/spaces/<spaceId>/...`、`/remote.php/webdav/...`、`/remote.php/dav/files/<username>/...`，单次段解码、`$`/`%24` 等价、全站缺父统一返回 409（`9.2B`）、全站非 TUS `PATCH` 统一返回 405（`9.1A`）。
+  - 实现并验收统一路由（`9.3`，无 `OCIS_ENABLED` 开关）：通用 WebDAV 默认 `/webdav/`（校验 `WEBDAV_PATH` 不与 `/` 或 oCIS 保留前缀冲突）、常驻 `/dav/spaces/<spaceId>/...`、`/remote.php/webdav/...`、`/remote.php/dav/files/<username>/...`，单次段解码、`$`/`%24` 等价、全站缺父统一返回 409（`9.2B`）、全站非 TUS `PATCH` 统一返回 405（`9.1A`）。
   - 验收 `4A-1` 统一 v3 ETag（`GET`/`HEAD`/`PROPFIND` 共用 `headRevisionId`、`revisions/{headRevisionId}?alt=media` 不可变读取与实时 `If-Range`）、`Prefer: return=minimal`、`oc:*` 属性（含 `10.2A` `oc:checksums` 真实摘要动态计算与 `PROPPATCH` 静默忽略）、`7A` 原生文档过滤与真实权限字段；验收 `PUT`/`TUS` `If-Match` 失配返回 `412`（`#11`）及 `8B` 文件夹 COPY（`Depth: 0` / `infinity` 与预算上限）。
 
 - [ ] **OC-08：实现 Android 预览代理**

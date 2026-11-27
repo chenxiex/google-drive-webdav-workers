@@ -1,0 +1,437 @@
+{
+  "audit_date": "2026-11-27",
+  "purpose": "Source-derived protocol contracts and canonical minimal fixtures for ownCloud Desktop 7.1.1 and OpenCloud Android 1.3.1 (OC-02)",
+  "sources": {
+    "desktop_7_1_1": {
+      "repo": "owncloud/client",
+      "commit": "9525d7331115d04ab0dd7646db3d0c084c7a1599",
+      "companion_repo": "owncloud/libre-graph-api-cpp-qt-client@main (client/OAIDrive.cpp)",
+      "inspected_files": [
+        "src/libsync/theme.cpp",
+        "src/gui/creds/oauth.cpp",
+        "src/gui/networkadapters/determineauthtypeadapter.cpp",
+        "src/gui/networkadapters/discoverwebfingerserviceadapter.cpp",
+        "src/gui/networkadapters/webfingerlookupadapter.cpp",
+        "src/gui/newaccountwizard/urlpagecontroller.cpp",
+        "src/gui/newaccountwizard/oauthpagecontroller.cpp",
+        "src/libsync/networkjobs/checkserverjobfactory.cpp",
+        "src/libsync/networkjobs/fetchuserinfojobfactory.cpp",
+        "src/libsync/capabilities.cpp",
+        "src/libsync/graphapi/jobs/drives.cpp",
+        "src/libsync/graphapi/space.cpp",
+        "src/libsync/graphapi/spacesmanager.cpp",
+        "src/gui/scheduling/etagwatcher.cpp",
+        "src/gui/scheduling/syncscheduler.cpp",
+        "src/gui/connectionvalidator.cpp",
+        "src/libsync/discoveryphase.cpp",
+        "src/libsync/propagateuploadtus.cpp",
+        "src/libsync/propagateuploadcommon.cpp",
+        "src/libsync/propagatedownload.cpp",
+        "src/common/remotepermissions.cpp",
+        "src/common/checksumalgorithms.cpp",
+        "test/testconnectionvalidator/capabilities.json.in",
+        "test/testconnectionvalidator/status.php.json.in",
+        "test/testconnectionvalidator/user.json",
+        "test/testconnectionvalidator/testconnectionvalidator.cpp"
+      ]
+    },
+    "android_1_3_1": {
+      "repo": "opencloud-eu/android",
+      "commit": "958f6a8c4142f621989f616b66d3906f08ddc669",
+      "inspected_files": [
+        "opencloudApp/src/main/res/values/setup.xml",
+        "opencloudApp/src/main/java/eu/opencloud/android/presentation/authentication/LoginActivity.kt",
+        "opencloudApp/src/main/java/eu/opencloud/android/presentation/authentication/oauth/OAuthUtils.kt",
+        "opencloudApp/src/main/java/eu/opencloud/android/presentation/thumbnails/ThumbnailsRequester.kt",
+        "opencloudApp/src/main/java/eu/opencloud/android/workers/TusUploadHelper.kt",
+        "opencloudComLibrary/src/main/java/eu/opencloud/android/lib/common/http/HttpConstants.java",
+        "opencloudComLibrary/src/main/java/eu/opencloud/android/lib/common/http/methods/webdav/DavUtils.kt",
+        "opencloudComLibrary/src/main/java/eu/opencloud/android/lib/common/http/methods/webdav/properties/OCChecksums.kt",
+        "opencloudComLibrary/src/main/java/eu/opencloud/android/lib/common/http/methods/webdav/properties/OCHasPreview.kt",
+        "opencloudComLibrary/src/main/java/eu/opencloud/android/lib/common/operations/RemoteOperationResult.java",
+        "opencloudComLibrary/src/main/java/eu/opencloud/android/lib/resources/files/RemoteFile.kt",
+        "opencloudComLibrary/src/main/java/eu/opencloud/android/lib/resources/files/UploadFileFromFileSystemOperation.kt",
+        "opencloudComLibrary/src/main/java/eu/opencloud/android/lib/resources/files/DownloadRemoteFileOperation.kt",
+        "opencloudComLibrary/src/main/java/eu/opencloud/android/lib/resources/files/chunks/ChunkedUploadFromFileSystemOperation.kt",
+        "opencloudComLibrary/src/main/java/eu/opencloud/android/lib/resources/files/tus/CreateTusUploadRemoteOperation.kt",
+        "opencloudComLibrary/src/main/java/eu/opencloud/android/lib/resources/files/tus/GetTusUploadOffsetRemoteOperation.kt",
+        "opencloudComLibrary/src/main/java/eu/opencloud/android/lib/resources/files/tus/PatchTusUploadChunkRemoteOperation.kt",
+        "opencloudComLibrary/src/main/java/eu/opencloud/android/lib/resources/files/tus/TusChecksumHelper.kt",
+        "opencloudComLibrary/src/main/java/eu/opencloud/android/lib/resources/oauth/TokenRequestRemoteOperation.kt",
+        "opencloudComLibrary/src/main/java/eu/opencloud/android/lib/resources/oauth/params/TokenRequestParams.kt",
+        "opencloudComLibrary/src/main/java/eu/opencloud/android/lib/resources/oauth/responses/OIDCDiscoveryResponse.kt",
+        "opencloudComLibrary/src/main/java/eu/opencloud/android/lib/resources/oauth/responses/TokenResponse.kt",
+        "opencloudComLibrary/src/main/java/eu/opencloud/android/lib/resources/spaces/GetRemoteSpacesOperation.kt",
+        "opencloudComLibrary/src/main/java/eu/opencloud/android/lib/resources/spaces/responses/SpacesResponse.kt",
+        "opencloudComLibrary/src/main/java/eu/opencloud/android/lib/resources/status/GetRemoteCapabilitiesOperation.kt",
+        "opencloudComLibrary/src/main/java/eu/opencloud/android/lib/resources/status/GetRemoteStatusOperation.kt",
+        "opencloudComLibrary/src/main/java/eu/opencloud/android/lib/resources/status/OpenCloudVersion.kt",
+        "opencloudComLibrary/src/main/java/eu/opencloud/android/lib/resources/status/RemoteCapability.kt",
+        "opencloudComLibrary/src/main/java/eu/opencloud/android/lib/resources/status/StatusRequester.kt",
+        "opencloudComLibrary/src/main/java/eu/opencloud/android/lib/resources/status/responses/CapabilityResponse.kt",
+        "opencloudComLibrary/src/main/java/eu/opencloud/android/lib/resources/users/GetRemoteUserInfoOperation.kt",
+        "opencloudComLibrary/src/main/java/eu/opencloud/android/lib/resources/users/responses/UserInfoResponse.kt",
+        "opencloudComLibrary/src/main/java/eu/opencloud/android/lib/resources/webfinger/GetInstancesViaWebFingerOperation.kt",
+        "opencloudComLibrary/src/main/java/eu/opencloud/android/lib/resources/webfinger/responses/WebFingerResponse.kt",
+        "opencloudData/src/main/java/eu/opencloud/android/data/capabilities/datasources/mapper/RemoteCapabilityMapper.kt",
+        "opencloudData/src/main/java/eu/opencloud/android/data/server/repository/OCServerInfoRepository.kt",
+        "opencloudDomain/src/main/java/eu/opencloud/android/domain/capabilities/model/OCCapability.kt"
+      ]
+    }
+  },
+  "oauth_clients": {
+    "desktop_7_1_1": {
+      "client_id": "xdXOt13JKxym1B1QcEncf2XDkLAexMBFwiT9j6EfhhHFJhs2KM9jbjTmf8JBXE69",
+      "client_secret": "UBntmLjC2yYCeHwsyj73Uwo9TAaecAetRwMw0xYcvNL9yRdLSUi0hUAHfvCHFeFh",
+      "redirect_uri_pattern": "http://127.0.0.1:<port> (and http://localhost:<port>)",
+      "scopes": "openid offline_access email profile",
+      "prompt": "select_account consent",
+      "token_auth_preference": [
+        "client_secret_basic",
+        "client_secret_post"
+      ],
+      "uses_id_token": false,
+      "uses_userinfo_endpoint": false,
+      "uses_jwks_uri": false,
+      "user_info_source": "GET /ocs/v2.php/cloud/user?format=json",
+      "notes": "OAuth::fetchWellKnown (oauth.cpp:401-412) sets _redirectUrl to http://127.0.0.1 after OIDC discovery succeeds and asserts that token_endpoint_auth_methods_supported contains client_secret_basic or client_secret_post."
+    },
+    "android_1_3_1": {
+      "client_id": "OpenCloudAndroid",
+      "client_secret": "",
+      "redirect_uri": "oc://android.opencloud.eu",
+      "scopes": "openid offline_access email profile",
+      "prompt": "select_account consent",
+      "token_auth_preference": [
+        "none",
+        "client_secret_post",
+        "client_secret_basic"
+      ],
+      "uses_id_token": "payload decode only for preferred_username -> email -> sub (no signature/JWKS check)",
+      "uses_userinfo_endpoint": false,
+      "uses_jwks_uri": false,
+      "user_info_source": "GET /ocs/v2.php/cloud/user?format=json",
+      "notes": "Public client with empty oauth2_client_secret (setup.xml:103-104); LoginActivity.kt:982-992 prefers token_endpoint_auth_method=none (no Authorization header, client_id in form body) when advertised in OIDC discovery, and skips dynamic client registration when registration_endpoint is omitted."
+    }
+  },
+  "fixtures": {
+    "status_php": {
+      "request": "GET https://dav.example.com/status.php",
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "installed": true,
+          "maintenance": false,
+          "needsDbUpgrade": false,
+          "version": "10.11.0.0",
+          "versionstring": "10.11.0",
+          "edition": "Community",
+          "productname": "Infinite Scale",
+          "product": "Infinite Scale",
+          "productversion": "8.2.3"
+        }
+      },
+      "notes": "Both version and productversion must be non-blank strings: Android StatusRequester.kt:104 reads both via JSONObject.getString and OpenCloudVersion.kt:54,68 requires non-blank productversion. Desktop checkserverjobfactory.cpp:127-156 forbids redirects and requires installed."
+    },
+    "webfinger": {
+      "request": "GET https://dav.example.com/.well-known/webfinger?resource=...",
+      "response": {
+        "status": 404,
+        "headers": {
+          "Content-Type": "text/plain; charset=utf-8"
+        },
+        "body": "Not Found"
+      },
+      "notes": "Single-instance Worker profile intentionally returns 404 for WebFinger: both Desktop (urlpagecontroller.cpp:223) and Android (OCServerInfoRepository.kt:87) fall back directly to single-instance status.php + OIDC discovery. (If multi-instance WebFinger 200 is ever added later, Desktop requires Content-Type containing application/json, matching subject, and authenticated GET ?resource=acct:me@<host> returning rel=http://webfinger.owncloud/rel/server-instance.)"
+    },
+    "oidc_discovery": {
+      "request": "GET https://dav.example.com/.well-known/openid-configuration",
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "issuer": "https://dav.example.com",
+          "authorization_endpoint": "https://dav.example.com/oauth/authorize",
+          "token_endpoint": "https://dav.example.com/oauth/token",
+          "userinfo_endpoint": "https://dav.example.com/oauth/userinfo",
+          "jwks_uri": "https://dav.example.com/oauth/jwks",
+          "response_types_supported": [
+            "code"
+          ],
+          "grant_types_supported": [
+            "authorization_code",
+            "refresh_token"
+          ],
+          "code_challenge_methods_supported": [
+            "S256"
+          ],
+          "scopes_supported": [
+            "openid",
+            "offline_access",
+            "email",
+            "profile"
+          ],
+          "token_endpoint_auth_methods_supported": [
+            "client_secret_basic",
+            "client_secret_post",
+            "none"
+          ],
+          "subject_types_supported": [
+            "public"
+          ],
+          "id_token_signing_alg_values_supported": [
+            "RS256"
+          ]
+        }
+      },
+      "notes": "Use RS256 (matching oCIS 8.2.3's advertised algorithm family). Omit registration_endpoint so Android skips dynamic client registration and uses OpenCloudAndroid with token_endpoint_auth_methods_supported=none."
+    },
+    "oauth_token": {
+      "request": "POST https://dav.example.com/oauth/token",
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/json; charset=utf-8",
+          "Cache-Control": "no-store"
+        },
+        "body": {
+          "access_token": "<opaque-access-token>",
+          "refresh_token": "<opaque-refresh-token>",
+          "token_type": "Bearer",
+          "expires_in": 3600,
+          "scope": "openid offline_access email profile",
+          "id_token": "<jwt-with-iss-aud-sub-preferred_username-email-iat-exp>"
+        }
+      },
+      "notes": "expires_in is a non-null Moshi Int in Android TokenResponse.kt:35. Desktop oauth.cpp:253-259 requires access_token, refresh_token, and token_type=Bearer (case-insensitive)."
+    },
+    "ocs_user_v2": {
+      "request": "GET https://dav.example.com/ocs/v2.php/cloud/user?format=json",
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/json; charset=utf-8",
+          "Ocs-Api-Version": "2"
+        },
+        "body": {
+          "ocs": {
+            "meta": {
+              "status": "ok",
+              "statuscode": 200,
+              "message": "OK"
+            },
+            "data": {
+              "id": "alice@example.com",
+              "display-name": "alice@example.com",
+              "email": "alice@example.com"
+            }
+          }
+        }
+      },
+      "notes": "Both id and display-name are non-null Moshi Strings in Android UserInfoResponse.kt:31-35; Desktop fetchuserinfojobfactory.cpp:71-73 reads id and display-name."
+    },
+    "ocs_capabilities_v2": {
+      "request": "GET https://dav.example.com/ocs/v2.php/cloud/capabilities?format=json",
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/json; charset=utf-8",
+          "Ocs-Api-Version": "2"
+        },
+        "body": {
+          "ocs": {
+            "meta": {
+              "status": "ok",
+              "statuscode": 200,
+              "message": "OK"
+            },
+            "data": {
+              "capabilities": {
+                "core": {
+                  "pollinterval": 30000,
+                  "webdav-root": "webdav",
+                  "status": {
+                    "installed": true,
+                    "maintenance": false,
+                    "needsDbUpgrade": false,
+                    "version": "10.11.0.0",
+                    "versionstring": "10.11.0",
+                    "edition": "Community",
+                    "productname": "Infinite Scale",
+                    "product": "Infinite Scale",
+                    "productversion": "8.2.3"
+                  },
+                  "support-url-signing": false,
+                  "support-sse": false
+                },
+                "checksums": {
+                  "supportedTypes": [
+                    "sha1",
+                    "md5",
+                    "sha256"
+                  ],
+                  "preferredUploadType": "sha1"
+                },
+                "files": {
+                  "privateLinks": false,
+                  "bigfilechunking": false,
+                  "undelete": false,
+                  "versioning": false,
+                  "favorites": false,
+                  "full_text_search": false,
+                  "tags": false,
+                  "blacklisted_files": [],
+                  "tus_support": {
+                    "version": "1.0.0",
+                    "resumable": "1.0.0",
+                    "extension": "creation,creation-with-upload",
+                    "max_chunk_size": 10485760,
+                    "http_method_override": ""
+                  }
+                },
+                "dav": {
+                  "chunking": ""
+                },
+                "files_sharing": {
+                  "api_enabled": false,
+                  "resharing": false,
+                  "public": {
+                    "enabled": false
+                  },
+                  "user": {
+                    "profile_picture": false
+                  }
+                },
+                "spaces": {
+                  "version": "1.0.0",
+                  "enabled": true,
+                  "projects": false,
+                  "share_jail": false,
+                  "has_multiple_personal_spaces": false
+                }
+              },
+              "version": {
+                "major": 10,
+                "minor": 11,
+                "micro": 0,
+                "string": "10.11.0",
+                "edition": "Community",
+                "product": "Infinite Scale",
+                "productversion": "8.2.3"
+              }
+            }
+          }
+        }
+      },
+      "notes": "Explicitly set files_sharing.api_enabled=false and files_sharing.public.enabled=false (Desktop capabilities.cpp:46,52 defaults both to true when omitted). spaces.version is required by Desktop SpaceSupport::isValid (capabilities.cpp:212-215), and spaces.projects is a non-null Moshi Boolean on Android (CapabilityResponse.kt:239). pollinterval=30000 is parsed as ms by Desktop (capabilities.cpp:62) and safely parsed as Int? without timer scheduling on Android. Omit notifications and app_providers."
+    },
+    "graph_me_drives": {
+      "request": "GET https://dav.example.com/graph/v1.0/me/drives",
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "body": {
+          "value": [
+            {
+              "id": "personal$root",
+              "driveType": "personal",
+              "name": "Personal",
+              "eTag": "\"root-etag\"",
+              "root": {
+                "id": "personal$root",
+                "eTag": "\"root-etag\"",
+                "webDavUrl": "https://dav.example.com/dav/spaces/personal$root"
+              }
+            }
+          ]
+        }
+      },
+      "invariants": [
+        "Both top-level eTag and root.eTag MUST be populated and change together: Desktop Space::setDrive checks root.eTag (space.cpp:65-72), whereas ETagWatcher::slotSpaceChanged reads top-level OAIDrive::getETag via space->eTag() (space.cpp:140, etagwatcher.cpp:39, OAIDrive.cpp:201,436).",
+        "drive.id must equal drive.root.id: SpacesManager keys spaces by drive.id while Space::id returns root.id.",
+        "root.webDavUrl MUST omit any trailing slash and use literal '$' (not '%24'): Android RemoteFile.getRemotePathFromUrl URL-decodes href before splitting by spaceWebDavUrl (RemoteFile.kt:190-198).",
+        "quota (nullable on Android; when present quota.total is non-null Long), owner, special, webUrl, description, and virtual/shares are safe to omit."
+      ]
+    }
+  },
+  "dav_and_tus_contracts": {
+    "propfind_content_type": "application/xml; charset=utf-8",
+    "desktop_propfind_props": [
+      "DAV:resourcetype",
+      "DAV:getlastmodified",
+      "DAV:getcontentlength",
+      "DAV:getetag",
+      "oc:id",
+      "oc:downloadURL",
+      "oc:dDC",
+      "oc:permissions",
+      "oc:checksums",
+      "oc:share-types",
+      "oc:data-fingerprint (root only)"
+    ],
+    "android_propfind_props": [
+      "DAV:displayname",
+      "DAV:getcontenttype",
+      "DAV:resourcetype",
+      "DAV:getcontentlength",
+      "DAV:getlastmodified",
+      "DAV:creationdate",
+      "DAV:getetag",
+      "oc:permissions",
+      "oc:id",
+      "oc:size",
+      "oc:privatelink",
+      "oc:share-types",
+      "oc:checksums",
+      "oc:has-preview"
+    ],
+    "oc_permissions": {
+      "desktop_allowed_letters": " WDNVCKRSMmz",
+      "contract": "Must be non-empty on files and folders (Desktop propagateuploadcommon.cpp:373 triggers extra PROPFIND or FatalError when null; discoveryphase.cpp:357 warns if share-types lacks permissions). Example writable values: RDNVW (file), RDNVCK (folder), R (read-only)."
+    },
+    "oc_has_preview": {
+      "values": [
+        "1",
+        "0"
+      ],
+      "contract": "Android OCHasPreview.kt:44 strictly checks `text == \"1\"`; never emit \"true\" or \"false\"."
+    },
+    "oc_checksums": {
+      "format": "<oc:checksums><oc:checksum>SHA1:<hex> MD5:<hex> SHA256:<hex></oc:checksum></oc:checksums>",
+      "notes": "Verified against Android OCChecksums.kt:38-58 and Desktop discoveryphase.cpp:348-350."
+    },
+    "tus_head_without_version_header": {
+      "contract": "Desktop journal resume (propagateuploadtus.cpp:123) sends `HEAD <location>` WITHOUT `Tus-Resumable`; server MUST tolerate missing `Tus-Resumable` on TUS HEAD while returning 412 when a non-empty unsupported version is sent."
+    },
+    "tus_extensions_and_headers": {
+      "tus_extension": "creation,creation-with-upload,checksum",
+      "tus_checksum_algorithm": "sha1,md5,sha256",
+      "notes": "Advertise checksum alongside creation,creation-with-upload on TUS OPTIONS/responses (termination/expiration remain unadvertised), while keeping OCS files.tus_support.extension as creation,creation-with-upload matching oCIS 8.2.3. Per-chunk Upload-Checksum is validated via Workers Web Crypto crypto.subtle.digest before flushing to Drive (460 on mismatch)."
+    },
+    "tus_checksums_and_chunks": {
+      "desktop_upload_metadata": "filename=<relative subpath>, checksum=\"SHA1 <hex>\", mtime=<integer Unix seconds>; creation-with-upload POST size min(remaining, max_chunk_size); reads ETag, OC-Perm, OC-FileID from completion response (falls back to PROPFIND Depth: 0).",
+      "rclone_tus_post": "rclone 1.76.0 sends whole-file OC-Checksum: SHA1:<hex> on TUS POST (wire-10485760.json #68) in addition to Upload-Metadata.",
+      "android_upload_threshold_bytes": 10240000,
+      "android_plain_put": "For files < 10,240,000 B, Android uses PUT with X-OC-Mtime, OC-Total-Length, optional If-Match, and OC-Checksum: SHA1:<hex> (UploadFileFromFileSystemOperation.kt:108-113).",
+      "android_tus_upload": "For files >= 10,240,000 B, Android POSTs to <spaceWebDavUrl>/<parentDir> (no trailing slash) with filename=<basename>, mimetype, mtime, checksum=\"SHA1 <hex>\", first chunk min(10 MiB, fileSize, max_chunk_size), subsequent PATCHes min(10,240,000, remaining, max_chunk_size) (10,240,000 % 262,144 = 16,384 B remainder). Both data-bearing POST and PATCH include per-chunk `Upload-Checksum: sha1 <base64>` (TusChecksumHelper.kt:119-125). Android fast-fails and clears TUS state on HTTP 400 or 460 (TusUploadHelper.kt:283-288,373-374)."
+    },
+    "conflict_status_412": {
+      "contract": "Both Desktop 7.1.1 (propagateuploadcommon.cpp:252) and Android 1.3.1 (RemoteOperationResult.java:252-255) map HTTP 412 Precondition Failed on If-Match mismatch natively to conflict/rediscovery."
+    },
+    "android_preview": {
+      "file_preview_url": "GET <spaceWebDavUrl><encodedPath>?x=<width>&y=<height>&c=<etag>&preview=1",
+      "headers": {
+        "Authorization": "Bearer <token>",
+        "Accept-Encoding": "identity"
+      },
+      "avatar_url": "GET /graph/v1.0/me/photo/$value (404 acceptable when files_sharing.user.profile_picture=false)"
+    }
+  }
+}

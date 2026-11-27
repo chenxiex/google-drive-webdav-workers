@@ -52,22 +52,22 @@
 
 ## oCIS 兼容层实施计划
 
-设计文档：[协议边界](docs/ocis-compatibility.md)。参考探测证据：[探测报告](docs/ocis-probe-report.md)。
+设计文档：[协议边界](docs/ocis-compatibility.md)。参考探测证据：[探测报告](docs/ocis-probe-report.md)；锁定源码合同与 fixtures：[客户端合同](docs/ocis-client-contracts.json)。
 
 目标客户端：ownCloud Desktop 7.1.1（Linux/Windows）、OpenCloud Android 1.3.1、rclone 1.76.0（兼容参照 Cyberduck CLI 9.6.0、ownCloud CLI 6.0.3）。
 
-- [ ] **OC-02：补齐目标客户端实机流量与精确 fixtures**
-  - 在可运行原版客户端的环境中完成请求捕获（Desktop 7.1.1 GUI 先前因环境禁用 `AF_UNIX` 导致 `QLocalServer` 失败，Android 与 Windows 尚未实测）。
-  - 保留脱敏 query 与完整 DAV XML / OCS / Graph 请求响应体，固化 `status.php`、精简 `capabilities` 与 checksum 需求。
+- [x] **OC-02：基于锁定源码与上游测试核定目标客户端协议合同与精确 fixtures**
+  - 已完成 `owncloud/client@9525d7331115d04ab0dd7646db3d0c084c7a1599`（含 `OAIDrive.cpp`）与 `opencloud-eu/android@958f6a8c4142f621989f616b66d3906f08ddc669` 的定向源码及上游单测 fixtures 审计，消除无 GUI 沙箱阻塞，结果固化至 [docs/ocis-client-contracts.json](docs/ocis-client-contracts.json)、[docs/ocis-compatibility.md](docs/ocis-compatibility.md) 与 [docs/ocis-probe-report.md](docs/ocis-probe-report.md)；真机运行时抓包与浏览器/Custom Tabs 交互验证已并入 `OC-10` Staging 联调。
+  - 核定关键边界：单实例 Worker 对 `/.well-known/webfinger` 返回 `404`（Desktop/Android 均直接回退单实例 OIDC 发现）；OIDC discovery 需支持 `none`（Android `OpenCloudAndroid` 公有客户端）、省略 `registration_endpoint` 并采用 `RS256` 签发 `id_token`；`/oauth/token` 需含 `expires_in` 与含身份 claim 的 `id_token`；`status.php` 需非空 `version` + `productversion`；`capabilities` 保持 `core.webdav-root="webdav"` 与小写 `checksums`，显式关闭 `files_sharing.api_enabled`/`public.enabled` 并提供 `spaces.projects: false`；Graph `/me/drives` 需同步填充顶层 `eTag` 与 `root.eTag` 且 `root.webDavUrl` 用字面 `$` 且无尾斜杠；`PROPFIND` 需 `application/xml; charset=utf-8` 与 `oc:has-preview` `"1"`/`"0"`；TUS 宣告 `checksum` 扩展、`HEAD` 容忍省略 `Tus-Resumable`、带体 `POST`/`PATCH` 经 Web Crypto 校验 `Upload-Checksum`（`460`）、`PUT`/TUS `POST` 校验 `OC-Checksum`，且两端原生将 `If-Match` `412` 映射为冲突。
 
 - [ ] **OC-03：实现 Cloudflare Access + 薄 OAuth/OIDC 适配器**
-  - 实现 WebFinger、OIDC discovery、`/oauth/authorize`（仅该路径受 Cloudflare Access 保护，Worker 校验 `Cf-Access-Jwt-Assertion` 与 `CF_ACCESS_AUD`/Access JWKS）、`/oauth/token`、`/oauth/userinfo`、`/oauth/jwks`。
-  - 支持 PKCE `S256`、短效一次性授权码及客户端/回调白名单绑定（Desktop `127.0.0.1`/`localhost` 变端口、Android `oc://android.opencloud.eu`）；Auth DO 保存 opaque `access_token` 与可撤销、可重复使用的 `refresh_token`。
-  - 使用 Worker Secret 中的静态非对称密钥（`ES256`/`RS256` 固定 `kid`）签发 `id_token`；在其余路径保留 `USERS` Basic Auth，并明确共享 `ROOT_ID` 的视图语义；`/oauth/*` 路由随 Cloudflare Access 配置（如 `CF_ACCESS_AUD`）存在而自动启用，未配置时仅运行 HTTP Basic `USERS` 模式。
+  - 实现 `/.well-known/webfinger` 单实例 `404`（保留 `/.well-known/` 前缀占用校验）、OIDC discovery（支持 `client_secret_basic`/`client_secret_post`/`none`，省略 `registration_endpoint`，`id_token_signing_alg_values_supported: ["RS256"]`）、`/oauth/authorize`（仅该路径受 Cloudflare Access 保护，Worker 校验 `Cf-Access-Jwt-Assertion` 与 `CF_ACCESS_AUD`/Access JWKS）、`/oauth/token`（返回 `expires_in` 与带 `preferred_username`/`email`/`sub` 的 `id_token`）、`/oauth/userinfo`、`/oauth/jwks`。
+  - 支持 PKCE `S256`、短效一次性授权码及客户端/回调白名单绑定（Desktop 机密客户端 `127.0.0.1`/`localhost` 变端口、Android 公有客户端 `OpenCloudAndroid` `oc://android.opencloud.eu`）；Auth DO 保存 opaque `access_token` 与可撤销、可重复使用的 `refresh_token`。
+  - 使用 Worker Secret 中的静态 `RS256` 非对称密钥（固定 `kid`）签发 `id_token`；在其余路径保留 `USERS` Basic Auth，并明确共享 `ROOT_ID` 的视图语义；`/oauth/*` 路由随 Cloudflare Access 配置（如 `CF_ACCESS_AUD`）存在而自动启用，未配置时仅运行 HTTP Basic `USERS` 模式。
 
 - [ ] **OC-04：实现引导发现、OCS 与单 personal Space**
-  - 实现 `GET /status.php`（返回兼容版本档案而非 `package.json` 版本）、`GET /ocs/{v1,v2}.php/cloud/{user,capabilities}`（同时支持 XML/JSON 与 v1 `meta.statuscode=100` / v2 `200` 及 `Ocs-Api-Version: 1`）、未认证 `/remote.php/webdav/` 返回 401 Bearer 质询、认证后 `OPTIONS /remote.php/webdav`、`HEAD /remote.php/dav/files/<user>/Personal/`（保留 404 回退到发现接口）、`GET /graph/v1.0/me/drives`。
-  - 在 `files.tus_support` 中公告用户选定默认值 `max_chunk_size: 10485760`（10 MiB），在 `core.pollinterval` 中公告 `30000`（毫秒，30 秒，`#12`，并于实机验证实际轮询间隔），显式关闭分享（`files_sharing.api_enabled=false`）、团队 Space、通知与锁等未实现能力。
+  - 实现 `GET /status.php`（返回兼容版本档案与非空 `version` + `productversion`，禁重定向，非 `package.json` 版本）、`GET /ocs/{v1,v2}.php/cloud/{user,capabilities}`（含 `ocs.data.version`，同时支持 XML/JSON 与 v1 `meta.statuscode=100` / v2 `200` 及 `Ocs-Api-Version: 1`）、未认证 `/remote.php/webdav/` 返回 401 Bearer 质询、认证后 `OPTIONS /remote.php/webdav`、`HEAD /remote.php/dav/files/<user>/Personal/`（保留 404 回退到发现接口）、`GET /graph/v1.0/me/drives`（同时填充顶层 `eTag` 与 `root.eTag`、`drive.id === root.id`、`root.webDavUrl` 字面 `$` 且无尾斜杠）。
+  - 在 `files.tus_support` 中公告用户选定默认值 `max_chunk_size: 10485760`（10 MiB），在 `core.pollinterval` 中公告 `30000`（毫秒，30 秒，`#12`），`core.webdav-root` 设为 `"webdav"`，在 `checksums` 中公告小写 `supportedTypes: ["sha1","md5","sha256"]` 与 `preferredUploadType: "sha1"`，显式设置 `files_sharing.api_enabled=false`、`files_sharing.public.enabled=false`、`files_sharing.user.profile_picture=false`、`spaces.version="1.0.0"`、`spaces.projects=false`，省略 `notifications`/锁/团队 Space 等未实现能力。
   - Space 视图按 `15A` 如实表达共享 `ROOT_ID`（鉴权主体、OAuth token 与 TUS 会话按用户隔离，底层共享同一 `ROOT_ID`）：Graph `/me/drives` 中 `owner` 省略或如实填当前登录主体，`quota` 使用 `BigInt` 精确透传 Drive `storageQuota` 整数（无有限上限或字段不全时省略，不伪造 `0`）。
 
 - [ ] **OC-05：实现轻量目录/文件索引 DO 与 Drive `changes.list` 局部冒泡**
@@ -77,22 +77,22 @@
 
 - [ ] **OC-06：在现有 DO TUS 基础上补齐 oCIS 上传需求**
   - 将 `TusUpload` DO 从当前 `1 MiB` 整块 `pending` 落盘重构为 `5A`（单次发往 Google 上限 `10 MiB` 的 256 KiB 整倍数，SQLite 仅存 `< 256 KiB` `tail` 与 `inflight` 恢复标记，崩溃时通过 `bytes */<total>` 对齐 Drive 真实偏移）。
-  - 补齐 `creation-with-upload`（POST 带首块）、两类 `filename` 路径解析（Desktop 相对全路径 vs Android basename）、浮点 `mtime` / `X-OC-Mtime` 协调、按 `14A` 宽松解析 `Upload-Metadata`（核心字段严格校验；容忍尾逗号与 Cyberduck 9.6.0 明文 `filetype`，非法 `filetype` 回退 `application/octet-stream`，忽略未使用未知 key）、独立于公告块大小的请求上限。
-  - 利用 Google Drive 最终提交返回的原生摘要字段校验客户端声明的 whole-file `checksum`（已于 2026-11-24 实测：`resumable` 终块 `200` 与 `multipart`/`media`/0 字节截断均立刻返回匹配的 `md5Checksum`/`sha1Checksum`/`sha256Checksum`；仅元数据创建空文件 `POST /drive/v3/files` 只返回 `md5Checksum`，故 0 字节上传直接在 Worker 侧比对空字节摘要常量；不匹配时新建文件移入回收站并报错、覆盖文件报错并由 Drive Revisions 兜底）；处理条件覆盖（`If-Match` 失配按标准返回 `412 Precondition Failed`，`#11`，不照搬 oCIS 8.2.3 的 `409`），并在完成响应返回实际 `ETag`/`OC-FileID`/`OC-Perm`；上传完成后立即清理 DO 状态与闹钟（`deleteAll()` + `deleteAlarm()`，`13B`），后续 `HEAD`/`PATCH` 返回 `404`（与 TUS 规范及 oCIS 8.2.3 一致），0 字节 `POST` 免建 DO，24h 闹钟仅清理未完成孤儿会话。
-  - 通过实际 Worker 兼容层验证 `10,000,000` 字节 POST（余 `38,528` mod 256 KiB）及 10 MiB / 不规则 / 变块续传的跨块对齐与尾块持久恢复。
+  - 补齐 `creation-with-upload`（POST 带首块）、两类 `filename` 路径解析（Desktop 相对全路径 vs Android basename）、浮点 `mtime` / `X-OC-Mtime` 协调、按 `14A` 宽松解析 `Upload-Metadata`（核心字段严格校验；容忍尾逗号与 Cyberduck 9.6.0 明文 `filetype`，非法 `filetype` 回退 `application/octet-stream`，忽略未使用未知 key）、独立于公告块大小的请求上限；TUS `OPTIONS`/响应宣告 `Tus-Extension: creation,creation-with-upload,checksum` 与 `Tus-Checksum-Algorithm: sha1,md5,sha256`（仍不宣告 `termination`/`expiration`），`HEAD` 容忍省略 `Tus-Resumable`（Desktop 续传行为），并在带体 `POST`/`PATCH` 落盘/发往 Drive 前用原生 Web Crypto 校验分块 `Upload-Checksum`（不匹配返回 `460`）。
+  - 利用 Google Drive 最终提交返回的原生摘要字段校验客户端声明的 whole-file `checksum`（及 TUS `POST` / 普通 `PUT` 的 `OC-Checksum` 头）；已于 2026-11-24 实测 `resumable` 终块 `200` 与 `multipart`/`media`/0 字节截断均立刻返回匹配的 `md5Checksum`/`sha1Checksum`/`sha256Checksum`；仅元数据创建空文件 `POST /drive/v3/files` 只返回 `md5Checksum`，故 0 字节上传直接在 Worker 侧比对空字节摘要常量；不匹配时新建文件移入回收站并返回 `400`/`460`（触发 Android 立即清理 TUS 状态）、覆盖文件返回 `400`/`460` 并由 Drive Revisions 兜底；处理条件覆盖（`If-Match` 失配按标准返回 `412 Precondition Failed`，`#11`，不照搬 oCIS 8.2.3 的 `409`），并在完成响应返回实际 `ETag`/`OC-FileID`/`OC-Perm`；上传完成后立即清理 DO 状态与闹钟（`deleteAll()` + `deleteAlarm()`，`13B`），后续 `HEAD`/`PATCH` 返回 `404`（与 TUS 规范及 oCIS 8.2.3 一致），0 字节 `POST` 免建 DO，24h 闹钟仅清理未完成孤儿会话。
+  - 通过实际 Worker 兼容层验证 `10,000,000` 字节 POST（余 `38,528` mod 256 KiB）、Android `10,240,000` 字节块（余 `16,384` mod 256 KiB）及 10 MiB / 不规则 / 变块续传的跨块对齐与尾块持久恢复。
 
 - [ ] **OC-07：按矩阵验收统一路由与 DAV 语义**
   - 实现并验收统一路由（`9.3`，无 `OCIS_ENABLED` 开关）：通用 WebDAV 默认 `/webdav/`（校验 `WEBDAV_PATH` 不与 `/` 或 oCIS 保留前缀冲突）、常驻 `/dav/spaces/<spaceId>/...`、`/remote.php/webdav/...`、`/remote.php/dav/files/<username>/...`，单次段解码、`$`/`%24` 等价、全站缺父统一返回 409（`9.2B`）、全站非 TUS `PATCH` 统一返回 405（`9.1A`）。
-  - 验收 `4A-1` 统一 v3 ETag（`GET`/`HEAD`/`PROPFIND` 共用 `headRevisionId`、`revisions/{headRevisionId}?alt=media` 不可变读取与实时 `If-Range`）、`Prefer: return=minimal`、`oc:*` 属性（含 `10.2A` `oc:checksums` 真实摘要动态计算与 `PROPPATCH` 静默忽略）、`7A` 原生文档过滤与真实权限字段；验收 `PUT`/`TUS` `If-Match` 失配返回 `412`（`#11`）及 `8B` 文件夹 COPY（`Depth: 0` / `infinity` 与预算上限）。
+  - 验收 `4A-1` 统一 v3 ETag（`GET`/`HEAD`/`PROPFIND` 共用 `headRevisionId`、`revisions/{headRevisionId}?alt=media` 不可变读取与实时 `If-Range`）、`PROPFIND` `Content-Type: application/xml; charset=utf-8`、`Prefer: return=minimal`、`oc:*` 属性（含 `10.2A` `oc:checksums` 真实摘要动态计算与 `PROPPATCH` 静默忽略、非空 `oc:permissions`、`oc:has-preview` `"1"`/`"0"`）、`7A` 原生文档过滤；验收 `PUT`/`TUS` `If-Match` 失配返回 `412`（`#11`）、`PUT` `OC-Checksum` 校验（`400`）及 `8B` 文件夹 COPY（`Depth: 0` / `infinity` 与预算上限）。
 
 - [ ] **OC-08：实现 Android 预览代理**
-  - 支持 DAV GET `?preview=1` 及 `x/y/c` 参数与 `oc:has-preview` 属性；由 Worker 代理请求 Drive `thumbnailLink` 并缓存（按身份与版本隔离，不泄露 Google URL；依据真实缩略图可用性返回预览或 404）。
+  - 支持 DAV GET `?preview=1` 及 `x/y/c` 参数与 `oc:has-preview` 属性（值严格为 `"1"`/`"0"`）；由 Worker 代理请求 Drive `thumbnailLink` 并缓存（按身份与版本隔离，不泄露 Google URL；依据真实缩略图可用性返回预览或 404）。
 
 - [ ] **OC-09：全生命周期故障恢复测试（mock 对齐后）**
   - 使用已对齐的 Drive mock 注入故障：tail/inflight 标记落盘后中断、Google 已接收但丢响应、客户端确认丢失、最后提交丢响应、offset 冲突、部分确认与限流；验证 Worker/DO 重启后通过 `HEAD` + Drive `Range` 恢复无重复或丢字节且最终 SHA256 一致。
 
 - [ ] **OC-10：多端实机同步与真实部署验收**
-  - 完成 Linux/Windows 双向同步与 Android 上传/下载/预览实机验收，保留 rclone 回归。
+  - 通过 Staging Worker + `wrangler tail`/脱敏日志完成 Linux/Windows Desktop 7.1.1 双向同步（含单实例 WebFinger `404` 回退、实际 OAuth 回环、轮询节奏与 VFS）及 OpenCloud Android 1.3.1 上传/下载/预览/Custom Tabs 登录实机流量采集与验收，保留 rclone 回归。
   - 在真实部署的 Cloudflare 环境中实测超过单次入口上限的大文件上传及 DO 请求/存储成本。
 
 - [ ] **OC-11：固化兼容矩阵与上线文档**

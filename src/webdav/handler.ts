@@ -3,6 +3,7 @@ import { FOLDER_MIME, fileEtag } from '../drive/types';
 import { StatusError, errorStatus, splitPath } from '../http';
 import { TUS_CHECKSUM_ALGORITHMS, TUS_EXTENSIONS, TUS_VERSION } from '../tus/protocol';
 import { type DavMount } from './mount';
+import { handlePreview } from './preview';
 
 export function handleOptions(isTusPath = false): Response {
     // Locking (Class 2) is not implemented; PATCH is supported only on TUS upload URLs.
@@ -56,8 +57,11 @@ function methodNotAllowedOnCollection(): Response {
 }
 
 export async function handleGet(drive: DriveClient, request: Request, mount: DavMount): Promise<Response> {
-    const { fpath } = mount;
     const url = new URL(request.url);
+    if (url.searchParams.get('preview') === '1') {
+        return await handlePreview(drive, request, mount);
+    }
+    const { fpath } = mount;
     const range = request.headers.get('Range');
     const ifRange = request.headers.get('If-Range');
     const bypassLeafCache = !range || ifRange !== null;

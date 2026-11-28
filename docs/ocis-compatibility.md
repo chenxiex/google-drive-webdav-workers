@@ -152,7 +152,7 @@ Clients may ignore the 10 MiB recommendation (e.g., `10,000,000`-byte chunks lea
 ## 8. Preview and metadata
 
 - Support authenticated DAV `GET` with `preview=1` and `x`/`y`/`c` query parameters (`c` is a cache validator hint), plus `oc:has-preview`.
-- Proxy Drive `thumbnailLink` server-side (never redirect to Google URLs or expose tokens), returning actual image `Content-Type` and bytes. Cache by identity and version under user/root auth.
+- Proxy Drive `thumbnailLink` server-side (never redirect to Google URLs or expose tokens), returning actual image `Content-Type` and bytes with client-side HTTP cache validators (`Cache-Control: private, max-age=300`, `ETag`, `Vary: Authorization`, `If-None-Match` `304`) backed by the existing isolate metadata cache rather than buffering thumbnail binaries in Worker heap.
 - Follow actual Drive thumbnail availability (reference oCIS generates JPEG previews for text files and `404` for opaque binaries; never mask missing previews with original file bytes). Validate requested dimensions without promising exact server-side resizing unless implemented.
 - Retain `DAV:lastmodified` (integer Unix seconds) vs `DAV:getlastmodified` (HTTP-date) and existing Drive `appProperties`-backed custom/native property behavior (`10.1A`, while simplifying over-defensive XML validation/re-parsing).
 

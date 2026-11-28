@@ -1,5 +1,5 @@
 import { type DriveClient } from '../drive/client';
-import { FOLDER_MIME, fileEtag } from '../drive/types';
+import { FOLDER_MIME, fileEtag, hasUsableThumbnail } from '../drive/types';
 import { StatusError, errorStatus, escapeXml, formatDavHref } from '../http';
 import { PERSONAL_SPACE_NAME, personalSpaceId } from '../ocis/profile';
 import { UPLOAD_FILE_PERM } from '../tus/protocol';
@@ -236,7 +236,7 @@ function davProperties(
     }
     add('permissions', ocPermissions(file, folder), OC_NAMESPACE);
     add('size', folder ? '0' : fileSizeString(file), OC_NAMESPACE);
-    add('has-preview', !folder && typeof file.thumbnailLink === 'string' && file.thumbnailLink.length > 0 ? '1' : '0', OC_NAMESPACE);
+    add('has-preview', hasUsableThumbnail(file) ? '1' : '0', OC_NAMESPACE);
     if (!folder) {
         const checksums = fileChecksums(file);
         if (checksums) add('checksums', `<oc:checksum>${escapeXml(checksums)}</oc:checksum>`, OC_NAMESPACE, true);

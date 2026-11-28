@@ -1,6 +1,7 @@
 import { type DriveClient } from '../drive/client';
 import { FOLDER_MIME, type UploadedDriveFile, fileEtag } from '../drive/types';
-import { StatusError, getUrl, pathJoin, splitPath } from '../http';
+import { StatusError, pathJoin, splitPath } from '../http';
+import { type DavMount } from '../webdav/mount';
 import { putEmpty } from '../webdav/upload';
 import {
     DRIVE_FLUSH_SIZE,
@@ -96,7 +97,13 @@ async function cleanupFailedChecksum(
         .catch(() => console.error('TUS cache invalidation failed'));
 }
 
-export async function handleTusCreate(drive: DriveClient, env: Env, owner: string, request: Request): Promise<Response> {
+export async function handleTusCreate(
+    drive: DriveClient,
+    env: Env,
+    owner: string,
+    request: Request,
+    mount: DavMount,
+): Promise<Response> {
     const version = tusVersion(request);
     if (version) return version;
     if (request.headers.has('Upload-Defer-Length')) {
@@ -150,7 +157,7 @@ export async function handleTusCreate(drive: DriveClient, env: Env, owner: strin
         throw error;
     }
 
-    const { fpath } = getUrl(request.url, drive.config.basePath);
+    const { fpath } = mount;
     if (/[\x00-\x1f\x7f\\]/.test(fpath) || fpath.split('/').some(seg => seg === '.' || seg === '..')) {
         return tusError('Invalid upload path', 400);
     }
@@ -191,7 +198,7 @@ export async function handleTusCreate(drive: DriveClient, env: Env, owner: strin
 
     const origin = drive.config.publicOrigin ?? requestUrl.origin;
     const sessionId = crypto.randomUUID();
-    const location = `${origin}${drive.config.basePath}tus_uploads/${sessionId}`;
+    const location = `${origin}${mount.hrefBase}tus_uploads/${sessionId}`;
 
     if (totalSize === 0) {
         if (!verifyDriveChecksums(expectedChecksums, null, true)) {
@@ -305,14 +312,18 @@ export async function handleTusCreate(drive: DriveClient, env: Env, owner: strin
     });
 }
 
-export async function handleTusUpload(drive: DriveClient, env: Env, owner: string, request: Request): Promise<Response> {
+export async function handleTusUpload(
+    drive: DriveClient,
+    env: Env,
+    owner: string,
+    request: Request,
+    mount: DavMount,
+): Promise<Response> {
     const version = tusVersion(request, true);
     if (version) return version;
 
-    const basePath = drive.config.basePath;
-    const path = new URL(request.url).pathname;
-    const sessionId = path.slice((basePath + 'tus_uploads/').length);
-    if (!path.startsWith(basePath + 'tus_uploads/') || !/^[0-9a-f-]{36}$/.test(sessionId)) {
+    const sessionId = mount.tusSessionId;
+    if (!sessionId || !/^[0-9a-f-]{36}$/.test(sessionId)) {
         return tusError('Session not found', 404);
     }
     const namespace = env.TUS_UPLOADS;

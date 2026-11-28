@@ -187,6 +187,7 @@ describe('OCS v1/v2 cloud user and capabilities', () => {
 
 describe('remote.php discovery and auth probes', () => {
     it('returns 401 Bearer challenge on unauthenticated /remote.php/webdav/ and 204 on authenticated OPTIONS', async () => {
+        installDriveMock(new MockDrive());
         const dual = oidcBindings();
         const token = await issueBearerToken(dual);
 

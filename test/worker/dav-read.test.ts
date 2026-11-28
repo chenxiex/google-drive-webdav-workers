@@ -54,7 +54,7 @@ describe('server metadata', () => {
 		expect(tusOptions.headers.get('Allow')!.split(',').map(m => m.trim())).toContain('PATCH');
 	});
 
-	it.each(['/other', '/dav/', '/dav/spaces/root/', '/_/16/type/application/vnd.google-apps.folder'])('returns 404 for paths outside the base path (%s)', async path => {
+	it.each(['/other', '/dav/', '/dav/spaces', '/_/16/type/application/vnd.google-apps.folder'])('returns 404 for paths outside the base path (%s)', async path => {
 		const spy = vi.spyOn(drive, 'handle');
 		const res = await SELF.fetch(ORIGIN + path);
 		expect(res.status).toBe(404);

@@ -1,7 +1,8 @@
 import { type DriveClient } from '../drive/client';
 import { FOLDER_MIME, fileEtag } from '../drive/types';
-import { StatusError, errorStatus, getUrl, splitPath } from '../http';
+import { StatusError, errorStatus, splitPath } from '../http';
 import { TUS_CHECKSUM_ALGORITHMS, TUS_EXTENSIONS, TUS_VERSION } from '../tus/protocol';
+import { type DavMount } from './mount';
 
 export function handleOptions(isTusPath = false): Response {
     // Locking (Class 2) is not implemented; PATCH is supported only on TUS upload URLs.
@@ -24,8 +25,8 @@ export function handleOptions(isTusPath = false): Response {
     });
 }
 
-export async function handleMkcol(drive: DriveClient, request: Request): Promise<Response> {
-    const { fpath } = getUrl(request.url, drive.config.basePath);
+export async function handleMkcol(drive: DriveClient, _request: Request, mount: DavMount): Promise<Response> {
+    const { fpath } = mount;
 
     const { name, parent } = splitPath(fpath);
     const parentMetadata = await drive.getFolderMetadata(parent);
@@ -54,8 +55,8 @@ function methodNotAllowedOnCollection(): Response {
     });
 }
 
-export async function handleGet(drive: DriveClient, request: Request): Promise<Response> {
-    const { fpath } = getUrl(request.url, drive.config.basePath);
+export async function handleGet(drive: DriveClient, request: Request, mount: DavMount): Promise<Response> {
+    const { fpath } = mount;
     const url = new URL(request.url);
     const range = request.headers.get('Range');
     const ifRange = request.headers.get('If-Range');
@@ -116,8 +117,8 @@ export async function handleGet(drive: DriveClient, request: Request): Promise<R
     } catch (e: any) { return new Response(e.message, { status: errorStatus(e) }); }
 }
 
-export async function handleHead(drive: DriveClient, request: Request): Promise<Response> {
-    const { fpath } = getUrl(request.url, drive.config.basePath);
+export async function handleHead(drive: DriveClient, _request: Request, mount: DavMount): Promise<Response> {
+    const { fpath } = mount;
     const metadata = await drive.getMetadata(fpath, { bypassLeafCache: true });
     if (metadata) {
         const size = metadata.size ? metadata.size.toString() : '0';
@@ -138,8 +139,8 @@ export async function handleHead(drive: DriveClient, request: Request): Promise<
     return new Response(null, { status: 404 });
 }
 
-export async function handleDelete(drive: DriveClient, request: Request): Promise<Response> {
-    const { fpath } = getUrl(request.url, drive.config.basePath);
+export async function handleDelete(drive: DriveClient, _request: Request, mount: DavMount): Promise<Response> {
+    const { fpath } = mount;
     if (fpath === '/') return new Response(null, { status: 403 });
     const metadata = await drive.getMetadata(fpath);
     if (metadata) {

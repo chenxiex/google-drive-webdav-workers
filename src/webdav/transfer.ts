@@ -1,7 +1,9 @@
 import { type BatchBudget, type DriveBatchRequest, type DriveBatchResponse, MAX_BATCH_SIZE, executeBatchWithRetry } from '../drive/batch';
 import { type DriveClient } from '../drive/client';
 import { FOLDER_MIME, isVisibleDriveItem } from '../drive/types';
-import { StatusError, TransferError, encodeQueryString, errorStatus, escapeQuery, getUrl, splitPath } from '../http';
+import { StatusError, TransferError, encodeQueryString, errorStatus, escapeQuery, splitPath } from '../http';
+import { type AuthPrincipal } from '../ocis/profile';
+import { type DavMount, resolveDestinationMount } from './mount';
 
 export const FOLDER_COPY_LIMITS = {
     maxBatchSize: MAX_BATCH_SIZE,
@@ -149,12 +151,18 @@ async function populateFolderCopy(
 // Drive has no atomic replace-by-name operation. Keep the old destination
 // recoverable in Trash, and never compensate an ambiguous write: it may
 // already have succeeded even when its response was lost.
-async function handleTransfer(drive: DriveClient, request: Request, copy: boolean): Promise<Response> {
+async function handleTransfer(
+    drive: DriveClient,
+    request: Request,
+    mount: DavMount,
+    principal: AuthPrincipal,
+    copy: boolean,
+): Promise<Response> {
     const canonical = (path: string) => path.replace(/\/+$/, '') || '/';
-    const fpath = canonical(getUrl(request.url, drive.config.basePath).fpath);
+    const fpath = canonical(mount.fpath);
     const destination = request.headers.get('Destination');
     if (!destination) return new Response(null, { status: 403 });
-    const destPath = canonical(getUrl(destination, drive.config.basePath).fpath);
+    const destPath = canonical(resolveDestinationMount(destination, request.url, mount, drive.config, principal).fpath);
     if (fpath === '/' || destPath === '/') return new Response(null, { status: 403 });
 
     let depth: '0' | 'infinity' = 'infinity';
@@ -312,10 +320,10 @@ async function handleTransfer(drive: DriveClient, request: Request, copy: boolea
     }
 }
 
-export function handleMove(drive: DriveClient, request: Request): Promise<Response> {
-    return handleTransfer(drive, request, false);
+export function handleMove(drive: DriveClient, request: Request, mount: DavMount, principal: AuthPrincipal): Promise<Response> {
+    return handleTransfer(drive, request, mount, principal, false);
 }
 
-export function handleCopy(drive: DriveClient, request: Request): Promise<Response> {
-    return handleTransfer(drive, request, true);
+export function handleCopy(drive: DriveClient, request: Request, mount: DavMount, principal: AuthPrincipal): Promise<Response> {
+    return handleTransfer(drive, request, mount, principal, true);
 }

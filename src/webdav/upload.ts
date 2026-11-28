@@ -1,6 +1,6 @@
 import { type DriveClient } from '../drive/client';
 import { FOLDER_MIME, UPLOAD_RESULT_FIELDS, type UploadedDriveFile, fileEtag } from '../drive/types';
-import { StatusError, getUrl, splitPath } from '../http';
+import { StatusError, splitPath } from '../http';
 import {
     type ExpectedChecksum,
     applyCompletionHeaders,
@@ -10,6 +10,7 @@ import {
     parseUnixMtime,
     verifyDriveChecksums,
 } from '../tus/protocol';
+import { type DavMount } from './mount';
 import { uploadChunks } from './upload-stream';
 
 async function finalizePutSuccess(
@@ -285,8 +286,8 @@ async function putResumable(
     }
 }
 
-export async function handlePut(drive: DriveClient, request: Request): Promise<Response> {
-    const { fpath } = getUrl(request.url, drive.config.basePath);
+export async function handlePut(drive: DriveClient, request: Request, mount: DavMount): Promise<Response> {
+    const { fpath } = mount;
     if (fpath.slice(-1) === '/') return new Response(null, { status: 405 });
     const rawContentLength = request.headers.get('Content-Length');
     const contentLength = parseNonNegativeInt(rawContentLength);

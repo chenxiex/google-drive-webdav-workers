@@ -1,53 +1,28 @@
-import { SELF, env, createExecutionContext, waitOnExecutionContext } from 'cloudflare:test';
+import { env } from 'cloudflare:test';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import worker from '../../src/index';
 import { UPLOAD_CHUNK_SIZE } from '../../src/webdav/upload-stream';
-import { AUTH, FOLDER, ORIGIN, installDriveMock, recordMutations, seedStandardDrive } from '../support/client';
-import { MockDrive } from '../support/mock-drive';
+import { AUTH, FOLDER, ORIGIN, recordMutations, seedStandardDrive } from '../support/client';
+import type { MockDrive } from '../support/mock-drive';
+import { invokeWorker, request, useMockDrive } from '../support/worker';
+import { filledStream } from '../support/upload-stream';
 
 const MEGA = 1024 * 1024;
 
+const fixture = useMockDrive(seedStandardDrive);
 let drive: MockDrive;
-
-const request = (path: string, init: RequestInit = {}): Promise<Response> =>
-	SELF.fetch(ORIGIN + path, {
-		...init,
-		headers: { ...AUTH, ...(init.headers as Record<string, string> | undefined) },
-	});
 
 // Use the handler directly for framing/disconnect tests: SELF's HTTP bridge
 // can reject malformed Content-Length headers or turn producer errors into EOF.
-async function directPut(path: string, body: BodyInit | null, headers: Record<string, string> = {}): Promise<Response> {
-	const ctx = createExecutionContext();
-	const response = await worker.fetch(new Request(ORIGIN + path, {
+function directPut(path: string, body: BodyInit | null, headers: Record<string, string> = {}): Promise<Response> {
+	return invokeWorker(env as Env, path, {
 		method: 'PUT',
 		headers: { ...AUTH, ...headers },
 		body,
-	}), env as Env, ctx);
-	await waitOnExecutionContext(ctx);
-	return response;
-}
-
-// Zero queueing makes the producer's reads observable independently of
-// the request transport's own buffering.
-function stream(size: number, onPull = () => {}, onCancel = () => {}): ReadableStream<Uint8Array> {
-	let offset = 0;
-	return new ReadableStream({
-		pull(controller) {
-			onPull();
-			if (offset === size) { controller.close(); return; }
-			const length = Math.min(256 * 1024, size - offset);
-			controller.enqueue(new Uint8Array(length).fill(97));
-			offset += length;
-		},
-		cancel: onCancel,
-	}, { highWaterMark: 0 });
+	});
 }
 
 beforeEach(() => {
-	drive = new MockDrive();
-	seedStandardDrive(drive);
-	installDriveMock(drive);
+	drive = fixture.drive;
 });
 
 function expectFilledBytes(content: Uint8Array | undefined, expectedLength: number, fillByte: number): void {
@@ -91,18 +66,6 @@ describe('PUT and MKCOL', () => {
 		});
 		expect(res.status).toBe(204);
 		expect(drive.findById('file-a')).toMatchObject({ id: 'file-a', size: 11, content: new TextEncoder().encode('hello world') });
-	});
-
-	it('PUT larger than one chunk persists the complete resumable upload', async () => {
-		const res = await request('/webdav/big.dat', {
-			method: 'PUT',
-			headers: { 'Content-Type': 'application/octet-stream' },
-			body: 'x'.repeat(11 * MEGA),
-		});
-		expect(res.status).toBe(201);
-		const created = drive.children('root').find((f) => f.name === 'big.dat');
-		expect(created?.size).toBe(11 * MEGA);
-		expectFilledBytes(created?.content, 11 * MEGA, 120);
 	});
 
 	it('MKCOL on an existing resource returns 405', async () => {
@@ -157,10 +120,10 @@ describe('PUT and MKCOL', () => {
 	});
 
 	it.each([
-		['single-chunk new', '/webdav/resumable-single.dat', 6 * MEGA, 201],
-		['exact-chunk new', '/webdav/resumable-exact.dat', UPLOAD_CHUNK_SIZE, 201],
-		['overwrite existing', '/webdav/a.txt', 6 * MEGA, 204],
-	] as const)('PUT with known Content-Length > 5 MiB (%s) completes with %i', async (_, path, size, expectedStatus) => {
+		['single-chunk create', '/webdav/resumable-single.dat', 5 * MEGA + 1, 201],
+		['exact-chunk overwrite', '/webdav/a.txt', UPLOAD_CHUNK_SIZE, 204],
+		['multi-chunk create', '/webdav/resumable-multi.dat', UPLOAD_CHUNK_SIZE + 1, 201],
+	] as const)('PUT with known Content-Length > 5 MiB (%s at %s, %i bytes) returns %i', async (_, path, size, expectedStatus) => {
 		const res = await request(path, {
 			method: 'PUT',
 			headers: { 'Content-Type': 'application/octet-stream' },
@@ -169,6 +132,7 @@ describe('PUT and MKCOL', () => {
 		expect(res.status).toBe(expectedStatus);
 		const file = drive.children('root').find(f => f.name === path.split('/').at(-1));
 		expect(Number(file?.size)).toBe(size);
+		if (expectedStatus === 204) expect(file?.id).toBe('file-a');
 		expectFilledBytes(file?.content, size, 120);
 	});
 
@@ -186,8 +150,8 @@ describe('PUT and MKCOL', () => {
 	it.each([
 		['/webdav/docs', 'empty', '', {}],
 		['/webdav/docs', 'small', 'hello', { 'Content-Type': 'text/plain' }],
-		['/webdav/docs', 'unknown-length', () => stream(3), {}],
-		['/webdav/docs', 'large-resumable', () => stream(6 * MEGA), { 'Content-Length': String(6 * MEGA) }],
+		['/webdav/docs', 'unknown-length', () => filledStream(3), {}],
+		['/webdav/docs', 'large-resumable', () => filledStream(6 * MEGA), { 'Content-Length': String(6 * MEGA) }],
 		['/webdav/docs/', 'trailing-slash', 'hello', { 'Content-Type': 'text/plain' }],
 	] as const)('rejects PUT overwriting existing folder %s (%s) with 405 without mutating Drive', async (path, _kind, payload, headers) => {
 		const methods: string[] = [];
@@ -214,10 +178,13 @@ describe('PUT and MKCOL', () => {
 	});
 });
 
-describe('known-length PUT validation', () => {
-	it.each(['init', 'init-403', 'missing-location', 'chunk', 'range', 'early-complete', 'final-incomplete'] as const)(
-		'stops without reporting false success after %s failure on > 5 MiB PUT',
-		async failure => {
+describe('PUT stream validation', () => {
+	it.each([
+		...['init', 'init-403', 'missing-location', 'chunk', 'range', 'early-complete', 'final-incomplete'].map(failure => ({ failure, knownLength: true })),
+		...['init', 'chunk', 'range', 'early-complete', 'final-incomplete'].map(failure => ({ failure, knownLength: false })),
+	])(
+		'stops after $failure failure (known length=$knownLength)',
+		async ({ failure, knownLength }) => {
 			let chunks = 0;
 			let produced = 0;
 			const cancel = vi.fn();
@@ -235,17 +202,17 @@ describe('known-length PUT validation', () => {
 				if (failure === 'chunk') return Promise.resolve(new Response('injected', { status: 503 }));
 				if (failure === 'range') return Promise.resolve(new Response(null, { status: 308, headers: { Range: 'bytes=0-2' } }));
 				if (failure === 'early-complete') return Promise.resolve(new Response('{}', { status: 200 }));
-				return Promise.resolve(new Response(null, { status: 308, headers: { Range: `bytes=0-${6 * MEGA - 1}` } }));
+				return Promise.resolve(new Response(null, { status: 308, headers: knownLength ? { Range: `bytes=0-${6 * MEGA - 1}` } : {} }));
 			});
-			const size = failure === 'final-incomplete' ? 6 * MEGA : 2 * UPLOAD_CHUNK_SIZE + 3;
-			const result = await directPut('/webdav/known-failed.dat', stream(size, () => produced++, cancel), {
-				'Content-Length': String(size),
+			const size = failure === 'final-incomplete' ? (knownLength ? 6 * MEGA : 3) : 2 * UPLOAD_CHUNK_SIZE + 3;
+			const result = await directPut('/webdav/failed.dat', filledStream(size, () => produced++, cancel), {
+				...(knownLength ? { 'Content-Length': String(size) } : {}),
 			});
 			const expectedStatus = failure === 'init' || failure === 'chunk' ? 503 : failure === 'init-403' ? 403 : 502;
 			expect(result.status).toBe(expectedStatus);
 			const expectedChunks = failure === 'init' || failure === 'init-403' || failure === 'missing-location' ? 0 : 1;
 			expect(chunks).toBe(expectedChunks);
-			expect(drive.children('root').some(file => file.name === 'known-failed.dat')).toBe(false);
+			expect(drive.children('root').some(file => file.name === 'failed.dat')).toBe(false);
 			if (failure !== 'final-incomplete') {
 				expect(produced).toBeLessThan(size / (256 * 1024));
 				expect(cancel).toHaveBeenCalledOnce();
@@ -255,14 +222,14 @@ describe('known-length PUT validation', () => {
 
 	it.each([
 		['null-body-nonzero', 10, null],
-		['empty-stream-large', 6 * MEGA, () => stream(0)],
-		['zero-length-nonempty-body', 0, () => stream(3)],
-		['small-truncated', 10, () => stream(3)],
-		['small-oversized', 10, () => stream(15)],
-		['resumable-single-truncated', 6 * MEGA, () => stream(3)],
-		['chunk-boundary-truncated', 11 * MEGA, () => stream(UPLOAD_CHUNK_SIZE)],
-		['resumable-second-chunk-truncated', 11 * MEGA, () => stream(UPLOAD_CHUNK_SIZE + 3)],
-		['resumable-oversized', UPLOAD_CHUNK_SIZE, () => stream(UPLOAD_CHUNK_SIZE + 1)],
+		['empty-stream-large', 6 * MEGA, () => filledStream(0)],
+		['zero-length-nonempty-body', 0, () => filledStream(3)],
+		['small-truncated', 10, () => filledStream(3)],
+		['small-oversized', 10, () => filledStream(15)],
+		['resumable-single-truncated', 6 * MEGA, () => filledStream(3)],
+		['chunk-boundary-truncated', 11 * MEGA, () => filledStream(UPLOAD_CHUNK_SIZE)],
+		['resumable-second-chunk-truncated', 11 * MEGA, () => filledStream(UPLOAD_CHUNK_SIZE + 3)],
+		['resumable-oversized', UPLOAD_CHUNK_SIZE, () => filledStream(UPLOAD_CHUNK_SIZE + 1)],
 	] as const)(
 		'rejects Content-Length mismatch (%s) with 400 without committing a file',
 		async (_label, declaredLength, makeBody) => {
@@ -283,18 +250,28 @@ describe('known-length PUT validation', () => {
 		},
 	);
 
-	it.each([10, 11 * MEGA])(
-		'returns 502 without committing when incoming stream errors for Content-Length %i',
-		async declaredLength => {
+	it.each([
+		{ declaredLength: 10, knownLength: true, failAfter: 1 },
+		{ declaredLength: 11 * MEGA, knownLength: true, failAfter: 43 },
+		{ declaredLength: 11 * MEGA, knownLength: false, failAfter: 43 },
+	])(
+		'returns 502 when the input stream errors (length=$declaredLength, known=$knownLength)',
+		async ({ declaredLength, knownLength, failAfter }) => {
 			let pulls = 0;
-			const failAfter = declaredLength <= 5 * MEGA ? 1 : 43;
 			const body = new ReadableStream<Uint8Array>({
 				pull(controller) {
 					if (++pulls > failAfter) { controller.error(new Error('injected input failure')); return; }
 					controller.enqueue(new Uint8Array(declaredLength <= 5 * MEGA ? 4 : 256 * 1024));
 				},
 			}, { highWaterMark: 0 });
-			const res = await directPut('/webdav/input-error.dat', body, { 'Content-Length': String(declaredLength) });
+			const original = drive.handle.bind(drive);
+			let chunks = 0;
+			vi.spyOn(drive, 'handle').mockImplementation((input, init) => {
+				if (new Headers(init?.headers).has('Content-Range')) chunks++;
+				return original(input, init);
+			});
+			const res = await directPut('/webdav/input-error.dat', body, knownLength ? { 'Content-Length': String(declaredLength) } : {});
+			expect(chunks).toBe(declaredLength <= 5 * MEGA ? 0 : 1);
 			expect(res.status).toBe(502);
 			expect(drive.children('root').some(file => file.name === 'input-error.dat')).toBe(false);
 		},
@@ -309,20 +286,20 @@ describe('known-length PUT validation', () => {
 			}
 			return original(input, init);
 		});
-		const res = await directPut('/webdav/early-reject.dat', stream(size), { 'Content-Length': String(size) });
+		const res = await directPut('/webdav/early-reject.dat', filledStream(size), { 'Content-Length': String(size) });
 		expect(res.status).toBe(403);
 		expect(drive.children('root').some(file => file.name === 'early-reject.dat')).toBe(false);
 	});
 });
 
 describe('unknown-length PUT', () => {
-
 	it.each([
-		['partial', 2 * UPLOAD_CHUNK_SIZE + 3, '/webdav/stream.dat', 201],
+		['partial', UPLOAD_CHUNK_SIZE + MEGA + 3, '/webdav/stream.dat', 201],
 		['exact', UPLOAD_CHUNK_SIZE, '/webdav/a.txt', 204],
 	] as const)('uploads %s EOF with a known final total, preserving bytes', async (_, size, path, status) => {
 		const ranges: string[] = [];
 		let produced = 0;
+		let pullsAtFirstChunk = 0;
 		const original = drive.handle.bind(drive);
 		vi.spyOn(drive, 'handle').mockImplementation((input, init) => {
 			const headers = new Headers(init?.headers);
@@ -330,78 +307,30 @@ describe('unknown-length PUT', () => {
 				expect(headers.has('X-Upload-Content-Length')).toBe(false);
 			}
 			if (headers.has('Content-Range')) {
-				if (!ranges.length && size > UPLOAD_CHUNK_SIZE) expect(produced).toBeLessThan(size / (256 * 1024));
+				if (!ranges.length) pullsAtFirstChunk = produced;
 				ranges.push(headers.get('Content-Range')!);
 			}
 			return original(input, init);
 		});
-		const response = await request(path, { method: 'PUT', body: stream(size, () => produced++) });
-		expect(response.status).toBe(status);
+		const response = await request(path, { method: 'PUT', body: filledStream(size, () => produced++) });
+		expect(response.status, response.ok ? '' : await response.text()).toBe(status);
+		if (size > UPLOAD_CHUNK_SIZE) expect(pullsAtFirstChunk).toBeLessThan(size / (256 * 1024));
 		const file = drive.children('root').find(f => f.name === path.split('/').at(-1));
 		expect(file?.size).toBe(size);
 		expectFilledBytes(file?.content, size, 97);
 		expect(ranges).toEqual(size === UPLOAD_CHUNK_SIZE
 			? [`bytes 0-${size - 1}/${size}`]
-			: [`bytes 0-${UPLOAD_CHUNK_SIZE - 1}/*`, `bytes ${UPLOAD_CHUNK_SIZE}-${2 * UPLOAD_CHUNK_SIZE - 1}/*`, `bytes ${2 * UPLOAD_CHUNK_SIZE}-${size - 1}/${size}`]);
+			: [`bytes 0-${UPLOAD_CHUNK_SIZE - 1}/*`, `bytes ${UPLOAD_CHUNK_SIZE}-${size - 1}/${size}`]);
 	});
 
 	it('creates and truncates empty streams without an unusable resumable session', async () => {
 		const handle = vi.spyOn(drive, 'handle');
 		for (const [path, status] of [['/webdav/empty.dat', 201], ['/webdav/a.txt', 204]] as const) {
-			expect((await request(path, { method: 'PUT', body: stream(0) })).status).toBe(status);
+			expect((await request(path, { method: 'PUT', body: filledStream(0) })).status).toBe(status);
 			const file = drive.children('root').find(f => f.name === path.split('/').at(-1));
 			expect(Number(file?.size)).toBe(0);
 		}
 		expect(handle.mock.calls.some(([input]) => String(input).includes('uploadType=resumable'))).toBe(false);
-	});
-
-	it.each(['init', 'chunk', 'range', 'early-complete', 'final-incomplete'] as const)(
-		'stops without retrying or reporting success after %s failure', async failure => {
-			let chunks = 0;
-			let produced = 0;
-			const cancel = vi.fn();
-			const original = drive.handle.bind(drive);
-			vi.spyOn(drive, 'handle').mockImplementation((input, init) => {
-				const url = String(input);
-				if (!url.includes('uploadType=resumable')) return original(input, init);
-				if (init?.method !== 'PUT') return failure === 'init'
-					? Promise.resolve(new Response('injected', { status: 503 })) : original(input, init);
-				chunks++;
-				if (failure === 'chunk') return Promise.resolve(new Response('injected', { status: 503 }));
-				if (failure === 'range') return Promise.resolve(new Response(null, { status: 308, headers: { Range: 'bytes=0-2' } }));
-				if (failure === 'early-complete') return Promise.resolve(new Response('{}', { status: 200 }));
-				return Promise.resolve(new Response(null, { status: 308 }));
-			});
-			const size = failure === 'final-incomplete' ? 3 : 4 * UPLOAD_CHUNK_SIZE;
-			const result = await directPut('/webdav/failed.dat', stream(size, () => produced++, cancel));
-			expect(result.status).toBe(failure === 'init' || failure === 'chunk' ? 503 : 502);
-			expect(chunks).toBe(failure === 'init' ? 0 : 1);
-			expect(drive.children('root').some(file => file.name === 'failed.dat')).toBe(false);
-			if (failure !== 'final-incomplete') {
-				// Transport may queue an input chunk, but must not drain the file.
-				expect(produced).toBeLessThan(size / (256 * 1024));
-				expect(cancel).toHaveBeenCalledOnce();
-			}
-		},
-	);
-
-	it('does not commit a truncated file when the incoming stream errors', async () => {
-		let pulls = 0;
-		const body = new ReadableStream<Uint8Array>({
-			pull(controller) {
-				if (++pulls > 43) { controller.error(new Error('injected input failure')); return; }
-				controller.enqueue(new Uint8Array(256 * 1024));
-			},
-		}, { highWaterMark: 0 });
-		const original = drive.handle.bind(drive);
-		let chunks = 0;
-		vi.spyOn(drive, 'handle').mockImplementation((input, init) => {
-			if (new Headers(init?.headers).has('Content-Range')) chunks++;
-			return original(input, init);
-		});
-		expect((await directPut('/webdav/input-error.dat', body)).status).toBe(502);
-		expect(chunks).toBe(1);
-		expect(drive.children('root').some(file => file.name === 'input-error.dat')).toBe(false);
 	});
 });
 

@@ -1,9 +1,7 @@
 import { type DurableObject } from 'cloudflare:workers';
 import { abortAllDurableObjects, env, listDurableObjectIds, runInDurableObject } from 'cloudflare:test';
-import { afterEach, beforeEach, expect, vi } from 'vitest';
-import { isolateCache } from '../../src/drive/cache';
-import { invalidateAccessToken } from '../../src/drive/oauth';
-import { clearFetchMock, drainUnmockedFetches } from './network';
+import { afterEach } from 'vitest';
+import { resetTestState } from './reset';
 
 async function clearAllDurableObjects(): Promise<void> {
 	// Abort live DO instances first (while mocks are still installed) so in-flight work stops cleanly.
@@ -31,21 +29,10 @@ async function clearAllDurableObjects(): Promise<void> {
 	}
 }
 
-beforeEach(() => {
-	drainUnmockedFetches();
-});
-
 afterEach(async () => {
-	await clearAllDurableObjects();
-	vi.restoreAllMocks();
-	vi.unstubAllGlobals();
-	vi.useRealTimers();
-	clearFetchMock();
-	isolateCache.clear();
-	const bindings = env as Partial<Env>;
-	if (bindings.CLIENT_ID && bindings.REFRESH_TOKEN) {
-		invalidateAccessToken({ client_id: bindings.CLIENT_ID, refresh_token: bindings.REFRESH_TOKEN });
+	try {
+		await clearAllDurableObjects();
+	} finally {
+		resetTestState();
 	}
-	const leaked = drainUnmockedFetches();
-	expect(leaked, `Unexpected unmocked outbound fetch call(s): ${leaked.join(', ')}`).toEqual([]);
 });

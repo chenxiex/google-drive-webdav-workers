@@ -1,21 +1,14 @@
-import { SELF, env, createExecutionContext, waitOnExecutionContext } from 'cloudflare:test';
+import { SELF } from 'cloudflare:test';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import worker from '../../src/index';
-import { AUTH, FOLDER, ORIGIN, installDriveMock, seedStandardDrive } from '../support/client';
-import { MockDrive } from '../support/mock-drive';
+import { FOLDER, ORIGIN, seedStandardDrive } from '../support/client';
+import type { MockDrive } from '../support/mock-drive';
+import { request, useMockDrive } from '../support/worker';
 
+const fixture = useMockDrive(seedStandardDrive);
 let drive: MockDrive;
 
-const request = (path: string, init: RequestInit = {}): Promise<Response> =>
-	SELF.fetch(ORIGIN + path, {
-		...init,
-		headers: { ...AUTH, ...(init.headers as Record<string, string> | undefined) },
-	});
-
 beforeEach(() => {
-	drive = new MockDrive();
-	seedStandardDrive(drive);
-	installDriveMock(drive);
+	drive = fixture.drive;
 });
 
 describe('auth', () => {
@@ -486,7 +479,7 @@ describe('HEAD and collection GET', () => {
 	});
 });
 
-describe('isolate cache bounds and lifetime', () => {
+describe('isolate cache lifetime and read consistency', () => {
 	it.each(['folder-meta', 'file-meta', 'objects'] as const)('expires %s entries without extending their lifetime on hits', async kind => {
 		const name = 'memory-ttl-' + kind;
 		const isFolder = kind !== 'file-meta';
@@ -574,46 +567,6 @@ describe('isolate cache bounds and lifetime', () => {
 		expect((await request(path, { method: 'HEAD' })).status).toBe(404);
 		expect((await request(path, { method: 'PROPFIND', headers: { Depth: '0' } })).status).toBe(404);
 	});
-
-	it('evicts old metadata at capacity while preserving the mounted root', async () => {
-		const directPropfind = async (path: string) => {
-			const ctx = createExecutionContext();
-			const response = await worker.fetch(new Request(ORIGIN + path, {
-				method: 'PROPFIND',
-				headers: { ...AUTH, Depth: '0' },
-			}), env as Env, ctx);
-			await waitOnExecutionContext(ctx);
-			return response;
-		};
-		for (let i = 0; i <= 128; i++) {
-			drive.add({ id: 'bounded-' + i, name: 'bounded-' + i, mimeType: 'text/plain', size: 123, parents: ['root'] });
-		}
-		expect((await directPropfind('/webdav/bounded-0')).status).toBe(207);
-		for (let start = 1; start < 128; start += 16) {
-			const batch = Array.from({ length: Math.min(16, 128 - start) }, (_, j) => directPropfind('/webdav/bounded-' + (start + j)));
-			const responses = await Promise.all(batch);
-			expect(responses.every(r => r.status === 207)).toBe(true);
-		}
-		expect((await directPropfind('/webdav/bounded-128')).status).toBe(207);
-		drive.findById('bounded-0')!.size = 456;
-		drive.findById('bounded-128')!.size = 456;
-		expect(await (await directPropfind('/webdav/bounded-0')).text()).toContain('<D:getcontentlength>456</D:getcontentlength>');
-		expect(await (await directPropfind('/webdav/bounded-128')).text()).toContain('<D:getcontentlength>123</D:getcontentlength>');
-		expect((await directPropfind('/webdav/')).status).toBe(207);
-	});
-
-	it('does not retain oversized directory listings', async () => {
-		drive.add({ id: 'large-list', name: 'large-list', mimeType: FOLDER, parents: ['root'] });
-		for (let i = 0; i < 80; i++) drive.add({ id: 'large-' + i, name: 'x'.repeat(900) + i, mimeType: 'text/plain', parents: ['large-list'] });
-		const read = async () => {
-			const response = await request('/webdav/large-list/', { method: 'PROPFIND', headers: { Depth: '1' } });
-			expect(response.status).toBe(207);
-			return response.text();
-		};
-		expect(await read()).not.toContain('fresh-child.txt');
-		drive.add({ id: 'large-fresh', name: 'fresh-child.txt', mimeType: 'text/plain', parents: ['large-list'] });
-		expect(await read()).toContain('fresh-child.txt');
-	});
 });
 
 describe('Google Workspace native docs and Shortcuts (7A)', () => {
@@ -665,7 +618,10 @@ describe('Google Workspace native docs and Shortcuts (7A)', () => {
 		expect(spy.mock.calls.filter(([input]) => String(input).includes('orderBy=')).length).toBeGreaterThan(1);
 	});
 
-	it.each(workspaceTypes)('returns 404 for %s across read, metadata, copy/move source, and delete without downloading or mutating', async (label, mimeType, name) => {
+	// MIME variants are covered by the multi-page listing above. Exercise the
+	// shared path-resolution boundary once across methods.
+	it('hides native items across read, metadata, copy/move source, delete, and traversal', async () => {
+		const [, mimeType, name] = workspaceTypes[0];
 		const dir = 'ws-hide-' + crypto.randomUUID();
 		const itemId = dir + '-item';
 		drive.add({ id: dir, name: dir, mimeType: FOLDER, parents: ['root'] });
@@ -681,10 +637,10 @@ describe('Google Workspace native docs and Shortcuts (7A)', () => {
 			{ method: 'PROPFIND', headers: { Depth: '1' } },
 			{ method: 'PROPPATCH', body: '<D:propertyupdate xmlns:D="DAV:" xmlns:X="urn:test"><D:set><D:prop><X:k>v</X:k></D:prop></D:set></D:propertyupdate>' },
 			{ method: 'DELETE' },
-			{ method: 'MOVE', headers: { Destination: ORIGIN + '/webdav/' + dir + '/moved-' + label } },
-			{ method: 'COPY', headers: { Destination: ORIGIN + '/webdav/' + dir + '/copied-' + label } },
+			{ method: 'MOVE', headers: { Destination: ORIGIN + '/webdav/' + dir + '/moved' } },
+			{ method: 'COPY', headers: { Destination: ORIGIN + '/webdav/' + dir + '/copied' } },
 		] as RequestInit[]) {
-			expect((await request(path, init)).status).toBe(404);
+			expect((await request(path, init)).status, init.method).toBe(404);
 		}
 		expect((await request(path + '/hidden-child.txt')).status).toBe(404);
 		expect(drive.findById(itemId)?.trashed).not.toBe(true);

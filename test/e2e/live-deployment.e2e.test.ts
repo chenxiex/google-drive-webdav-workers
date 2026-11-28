@@ -66,27 +66,32 @@ describe.skipIf(!LIVE_URL)('live deployed Worker + Drive E2E', () => {
 		expect(propRes.bodyText).toContain('small-e2e.bin');
 	});
 
-	it('streams resumable PUT (> 5 MiB) and verifies downloaded SHA-256', async () => {
-		const totalBytes = Math.round(parseMiB('LIVE_PUT_MB', 12) * 1024 * 1024);
-		const uploaded = await sandbox!.putStream('stream-e2e.bin', totalBytes);
-		expect([201, 204]).toContain(uploaded.status);
+    it.each([
+        {
+            kind: 'resumable PUT', name: 'stream-e2e.bin', sizeEnv: 'LIVE_PUT_MB',
+            upload: async (sandbox: LiveSandbox, name: string, totalBytes: number) => {
+                const uploaded = await sandbox.putStream(name, totalBytes);
+                expect([201, 204]).toContain(uploaded.status);
+                return uploaded;
+            },
+        },
+        {
+            kind: 'multi-chunk TUS', name: 'tus-e2e.bin', sizeEnv: 'LIVE_TUS_MB',
+            upload: async (sandbox: LiveSandbox, name: string, totalBytes: number) => {
+                const chunkBytes = Math.round(parseMiB('LIVE_TUS_CHUNK_MB', 4) * 1024 * 1024);
+                const uploaded = await sandbox.tusUpload(name, totalBytes, chunkBytes);
+                expect(uploaded.chunks).toBe(Math.ceil(totalBytes / chunkBytes));
+                return uploaded;
+            },
+        },
+    ])('uploads $kind and verifies downloaded bytes', async ({ name, sizeEnv, upload }) => {
+        const totalBytes = Math.round(parseMiB(sizeEnv, 12) * 1024 * 1024);
+        const uploaded = await upload(sandbox!, name, totalBytes);
 
-		const downloaded = await sandbox!.getAndHash('stream-e2e.bin');
-		expect(downloaded.status).toBe(200);
-		expect(downloaded.bytes).toBe(totalBytes);
-		expect(downloaded.sha256).toBe(uploaded.sha256);
-	}, 300_000);
-
-	it('completes multi-chunk TUS upload via Durable Object and verifies downloaded SHA-256', async () => {
-		const totalBytes = Math.round(parseMiB('LIVE_TUS_MB', 12) * 1024 * 1024);
-		const chunkBytes = Math.round(parseMiB('LIVE_TUS_CHUNK_MB', 4) * 1024 * 1024);
-		const uploaded = await sandbox!.tusUpload('tus-e2e.bin', totalBytes, chunkBytes);
-		expect(uploaded.chunks).toBe(Math.ceil(totalBytes / chunkBytes));
-
-		const downloaded = await sandbox!.getAndHash('tus-e2e.bin');
-		expect(downloaded.status).toBe(200);
-		expect(downloaded.bytes).toBe(totalBytes);
-		expect(downloaded.sha256).toBe(uploaded.sha256);
-		expect(String(downloaded.headers.etag || '')).not.toBe('');
-	}, 300_000);
+        const downloaded = await sandbox!.getAndHash(name);
+        expect(downloaded.status).toBe(200);
+        expect(downloaded.bytes).toBe(totalBytes);
+        expect(downloaded.sha256).toBe(uploaded.sha256);
+        expect(String(downloaded.headers.etag || '')).not.toBe('');
+    }, 300_000);
 });

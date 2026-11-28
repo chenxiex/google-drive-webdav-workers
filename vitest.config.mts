@@ -1,5 +1,6 @@
 import { defineConfig } from 'vitest/config';
 import { cloudflareTest } from '@cloudflare/vitest-pool-workers';
+import { workerBindings } from './test/support/drive-bindings';
 
 const compat = {
 	compatibilityDate: '2026-04-15',
@@ -8,13 +9,6 @@ const compat = {
 		AUTH_DO: { className: 'AuthStore', useSQLite: true },
 		SYNC_INDEX: { className: 'SyncIndex', useSQLite: true },
 	},
-};
-
-const davBindings = {
-	USERS: JSON.stringify({ test: 'pass' }),
-	CLIENT_ID: 'test-client-id',
-	CLIENT_SECRET: 'test-client-secret',
-	REFRESH_TOKEN: 'test-refresh-token-history',
 };
 
 export default defineConfig({
@@ -33,7 +27,7 @@ export default defineConfig({
 						main: 'src/index.ts',
 						miniflare: {
 							...compat,
-							bindings: davBindings,
+							bindings: workerBindings,
 							outboundService(request) {
 								throw new Error(`Blocked outbound network request in worker test: ${request.method} ${request.url}`);
 							},

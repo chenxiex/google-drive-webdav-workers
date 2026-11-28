@@ -1,10 +1,11 @@
-import { SELF, createExecutionContext, env, runInDurableObject, waitOnExecutionContext } from 'cloudflare:test';
+import { SELF, env, runInDurableObject } from 'cloudflare:test';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { base64UrlDecode, base64UrlEncode } from '../../src/auth/jwt';
-import worker from '../../src/index';
 import { AUTH, ORIGIN, basic } from '../support/client';
 import { MockDrive } from '../support/mock-drive';
 import { setFetchMock } from '../support/network';
+import { generateRsaPair } from '../support/rsa';
+import { invokeWorker as callWorker } from '../support/worker';
 
 const DESKTOP_ID = 'xdXOt13JKxym1B1QcEncf2XDkLAexMBFwiT9j6EfhhHFJhs2KM9jbjTmf8JBXE69';
 const DESKTOP_SECRET = 'UBntmLjC2yYCeHwsyj73Uwo9TAaecAetRwMw0xYcvNL9yRdLSUi0hUAHfvCHFeFh';
@@ -16,33 +17,8 @@ const ACCESS_TEAM = 'https://access-test.cloudflareaccess.com';
 
 const encoder = new TextEncoder();
 
-interface KeyFixture {
-    privateKey: CryptoKey;
-    pkcs8Pem: string;
-    publicJwk: JsonWebKey;
-}
-
-let signingFixture: KeyFixture;
-let accessFixture: KeyFixture;
-
-async function createRsaFixture(): Promise<KeyFixture> {
-    const pair = await crypto.subtle.generateKey(
-        {
-            name: 'RSASSA-PKCS1-v1_5',
-            modulusLength: 2048,
-            publicExponent: new Uint8Array([1, 0, 1]),
-            hash: 'SHA-256',
-        },
-        true,
-        ['sign', 'verify'],
-    ) as CryptoKeyPair;
-    const pkcs8 = new Uint8Array(await crypto.subtle.exportKey('pkcs8', pair.privateKey) as ArrayBuffer);
-    const b64 = btoa(String.fromCharCode(...pkcs8));
-    const lines = b64.match(/.{1,64}/g)?.join('\n') ?? b64;
-    const pkcs8Pem = `-----BEGIN PRIVATE KEY-----\n${lines}\n-----END PRIVATE KEY-----`;
-    const publicJwk = await crypto.subtle.exportKey('jwk', pair.publicKey) as JsonWebKey;
-    return { privateKey: pair.privateKey, pkcs8Pem, publicJwk };
-}
+let signingFixture: Awaited<ReturnType<typeof generateRsaPair>>;
+let accessFixture: Awaited<ReturnType<typeof generateRsaPair>>;
 
 async function signJwt(privateKey: CryptoKey, header: Record<string, unknown>, payload: Record<string, unknown>): Promise<string> {
     const h = base64UrlEncode(encoder.encode(JSON.stringify(header)));
@@ -90,13 +66,6 @@ function oidcBindings(overrides: Record<string, unknown> = {}): Env {
         OIDC_SIGNING_KID: 'worker-kid-1',
         ...overrides,
     } as unknown as Env;
-}
-
-async function callWorker(bindings: Env, url: string, init: RequestInit = {}): Promise<Response> {
-    const ctx = createExecutionContext();
-    const res = await worker.fetch(new Request(url.startsWith('http') ? url : ORIGIN + url, init), bindings, ctx);
-    await waitOnExecutionContext(ctx);
-    return res;
 }
 
 function installFetchRouter(drive?: MockDrive): void {
@@ -189,7 +158,7 @@ async function authorizeAndExchange(
 }
 
 beforeAll(async () => {
-    [signingFixture, accessFixture] = await Promise.all([createRsaFixture(), createRsaFixture()]);
+    [signingFixture, accessFixture] = await Promise.all([generateRsaPair(), generateRsaPair()]);
 });
 
 describe('OIDC auto-activation and config boundaries', () => {
@@ -335,7 +304,7 @@ describe('OIDC discovery, JWKS, authorize, token, and userinfo', () => {
         expect(location.searchParams.get('state')).toBe('s123');
     });
 
-    it.each(['basic', 'post'] as const)('completes Desktop confidential client flow (%s) with verifiable RS256 id_token, single-use code, and userinfo', async authMethod => {
+    it('completes Desktop Basic-auth flow with a verifiable RS256 ID token, single-use code, and userinfo', async () => {
         installFetchRouter();
         const bindings = oidcBindings();
         const nonce = 'nonce-' + crypto.randomUUID();
@@ -343,7 +312,7 @@ describe('OIDC discovery, JWKS, authorize, token, and userinfo', () => {
             clientId: DESKTOP_ID,
             redirectUri: DESKTOP_REDIRECT,
             clientSecret: DESKTOP_SECRET,
-            authMethod,
+            authMethod: 'basic',
             scope: 'openid offline_access email profile',
             nonce,
         });
@@ -415,6 +384,23 @@ describe('OIDC discovery, JWKS, authorize, token, and userinfo', () => {
         expect((await callWorker(bindings, '/oauth/userinfo', {
             headers: { Authorization: 'Bearer unknown-token' },
         })).status).toBe(401);
+    });
+
+    it('issues Desktop tokens with client credentials in the form body', async () => {
+        installFetchRouter();
+        const { tokens } = await authorizeAndExchange(oidcBindings(), {
+            clientId: DESKTOP_ID,
+            redirectUri: DESKTOP_REDIRECT,
+            clientSecret: DESKTOP_SECRET,
+            authMethod: 'post',
+            scope: 'openid offline_access',
+        });
+        expect(tokens).toMatchObject({
+            access_token: expect.any(String),
+            refresh_token: expect.any(String),
+            id_token: expect.any(String),
+            scope: 'openid offline_access',
+        });
     });
 
     it('completes Android public client flow (none + PKCE) and burns code on failed verifier', async () => {

@@ -1,14 +1,17 @@
-import { SELF, env, abortAllDurableObjects, runInDurableObject } from 'cloudflare:test';
+import { env, abortAllDurableObjects, runInDurableObject } from 'cloudflare:test';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { AUTH, FOLDER, ORIGIN, installDriveMock } from '../support/client';
-import { MockDrive } from '../support/mock-drive';
+import { FOLDER, installDriveMock } from '../support/client';
+import { type MockDrive } from '../support/mock-drive';
 import { setFetchMock } from '../support/network';
+import { request, useMockDrive } from '../support/worker';
 
 let drive: MockDrive;
 const TUS = { 'Tus-Resumable': '1.0.0' };
-const send = (url: string, init: RequestInit = {}) => SELF.fetch(new URL(url, ORIGIN), {
-    ...init, headers: { ...AUTH, ...TUS, ...Object.fromEntries(new Headers(init.headers)) },
-});
+function send(url: string, init: RequestInit = {}): Promise<Response> {
+    const headers = new Headers(init.headers);
+    if (!headers.has('Tus-Resumable')) headers.set('Tus-Resumable', TUS['Tus-Resumable']);
+    return request(url, { ...init, headers });
+}
 const create = async (length: number, name = crypto.randomUUID() + '.bin', metadata = '') => {
     const response = await send('/webdav/', { method: 'POST', headers: {
         'Upload-Length': String(length), 'Upload-Metadata': 'filename ' + btoa(name) + metadata,
@@ -35,7 +38,8 @@ const expectBytesEqual = (actual: Uint8Array | undefined, expected: Uint8Array) 
     }
 };
 
-beforeEach(() => { drive = new MockDrive(); installDriveMock(drive); });
+const fixture = useMockDrive();
+beforeEach(() => { drive = fixture.drive; });
 
 describe('durable TUS', () => {
     it('persists arbitrary PATCH tails across eviction and returns an exact completed receipt', async () => {

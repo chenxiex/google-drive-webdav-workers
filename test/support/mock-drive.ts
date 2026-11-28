@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { driveBindings } from './drive-bindings';
 
 export const FOLDER = 'application/vnd.google-apps.folder';
 
@@ -218,7 +219,11 @@ export class MockDrive {
 	private changeSeq = 0;
 	private changeLog: Array<{ token: number; fileId: string; removed: boolean; time: string }> = [];
 	private minValidChangeToken = 1;
-	constructor(private oauth = { clientId: 'test-client-id', clientSecret: 'test-client-secret', refreshToken: 'test-refresh-token-history' }) {}
+	constructor(private oauth = {
+		clientId: driveBindings.CLIENT_ID,
+		clientSecret: driveBindings.CLIENT_SECRET,
+		refreshToken: driveBindings.REFRESH_TOKEN,
+	}) {}
 
 	private recordChange(fileId: string, removed = false): void {
 		this.changeSeq++;
@@ -267,6 +272,16 @@ export class MockDrive {
 		return file;
 	}
 	add(file: DriveFile): DriveFile {
+		this.addFiles([file]);
+		return file;
+	}
+	/** Seed a fixture tree with a single pass to resolve inherited Trash state. */
+	addFiles(files: readonly DriveFile[]): void {
+		for (const file of files) this.insertFile(file);
+		this.refreshTrashState();
+		for (const file of files) this.recordChange(file.id, false);
+	}
+	private insertFile(file: DriveFile): void {
 		file.version ??= '1';
 		if (!file.mimeType.startsWith('application/vnd.google-apps.')) {
 			if (file.headRevisionId === undefined) file.headRevisionId = this.nextRevisionId();
@@ -282,9 +297,6 @@ export class MockDrive {
 		}
 		this.recordRevision(file);
 		this.files.push(file);
-		this.refreshTrashState();
-		this.recordChange(file.id, false);
-		return file;
 	}
 	private ensureChecksums(file: DriveFile): void {
 		if (file.mimeType.startsWith('application/vnd.google-apps.') || file.content === undefined) return;

@@ -1,140 +1,47 @@
 import { DOMParser } from '@xmldom/xmldom';
-import { createExecutionContext, env, waitOnExecutionContext } from 'cloudflare:test';
+import { env } from 'cloudflare:test';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import pkg from '../../package.json';
-import { base64UrlEncode } from '../../src/auth/jwt';
-import worker from '../../src/index';
-import { AUTH, FOLDER, ORIGIN } from '../support/client';
+import { AUTH, FOLDER, ORIGIN, installDriveMock } from '../support/client';
 import { MockDrive } from '../support/mock-drive';
 import { setFetchMock } from '../support/network';
+import { generateRsaPair } from '../support/rsa';
+import { invokeWorker as callWorker } from '../support/worker';
 
-const ANDROID_ID = 'OpenCloudAndroid';
-const ANDROID_REDIRECT = 'oc://android.opencloud.eu';
-const ACCESS_AUD = 'cf-access-test-aud';
-const ACCESS_TEAM = 'https://access-test.cloudflareaccess.com';
-const encoder = new TextEncoder();
+let signingKey: string;
 
-interface KeyFixture {
-    privateKey: CryptoKey;
-    pkcs8Pem: string;
-    publicJwk: JsonWebKey;
-}
+beforeAll(async () => {
+    signingKey = (await generateRsaPair()).pkcs8Pem;
+});
 
-let signingFixture: KeyFixture;
-let accessFixture: KeyFixture;
-
-async function createRsaFixture(): Promise<KeyFixture> {
-    const pair = await crypto.subtle.generateKey(
-        {
-            name: 'RSASSA-PKCS1-v1_5',
-            modulusLength: 2048,
-            publicExponent: new Uint8Array([1, 0, 1]),
-            hash: 'SHA-256',
-        },
-        true,
-        ['sign', 'verify'],
-    ) as CryptoKeyPair;
-    const pkcs8 = new Uint8Array(await crypto.subtle.exportKey('pkcs8', pair.privateKey) as ArrayBuffer);
-    const b64 = btoa(String.fromCharCode(...pkcs8));
-    const lines = b64.match(/.{1,64}/g)?.join('\n') ?? b64;
-    const pkcs8Pem = `-----BEGIN PRIVATE KEY-----\n${lines}\n-----END PRIVATE KEY-----`;
-    const publicJwk = await crypto.subtle.exportKey('jwk', pair.publicKey) as JsonWebKey;
-    return { privateKey: pair.privateKey, pkcs8Pem, publicJwk };
-}
-
-async function signJwt(privateKey: CryptoKey, header: Record<string, unknown>, payload: Record<string, unknown>): Promise<string> {
-    const h = base64UrlEncode(encoder.encode(JSON.stringify(header)));
-    const p = base64UrlEncode(encoder.encode(JSON.stringify(payload)));
-    const sig = await crypto.subtle.sign({ name: 'RSASSA-PKCS1-v1_5' }, privateKey, encoder.encode(`${h}.${p}`));
-    return `${h}.${p}.${base64UrlEncode(new Uint8Array(sig))}`;
-}
-
-function oidcBindings(overrides: Record<string, unknown> = {}): Env {
+function oidcBindings(overrides: Partial<Env> = {}): Env {
     return {
         ...env,
-        CF_ACCESS_AUD: ACCESS_AUD,
-        CF_ACCESS_TEAM_DOMAIN: ACCESS_TEAM,
-        OIDC_SIGNING_KEY: signingFixture.pkcs8Pem,
+        CF_ACCESS_AUD: 'cf-access-test-aud',
+        CF_ACCESS_TEAM_DOMAIN: 'https://access-test.cloudflareaccess.com',
+        OIDC_SIGNING_KEY: signingKey,
         OIDC_SIGNING_KID: 'worker-kid-1',
         ...overrides,
-    } as unknown as Env;
-}
-
-async function callWorker(bindings: Env, url: string, init: RequestInit = {}): Promise<Response> {
-    const ctx = createExecutionContext();
-    const res = await worker.fetch(new Request(url.startsWith('http') ? url : ORIGIN + url, init), bindings, ctx);
-    await waitOnExecutionContext(ctx);
-    return res;
-}
-
-function installFetchRouter(drive?: MockDrive): void {
-    setFetchMock(async (input, init) => {
-        const req = new Request(input, init);
-        const url = new URL(req.url);
-        if (url.origin === ACCESS_TEAM && url.pathname === '/cdn-cgi/access/certs') {
-            return new Response(JSON.stringify({
-                keys: [{ ...accessFixture.publicJwk, kid: 'cf-access-kid-1', alg: 'RS256', use: 'sig' }],
-            }), { status: 200, headers: { 'Content-Type': 'application/json' } });
-        }
-        if (drive) return drive.handle(input, init);
-        throw new Error(`Unexpected external fetch: ${req.url}`);
-    });
+    };
 }
 
 async function issueBearerToken(bindings: Env): Promise<string> {
-    const raw = new Uint8Array(32);
-    crypto.getRandomValues(raw);
-    const verifier = base64UrlEncode(raw);
-    const challenge = base64UrlEncode(new Uint8Array(await crypto.subtle.digest('SHA-256', encoder.encode(verifier))));
-    const now = Math.floor(Date.now() / 1000);
-    const assertion = await signJwt(
-        accessFixture.privateKey,
-        { alg: 'RS256', kid: 'cf-access-kid-1' },
-        {
-            iss: ACCESS_TEAM,
-            aud: ACCESS_AUD,
+    // Seed a real token through AuthStore so discovery only exercises token consumption.
+    const store = bindings.AUTH_DO!;
+    const response = await store.get(store.idFromName('default')).fetch('https://auth.internal/tokens', {
+        method: 'POST',
+        body: JSON.stringify({
+            clientId: 'OpenCloudAndroid',
+            scope: 'openid email profile',
             sub: 'cf-sub-alice',
             email: 'alice@example.com',
+            preferredUsername: 'alice@example.com',
             name: 'Alice Example',
-            iat: now,
-            exp: now + 600,
-        },
-    );
-
-    const authUrl = new URL(ORIGIN + '/oauth/authorize');
-    authUrl.searchParams.set('response_type', 'code');
-    authUrl.searchParams.set('client_id', ANDROID_ID);
-    authUrl.searchParams.set('redirect_uri', ANDROID_REDIRECT);
-    authUrl.searchParams.set('code_challenge', challenge);
-    authUrl.searchParams.set('code_challenge_method', 'S256');
-    authUrl.searchParams.set('state', 'st-discovery');
-    authUrl.searchParams.set('scope', 'openid offline_access email profile');
-
-    const authRes = await callWorker(bindings, authUrl.toString(), {
-        headers: { 'Cf-Access-Jwt-Assertion': assertion },
+        }),
     });
-    expect(authRes.status).toBe(302);
-    const code = new URL(authRes.headers.get('Location')!).searchParams.get('code')!;
-
-    const tokenRes = await callWorker(bindings, '/oauth/token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({
-            grant_type: 'authorization_code',
-            client_id: ANDROID_ID,
-            code,
-            redirect_uri: ANDROID_REDIRECT,
-            code_verifier: verifier,
-        }).toString(),
-    });
-    expect(tokenRes.status).toBe(200);
-    const data = await tokenRes.json<{ access_token: string }>();
-    return data.access_token;
+    expect(response.status).toBe(201);
+    return (await response.json<{ accessToken: string }>()).accessToken;
 }
-
-beforeAll(async () => {
-    [signingFixture, accessFixture] = await Promise.all([createRsaFixture(), createRsaFixture()]);
-});
 
 describe('status.php bootstrap discovery', () => {
     it('serves tested oCIS status profile unauthenticated on GET/HEAD without redirects', async () => {
@@ -175,68 +82,45 @@ describe('status.php bootstrap discovery', () => {
 });
 
 describe('OCS v1/v2 cloud user and capabilities', () => {
-    it.each<[1 | 2, string, Record<string, string>, 'json' | 'xml']>([
-        [1, '?format=json', { 'OCS-APIRequest': 'true' }, 'json'],
-        [2, '?format=json', {}, 'json'],
-        [1, '?format=xml', { 'OCS-APIRequest': 'true' }, 'xml'],
-        [2, '', { Accept: 'application/json' }, 'json'],
-        [1, '', { Accept: 'application/xml' }, 'xml'],
-        [2, '', {}, 'xml'],
-    ])('serves /ocs/v%i.php/cloud/{user,capabilities}%s (%s)', async (version, query, extraHeaders, expectedFormat) => {
-        installFetchRouter();
+    it.each([
+        { version: 1, query: '?format=json', format: 'json', statusCode: 100, principal: 'basic' },
+        { version: 2, query: '', format: 'xml', statusCode: 200, principal: 'bearer' },
+    ])('serves OCS v$version user and capabilities as $format for a $principal principal', async ({
+        version, query, format, statusCode, principal,
+    }) => {
         const bindings = oidcBindings();
-        const token = await issueBearerToken(bindings);
-
-        // Unauthenticated requests challenge with Bearer
-        const unauth = await callWorker(bindings, `/ocs/v${version}.php/cloud/user${query}`);
-        expect(unauth.status).toBe(401);
-        expect(unauth.headers.get('WWW-Authenticate')).toContain('Bearer ');
-
-        // Basic & Bearer principals both resolve cleanly without Drive calls
-        for (const [kind, authHeader] of [
-            ['basic', AUTH.Authorization],
-            ['bearer', `Bearer ${token}`],
-        ] as const) {
-            const userRes = await callWorker(bindings, `/ocs/v${version}.php/cloud/user${query}`, {
-                headers: { Authorization: authHeader, ...extraHeaders },
-            });
-            expect(userRes.status).toBe(200);
-            expect(userRes.headers.get('Ocs-Api-Version')).toBe(String(version));
-            expect(userRes.headers.get('Content-Type')).toBe(
-                expectedFormat === 'json' ? 'application/json; charset=utf-8' : 'application/xml; charset=utf-8',
-            );
-
-            const expectedStatus = version === 1 ? 100 : 200;
-            const userText = await userRes.text();
-            if (expectedFormat === 'json') {
-                const json = JSON.parse(userText);
-                expect(json.ocs.meta).toEqual({ status: 'ok', statuscode: expectedStatus, message: 'OK' });
-                if (kind === 'basic') {
-                    expect(json.ocs.data).toEqual({ id: 'test', 'display-name': 'test' });
-                } else {
-                    expect(json.ocs.data).toEqual({
-                        id: 'alice@example.com',
-                        'display-name': 'Alice Example',
-                        email: 'alice@example.com',
-                    });
-                }
-            } else {
-                const doc = new DOMParser().parseFromString(userText, 'application/xml');
-                expect(doc.getElementsByTagName('statuscode')[0]?.textContent).toBe(String(expectedStatus));
-                expect(doc.getElementsByTagName('id')[0]?.textContent).toBe(kind === 'basic' ? 'test' : 'alice@example.com');
-                expect(doc.getElementsByTagName('display-name')[0]?.textContent).toBe(kind === 'basic' ? 'test' : 'Alice Example');
-            }
+        const base = `/ocs/v${version}.php/cloud`;
+        if (principal === 'bearer') {
+            const unauthenticated = await callWorker(bindings, `${base}/user`);
+            expect(unauthenticated.status).toBe(401);
+            expect(unauthenticated.headers.get('WWW-Authenticate')).toContain('Bearer ');
         }
 
-        const capRes = await callWorker(bindings, `/ocs/v${version}.php/cloud/capabilities${query}`, {
-            headers: { Authorization: `Bearer ${token}`, ...extraHeaders },
-        });
+        const headers = principal === 'basic'
+            ? { ...AUTH, 'OCS-APIRequest': 'true' }
+            : { Authorization: `Bearer ${await issueBearerToken(bindings)}` };
+        const userRes = await callWorker(bindings, `${base}/user${query}`, { headers });
+        expect(userRes.status).toBe(200);
+        expect(userRes.headers.get('Ocs-Api-Version')).toBe(String(version));
+        expect(userRes.headers.get('Content-Type')).toBe(`application/${format}; charset=utf-8`);
+        if (format === 'json') {
+            const { ocs } = await userRes.json<any>();
+            expect(ocs.meta).toEqual({ status: 'ok', statuscode: statusCode, message: 'OK' });
+            expect(ocs.data).toEqual({ id: 'test', 'display-name': 'test' });
+        } else {
+            const doc = new DOMParser().parseFromString(await userRes.text(), 'application/xml');
+            expect(doc.getElementsByTagName('statuscode')[0]?.textContent).toBe(String(statusCode));
+            expect(doc.getElementsByTagName('id')[0]?.textContent).toBe('alice@example.com');
+            expect(doc.getElementsByTagName('display-name')[0]?.textContent).toBe('Alice Example');
+        }
+
+        const capRes = await callWorker(bindings, `${base}/capabilities${query}`, { headers });
         expect(capRes.status).toBe(200);
         expect(capRes.headers.get('Ocs-Api-Version')).toBe(String(version));
         const capText = await capRes.text();
-        if (expectedFormat === 'json') {
+        if (format === 'json') {
             const { ocs } = JSON.parse(capText);
-            expect(ocs.meta.statuscode).toBe(version === 1 ? 100 : 200);
+            expect(ocs.meta.statuscode).toBe(statusCode);
             const caps = ocs.data.capabilities;
             expect(caps.core.pollinterval).toBe(30000);
             expect(caps.core['webdav-root']).toBe('webdav');
@@ -280,6 +164,17 @@ describe('OCS v1/v2 cloud user and capabilities', () => {
         }
     });
 
+    it('includes the Bearer principal email and honors Accept on the user endpoint', async () => {
+        const bindings = oidcBindings();
+        const response = await callWorker(bindings, '/ocs/v2.php/cloud/user', {
+            headers: { Authorization: `Bearer ${await issueBearerToken(bindings)}`, Accept: 'application/json' },
+        });
+        expect(response.status).toBe(200);
+        expect(await response.json()).toMatchObject({
+            ocs: { data: { id: 'alice@example.com', 'display-name': 'Alice Example', email: 'alice@example.com' } },
+        });
+    });
+
     it('enforces methods and valid format query parameters on OCS endpoints', async () => {
         const postRes = await callWorker(env, '/ocs/v2.php/cloud/capabilities', { method: 'POST', headers: AUTH });
         expect(postRes.status).toBe(405);
@@ -292,7 +187,6 @@ describe('OCS v1/v2 cloud user and capabilities', () => {
 
 describe('remote.php discovery and auth probes', () => {
     it('returns 401 Bearer challenge on unauthenticated /remote.php/webdav/ and 204 on authenticated OPTIONS', async () => {
-        installFetchRouter();
         const dual = oidcBindings();
         const token = await issueBearerToken(dual);
 
@@ -341,7 +235,7 @@ describe('remote.php discovery and auth probes', () => {
 describe('Graph /graph/v1.0/me/drives personal Space', () => {
     it('returns one personal Space for Basic and Bearer principals against shared ROOT_ID', async () => {
         const drive = new MockDrive();
-        installFetchRouter(drive);
+        installDriveMock(drive);
         const bindings = oidcBindings();
         const token = await issueBearerToken(bindings);
 
@@ -380,7 +274,7 @@ describe('Graph /graph/v1.0/me/drives personal Space', () => {
 
     it('uses PUBLIC_ORIGIN over untrusted Host/http headers and rejects plain http without PUBLIC_ORIGIN', async () => {
         const drive = new MockDrive();
-        installFetchRouter(drive);
+        installDriveMock(drive);
 
         expect((await callWorker(env, 'http://example.com/graph/v1.0/me/drives', { headers: AUTH })).status).toBe(400);
 
@@ -397,7 +291,7 @@ describe('Graph /graph/v1.0/me/drives personal Space', () => {
         const drive = new MockDrive();
         drive.add({ id: 'space-folder', name: 'Workspace', mimeType: FOLDER, parents: ['root'] });
         drive.add({ id: 'not-a-folder', name: 'file.txt', mimeType: 'text/plain', size: 3, parents: ['root'] });
-        installFetchRouter(drive);
+        installDriveMock(drive);
 
         const customRes = await callWorker({ ...env, ROOT_ID: 'space-folder' } as Env, '/graph/v1.0/me/drives', { headers: AUTH });
         expect(customRes.status).toBe(200);

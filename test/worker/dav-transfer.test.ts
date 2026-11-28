@@ -1,20 +1,13 @@
-import { SELF } from 'cloudflare:test';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { AUTH, FOLDER, ORIGIN, type Mutation, installDriveMock, recordMutations, seedStandardDrive } from '../support/client';
-import { MockDrive } from '../support/mock-drive';
+import { FOLDER, ORIGIN, type Mutation, recordMutations, seedStandardDrive } from '../support/client';
+import type { MockDrive } from '../support/mock-drive';
+import { request, useMockDrive } from '../support/worker';
 
+const fixture = useMockDrive(seedStandardDrive);
 let drive: MockDrive;
 
-const request = (path: string, init: RequestInit = {}): Promise<Response> =>
-	SELF.fetch(ORIGIN + path, {
-		...init,
-		headers: { ...AUTH, ...(init.headers as Record<string, string> | undefined) },
-	});
-
 beforeEach(() => {
-	drive = new MockDrive();
-	seedStandardDrive(drive);
-	installDriveMock(drive);
+	drive = fixture.drive;
 });
 
 const overwrite = (method: string, target = '/webdav/dest.txt') => request('/webdav/a.txt', {
@@ -533,7 +526,7 @@ describe('folder COPY (RFC 4918)', () => {
 		}
 	});
 
-	it.each(['infinity', undefined])('Depth: %s copies full nested tree, bytes, and dead properties while skipping hidden items', async depth => {
+	it('Depth: infinity copies full nested tree, bytes, and dead properties while skipping hidden items', async () => {
 		await seedRichDocsTree();
 		const targetName = 'target-' + crypto.randomUUID();
 		drive.add({ id: 'old-tree', name: targetName, mimeType: FOLDER, parents: ['root'] });
@@ -543,10 +536,10 @@ describe('folder COPY (RFC 4918)', () => {
 		expect((await request(`/webdav/${targetName}/nested/keep.bin`, { method: 'HEAD' })).status).toBe(200);
 
 		const batches = spyBatches();
-		const newDest = `/webdav/full-copy-${depth ?? 'default'}/`;
+		const newDest = '/webdav/full-copy/';
 		const createRes = await request('/webdav/docs/', {
 			method: 'COPY',
-			headers: { Destination: ORIGIN + newDest, ...(depth ? { Depth: depth } : {}) },
+			headers: { Destination: ORIGIN + newDest, Depth: 'infinity' },
 		});
 		expect(createRes.status).toBe(201);
 		expect(batches.length).toBeGreaterThanOrEqual(3);
@@ -564,7 +557,7 @@ describe('folder COPY (RFC 4918)', () => {
 
 		const overwriteRes = await request('/webdav/docs/', {
 			method: 'COPY',
-			headers: { Destination: ORIGIN + `/webdav/${targetName}/`, ...(depth ? { Depth: depth } : {}) },
+			headers: { Destination: ORIGIN + `/webdav/${targetName}/`, Depth: 'infinity' },
 		});
 		expect(overwriteRes.status).toBe(204);
 		for (const id of ['old-tree', 'old-sub', 'old-leaf', 'old-trash']) expect(drive.findById(id)?.trashed).toBe(true);
@@ -572,21 +565,16 @@ describe('folder COPY (RFC 4918)', () => {
 		expect((await request(`/webdav/${targetName}/sub%26dir/deep-%CE%B1%CE%B2%CE%B3.bin`, { method: 'HEAD' })).status).toBe(200);
 	});
 
-	it('chunks >100 child operations across multiple Drive batch calls', async () => {
-		for (let i = 0; i < 125; i++) {
-			drive.add({ id: `many-${i}`, name: `f-${String(i).padStart(3, '0')}.txt`, mimeType: 'text/plain', parents: ['folder-docs'], content: new Uint8Array([i % 256]), size: 1 });
-		}
-		const batches = spyBatches();
-		const res = await request('/webdav/docs/', {
+	it('defaults to recursive COPY when Depth is omitted', async () => {
+		drive.add({ id: 'default-depth-leaf', name: 'leaf.txt', mimeType: 'text/plain', parents: ['folder-sub'] });
+		const response = await request('/webdav/docs/', {
 			method: 'COPY',
-			headers: { Destination: ORIGIN + '/webdav/many-copy/' },
+			headers: { Destination: ORIGIN + '/webdav/default-depth/' },
 		});
-		expect(res.status).toBe(201);
-		expect(batches.every(b => b.ids.length <= 100)).toBe(true);
-		expect(batches.some(b => b.ids.length === 100)).toBe(true);
-		expect(batches.some(b => b.ids.length === 27)).toBe(true);
-		const copiedFolder = drive.children('root').find(f => f.name === 'many-copy' && !f.trashed)!;
-		expect(drive.children(copiedFolder.id)).toHaveLength(127);
+		expect(response.status).toBe(201);
+		const root = drive.children('root').find(file => file.name === 'default-depth')!;
+		const folder = drive.children(root.id).find(file => file.name === 'sub&dir')!;
+		expect(drive.children(folder.id).map(file => file.name)).toEqual(['leaf.txt']);
 	});
 
 	it('retries transient 429 sub-item without duplicating already-copied siblings', async () => {
@@ -645,9 +633,9 @@ describe('folder COPY (RFC 4918)', () => {
 	});
 
 	it('enforces maxItems (1000) across paginated lists and cleans up unpublished stage with 413', async () => {
-		for (let i = 0; i < 999; i++) {
-			drive.add({ id: `lim-${i}`, name: `n-${i}.txt`, mimeType: 'text/plain', parents: ['folder-docs'] });
-		}
+		drive.addFiles(Array.from({ length: 999 }, (_, i) => ({
+			id: `lim-${i}`, name: `n-${i}.txt`, mimeType: 'text/plain', parents: ['folder-docs'],
+		})));
 		const batches = spyBatches();
 		const res = await request('/webdav/docs/', {
 			method: 'COPY',

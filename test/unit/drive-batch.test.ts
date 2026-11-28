@@ -127,26 +127,19 @@ describe('executeBatchWithRetry', () => {
 		expect(delays).toEqual([0, 300]);
 	});
 
-	it('does not retry non-retriable 403 sub-item and stops after exhausted 503 retries', async () => {
+	it.each([
+		[403, 1],
+		[503, 3],
+	])('returns sub-item status %i after %i batch attempts', async (status, attempts) => {
 		const reqs: DriveBatchRequest[] = [{ id: 'r0', method: 'POST', path: '/drive/v3/files', body: { name: 'a' } }];
-
-		setFetchMock(vi.fn(async (_input: any, init?: RequestInit) => {
+		setFetchMock(async (_input: any, init?: RequestInit) => {
 			const boundary = (init?.headers as Record<string, string>)['Content-Type'].match(/boundary=([^\s;]+)/)![1];
-			return batchHttpResponse(boundary, [{ id: 'r0', status: 403, body: '{"error":{"message":"forbidden"}}' }]);
-		}));
-		const b1 = { usedBatches: 0, maxBatches: 5 };
-		const r403 = await executeBatchWithRetry(reqs, async () => 'tok', b1, { delay: noopDelay });
-		expect(r403[0].status).toBe(403);
-		expect(b1.usedBatches).toBe(1);
-
-		setFetchMock(vi.fn(async (_input: any, init?: RequestInit) => {
-			const boundary = (init?.headers as Record<string, string>)['Content-Type'].match(/boundary=([^\s;]+)/)![1];
-			return batchHttpResponse(boundary, [{ id: 'r0', status: 503, body: '{"error":{"message":"down"}}' }]);
-		}));
-		const b2 = { usedBatches: 0, maxBatches: 5 };
-		const r503 = await executeBatchWithRetry(reqs, async () => 'tok', b2, { delay: noopDelay });
-		expect(r503[0].status).toBe(503);
-		expect(b2.usedBatches).toBe(3);
+			return batchHttpResponse(boundary, [{ id: 'r0', status, body: '{"error":{"message":"failed"}}' }]);
+		});
+		const budget = { usedBatches: 0, maxBatches: 5 };
+		const result = await executeBatchWithRetry(reqs, async () => 'tok', budget, { delay: noopDelay });
+		expect(result[0].status).toBe(status);
+		expect(budget.usedBatches).toBe(attempts);
 	});
 
 	it('retries outer 503 and rejects with 413 when batch budget is exhausted', async () => {

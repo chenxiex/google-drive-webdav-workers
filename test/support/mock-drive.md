@@ -12,6 +12,12 @@ pnpm test --run
 pnpm run build
 ```
 
+## Test fixtures
+
+- Worker suites can use `useMockDrive(seed)` from [worker.ts](worker.ts) for a fresh Drive per test. Pass a seed function or use `seedStandardDrive` from [client.ts](client.ts). Use `drive.addFiles(files)` when seeding large trees so inherited Trash state is calculated once.
+- Use `request()` for authenticated requests through Miniflare. Use `invokeWorker(bindings, path, init)` to supply custom bindings or exercise request framing directly. It waits for the request's execution context and takes authentication from `init.headers`.
+- The unit and Worker setup files share mock, timer, cache, and outbound-fetch cleanup. Worker setup also resets Durable Object storage between tests in each file.
+
 ## Modeled endpoints and verified API behavior
 
 | Endpoint | Modeled behavior & verified quirks |

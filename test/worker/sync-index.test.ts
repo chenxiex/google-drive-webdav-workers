@@ -1,28 +1,18 @@
 import { DOMParser } from '@xmldom/xmldom';
-import { SELF, abortAllDurableObjects, createExecutionContext, env, runInDurableObject, waitOnExecutionContext } from 'cloudflare:test';
+import { abortAllDurableObjects, env, runInDurableObject } from 'cloudflare:test';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import worker from '../../src/index';
 import { SYNC_POLL_INTERVAL_MS } from '../../src/sync/index-do';
-import { AUTH, FOLDER, ORIGIN, installDriveMock } from '../support/client';
-import { MockDrive } from '../support/mock-drive';
+import { FOLDER, ORIGIN } from '../support/client';
+import { type MockDrive } from '../support/mock-drive';
+import { basicHeaders, invokeWorker, request, useMockDrive } from '../support/worker';
 
 const DAV = 'DAV:';
 let drive: MockDrive;
 
 async function callWorker(path: string, init: RequestInit = {}, bindings: Env = env as Env): Promise<Response> {
-    if (bindings === (env as Env)) {
-        return SELF.fetch(ORIGIN + path, {
-            ...init,
-            headers: { ...AUTH, ...(init.headers as Record<string, string> | undefined) },
-        });
-    }
-    const ctx = createExecutionContext();
-    const res = await worker.fetch(new Request(ORIGIN + path, {
-        ...init,
-        headers: { ...AUTH, ...(init.headers as Record<string, string> | undefined) },
-    }), bindings, ctx);
-    await waitOnExecutionContext(ctx);
-    return res;
+    return bindings === env
+        ? request(path, init)
+        : invokeWorker(bindings, path, { ...init, headers: basicHeaders(init.headers) });
 }
 
 async function propfindTree(path: string, depth = '1', bindings: Env = env as Env): Promise<{ status: number; etags: Map<string, string>; names: string[] }> {
@@ -85,11 +75,8 @@ function parseGen(etag: string): { id: string; epoch: string; gen: number } {
     return { id: match[1], epoch: match[2], gen: Number(match[3]) };
 }
 
-beforeEach(() => {
-    drive = new MockDrive();
-    seedTree(drive);
-    installDriveMock(drive);
-});
+const fixture = useMockDrive(seedTree);
+beforeEach(() => { drive = fixture.drive; });
 
 describe('SyncIndex hot root.eTag and 30s throttle', () => {
     it('shares consistent root.eTag across Graph and PROPFIND and throttles changes.list for 30s', async () => {

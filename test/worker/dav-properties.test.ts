@@ -1,13 +1,12 @@
-import { SELF } from 'cloudflare:test';
 import { DOMParser } from '@xmldom/xmldom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { AUTH, FOLDER, ORIGIN, installDriveMock } from '../support/client';
-import { MockDrive } from '../support/mock-drive';
+import { FOLDER, ORIGIN } from '../support/client';
+import type { MockDrive } from '../support/mock-drive';
+import { request, useMockDrive } from '../support/worker';
 
 const DAV = 'DAV:';
 const OC = 'http://owncloud.org/ns';
 let drive: MockDrive;
-const request = (path: string, init: RequestInit = {}) => SELF.fetch(ORIGIN + path, { ...init, headers: { ...AUTH, ...(init.headers as Record<string, string>) } });
 const patch = (operations: string, path = '/webdav/a.txt') => request(path, { method: 'PROPPATCH', body: `<D:propertyupdate xmlns:D="DAV:" xmlns:X="urn:test" xmlns:G="urn:google:drive" xmlns:oc="http://owncloud.org/ns">${operations}</D:propertyupdate>` });
 const set = (properties: string) => `<D:set><D:prop>${properties}</D:prop></D:set>`;
 const remove = (properties: string) => `<D:remove><D:prop>${properties}</D:prop></D:remove>`;
@@ -21,11 +20,12 @@ function propStatus(text: string, namespace: string, name: string): string | nul
 const source = () => drive.findById('file-a')!;
 const mutationCalls = (spy: ReturnType<typeof vi.spyOn>) => spy.mock.calls.filter(([input, init]: any[]) => (init?.method || (input instanceof Request ? input.method : 'GET')) === 'PATCH');
 
-beforeEach(() => {
-    drive = new MockDrive();
+const fixture = useMockDrive(drive => {
     drive.add({ id: 'file-a', name: 'a.txt', mimeType: 'text/plain', size: 3, content: new TextEncoder().encode('abc'), parents: ['root'] });
     drive.add({ id: 'folder-docs', name: 'docs', mimeType: FOLDER, parents: ['root'] });
-    installDriveMock(drive);
+});
+beforeEach(() => {
+    drive = fixture.drive;
 });
 
 describe('persisted WebDAV properties', () => {
@@ -176,8 +176,6 @@ describe('persisted WebDAV properties', () => {
 
     it.each(['COPY', 'MOVE'])('preserves dead XML properties across %s', async method => {
         await patch(set('<X:label>carried</X:label>'));
-        // Worker in-memory caches outlive test fixtures. Use distinct targets
-        // so the MOVE fixture cannot see the prior COPY fixture's cached ID.
         const destination = '/webdav/destination-' + method.toLowerCase() + '.txt';
         expect((await request('/webdav/a.txt', { method, headers: { Destination: ORIGIN + destination } })).status).toBe(201);
         expect(value(await (await find(undefined, destination)).text(), 'urn:test', 'label')).toBe('carried');

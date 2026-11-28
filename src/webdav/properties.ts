@@ -1,6 +1,9 @@
 import { type DriveClient } from '../drive/client';
 import { FOLDER_MIME, fileEtag } from '../drive/types';
-import { StatusError, encodePath, errorStatus, escapeXml, getUrl, pathJoin } from '../http';
+import { StatusError, errorStatus, escapeXml, formatDavHref } from '../http';
+import { PERSONAL_SPACE_NAME, personalSpaceId } from '../ocis/profile';
+import { UPLOAD_FILE_PERM } from '../tus/protocol';
+import { type DavMount } from './mount';
 import { DavProperty, key as propertyKey, parseFind, parsePatch, propertyNameXml, readDeadProperties, writeDeadProperties } from './property-xml';
 
 const DAV_NAMESPACE = 'DAV:';
@@ -49,16 +52,31 @@ function propstat(xml: string, status: number, protectedProperty = false): strin
         + (protectedProperty ? '<D:error><D:cannot-modify-protected-property/></D:error>' : '') + '</D:propstat>';
 }
 
-function propertyResponse(path: string, folder: boolean, content: string): string {
-    if (folder && !path.endsWith('/')) path += '/';
-    return `<D:response><D:href>${escapeXml(encodePath(path))}</D:href>${content}</D:response>`;
+function propertyResponse(href: string, content: string): string {
+    return `<D:response><D:href>${escapeXml(href)}</D:href>${content}</D:response>`;
 }
 
-function multiStatus(content: string): Response {
-    return new Response(`<?xml version="1.0" encoding="UTF-8"?><D:multistatus xmlns:D="DAV:">${content}</D:multistatus>`, {
-        status: 207, headers: { 'Content-Type': 'application/xml; charset=utf-8', 'Cache-Control': 'no-store' },
-    });
+function multiStatus(content: string, extraHeaders?: Record<string, string>): Response {
+    return new Response(
+        `<?xml version="1.0" encoding="UTF-8"?><D:multistatus xmlns:D="DAV:" xmlns:oc="http://owncloud.org/ns">${content}</D:multistatus>`,
+        {
+            status: 207,
+            headers: {
+                'Content-Type': 'application/xml; charset=utf-8',
+                'Cache-Control': 'no-store',
+                ...extraHeaders,
+            },
+        },
+    );
 }
+
+const PROTECTED_DAV_PROPS = new Set([
+    'creationdate', 'getcontentlength', 'getcontenttype', 'getetag',
+    'resourcetype', 'supportedlock', 'lockdiscovery', 'quota-used-bytes', 'quota-available-bytes',
+]);
+const PROTECTED_OC_PROPS = new Set([
+    'id', 'fileid', 'spaceid', 'file-parent', 'name', 'permissions', 'size', 'has-preview',
+]);
 
 function isNativeProperty(property: DavProperty): boolean {
     return property.namespace === DAV_NAMESPACE && ['getlastmodified', 'lastmodified'].includes(property.name)
@@ -66,8 +84,49 @@ function isNativeProperty(property: DavProperty): boolean {
 }
 
 function isProtectedProperty(property: DavProperty): boolean {
-    return property.namespace === DAV_NAMESPACE && ['creationdate', 'getcontentlength', 'getcontenttype', 'getetag', 'resourcetype', 'supportedlock', 'lockdiscovery', 'quota-used-bytes', 'quota-available-bytes'].includes(property.name)
-        || property.namespace === DRIVE_NAMESPACE && !['description', 'starred', 'modifiedTime', 'folderColorRgb'].includes(property.name);
+    return (property.namespace === DAV_NAMESPACE && PROTECTED_DAV_PROPS.has(property.name))
+        || (property.namespace === DRIVE_NAMESPACE && !['description', 'starred', 'modifiedTime', 'folderColorRgb'].includes(property.name))
+        || (property.namespace === OC_NAMESPACE && PROTECTED_OC_PROPS.has(property.name));
+}
+
+function parsePropfindDepth(request: Request): '0' | '1' | Response {
+    const raw = request.headers.get('Depth');
+    if (raw === null) return '1';
+    const normalized = raw.trim().toLowerCase();
+    if (normalized === '0' || normalized === '1') return normalized;
+    if (normalized === 'infinity') {
+        return new Response('<?xml version="1.0" encoding="UTF-8"?><D:error xmlns:D="DAV:"><D:propfind-finite-depth/></D:error>', {
+            status: 403,
+            headers: { 'Content-Type': 'application/xml; charset=utf-8' },
+        });
+    }
+    return new Response('Invalid Depth header for PROPFIND; expected 0 or 1', { status: 400 });
+}
+
+function prefersReturnMinimal(request: Request): boolean {
+    const prefer = request.headers.get('Prefer');
+    if (!prefer) return false;
+    for (const part of prefer.split(',')) {
+        const token = part.split(';', 1)[0].trim();
+        if (/^return=(?:"minimal"|minimal)$/i.test(token)) return true;
+    }
+    return false;
+}
+
+function fileSizeString(file: { size?: string | number | null }): string {
+    if (typeof file.size === 'string') {
+        const trimmed = file.size.trim();
+        if (/^\d+$/.test(trimmed)) return trimmed;
+    }
+    if (typeof file.size === 'number' && Number.isFinite(file.size) && file.size >= 0) {
+        return String(Math.trunc(file.size));
+    }
+    return '0';
+}
+
+function ocPermissions(file: any, folder: boolean): string {
+    if (file?.capabilities?.canEdit === false) return 'R';
+    return folder ? 'RDNVCK' : UPLOAD_FILE_PERM;
 }
 
 const isIgnoredProperty = (property: DavProperty): boolean =>
@@ -121,31 +180,40 @@ function fileChecksums(file: any): string | undefined {
     return parts.length ? parts.join(' ') : undefined;
 }
 
-function davProperties(file: any, quota?: { used: string; available?: string }, folderEtagOverride?: string): Map<string, DavProperty> {
+function davProperties(
+    file: any,
+    options: {
+        spaceId: string;
+        isRoot: boolean;
+        quota?: { used: string; available?: string };
+        folderEtagOverride?: string;
+    },
+): Map<string, DavProperty> {
     const result = new Map<string, DavProperty>();
     const add = (name: string, value: unknown, namespace = DAV_NAMESPACE, raw = false) => {
         const prefix = namespace === DAV_NAMESPACE ? 'D' : namespace === OC_NAMESPACE ? 'oc' : 'G';
-        const property = { namespace, name, xml: `<${prefix}:${name}${namespace === DAV_NAMESPACE ? '' : ` xmlns:${prefix}="${namespace}"`}>${raw ? value : escapeXml(value)}</${prefix}:${name}>` };
+        const nsDecl = namespace === DAV_NAMESPACE || namespace === OC_NAMESPACE ? '' : ` xmlns:${prefix}="${namespace}"`;
+        const property = { namespace, name, xml: `<${prefix}:${name}${nsDecl}>${raw ? value : escapeXml(value)}</${prefix}:${name}>` };
         result.set(propertyKey(property), property);
     };
     const folder = file.mimeType === FOLDER_MIME;
     add('resourcetype', folder ? '<D:collection/>' : '', DAV_NAMESPACE, true);
     add('displayname', file.name || '');
     if (!folder) {
-        add('getcontentlength', Number(file.size) || 0);
+        add('getcontentlength', fileSizeString(file));
         add('getcontenttype', file.mimeType || 'application/octet-stream');
     }
-    const etag = folder ? (folderEtagOverride ?? fileEtag(file)) : fileEtag(file);
+    const etag = folder ? (options.folderEtagOverride ?? fileEtag(file)) : fileEtag(file);
     if (etag) add('getetag', etag);
     if (file.modifiedTime) add('getlastmodified', new Date(file.modifiedTime).toUTCString());
     if (file.createdTime) add('creationdate', file.createdTime);
     // Keep the existing empty lock capability element (Class 1, no locks).
     result.set(propertyKey({ namespace: DAV_NAMESPACE, name: 'supportedlock' }), { namespace: DAV_NAMESPACE, name: 'supportedlock', xml: '<D:supportedlock/>' });
-    if (quota) {
-        add('quota-used-bytes', quota.used);
+    if (options.quota) {
+        add('quota-used-bytes', options.quota.used);
         // No finite limit is reported for unlimited Drive accounts. Do not
         // invent zero free space or round int64 quotas through Number.
-        if (quota.available !== undefined) add('quota-available-bytes', quota.available);
+        if (options.quota.available !== undefined) add('quota-available-bytes', options.quota.available);
     }
     for (const name of ['description', 'starred', 'modifiedTime', 'createdTime', 'folderColorRgb']) {
         if (file[name] !== undefined) add(name, file[name], DRIVE_NAMESPACE);
@@ -154,6 +222,21 @@ function davProperties(file: any, quota?: { used: string; available?: string }, 
         if (property.removed) result.delete(key);
         else result.set(key, property);
     }
+    if (typeof file.id === 'string' && file.id) {
+        add('id', file.id, OC_NAMESPACE);
+        add('fileid', file.id, OC_NAMESPACE);
+    }
+    add('spaceid', options.spaceId, OC_NAMESPACE);
+    if (!options.isRoot && Array.isArray(file.parents) && typeof file.parents[0] === 'string' && file.parents[0]) {
+        add('file-parent', file.parents[0], OC_NAMESPACE);
+    }
+    const ocName = typeof file.name === 'string' && file.name ? file.name : (options.isRoot ? PERSONAL_SPACE_NAME : '');
+    if (ocName !== '') {
+        add('name', ocName, OC_NAMESPACE);
+    }
+    add('permissions', ocPermissions(file, folder), OC_NAMESPACE);
+    add('size', folder ? '0' : fileSizeString(file), OC_NAMESPACE);
+    add('has-preview', !folder && typeof file.thumbnailLink === 'string' && file.thumbnailLink.length > 0 ? '1' : '0', OC_NAMESPACE);
     if (!folder) {
         const checksums = fileChecksums(file);
         if (checksums) add('checksums', `<oc:checksum>${escapeXml(checksums)}</oc:checksum>`, OC_NAMESPACE, true);
@@ -161,9 +244,12 @@ function davProperties(file: any, quota?: { used: string; available?: string }, 
     return result;
 }
 
-export async function handlePropfind(drive: DriveClient, request: Request): Promise<Response> {
+export async function handlePropfind(drive: DriveClient, request: Request, mount: DavMount): Promise<Response> {
     const selection = parseFind(await readPropertyBody(request));
-    const { rpath, fpath } = getUrl(request.url, drive.config.basePath);
+    const depth = parsePropfindDepth(request);
+    if (depth instanceof Response) return depth;
+    const returnMinimal = prefersReturnMinimal(request);
+    const { fpath } = mount;
     if (drive.sync) {
         await drive.sync.poll();
     }
@@ -172,23 +258,31 @@ export async function handlePropfind(drive: DriveClient, request: Request): Prom
     // The mapping root is otherwise synthetic; properties belong to the
     // actual Drive folder, including a configured ROOT_ID.
     if (fpath === '/') metadata = await drive.getPropertyMetadata(metadata.id);
-    const depth = request.headers.get('Depth');
-    const files = [{ ...metadata, href: rpath }];
+    const files = [{ ...metadata, href: formatDavHref(mount.hrefBase, mount.segments, metadata.mimeType === FOLDER_MIME) }];
     if (metadata.mimeType === FOLDER_MIME) {
         if (drive.sync) {
             await drive.sync.getGeneration(metadata.id);
         }
         if (depth !== '0') {
-            files.push(...(await drive.getObjects(metadata.id)).map(file => ({ ...file, href: pathJoin(rpath, file.name) })));
+            files.push(...(await drive.getObjects(metadata.id)).map(file => ({
+                ...file,
+                href: formatDavHref(mount.hrefBase, [...mount.segments, file.name], file.mimeType === FOLDER_MIME),
+            })));
         }
     }
     const folderIds = files.filter(file => file.mimeType === FOLDER_MIME).map(file => file.id as string);
     const folderEtags = drive.sync && folderIds.length > 0
         ? await drive.sync.getFolderEtags(folderIds)
         : undefined;
+    const spaceId = personalSpaceId(drive.config.rootId);
     const quota = metadata.mimeType === FOLDER_MIME && depth === '0' && fpath === '/' ? await drive.getQuota() : undefined;
     const responses = files.map((file, index) => {
-        const properties = davProperties(file, index === 0 ? quota : undefined, folderEtags?.get(file.id));
+        const properties = davProperties(file, {
+            spaceId,
+            isRoot: index === 0 && fpath === '/',
+            quota: index === 0 ? quota : undefined,
+            folderEtagOverride: folderEtags?.get(file.id),
+        });
         const requested = selection.mode === 'prop' ? selection.properties
             : [...properties.values(), ...selection.properties.filter(prop => !properties.has(propertyKey(prop)))];
         const found: string[] = [], missing: string[] = [];
@@ -197,15 +291,19 @@ export async function handlePropfind(drive: DriveClient, request: Request): Prom
             if (value) found.push(selection.mode === 'propname' ? propertyNameXml(value) : value.xml);
             else missing.push(propertyNameXml(prop));
         }
-        return propertyResponse(file.href, file.mimeType === FOLDER_MIME,
-            (found.length || !missing.length ? propstat(found.join(''), 200) : '') + (missing.length ? propstat(missing.join(''), 404) : ''));
+        const include200 = found.length > 0 || !missing.length || returnMinimal;
+        const include404 = missing.length > 0 && !returnMinimal;
+        return propertyResponse(
+            file.href,
+            (include200 ? propstat(found.join(''), 200) : '') + (include404 ? propstat(missing.join(''), 404) : ''),
+        );
     });
-    return multiStatus(responses.join(''));
+    return multiStatus(responses.join(''), returnMinimal ? { 'Preference-Applied': 'return=minimal' } : undefined);
 }
 
-export async function handleProppatch(drive: DriveClient, request: Request): Promise<Response> {
+export async function handleProppatch(drive: DriveClient, request: Request, mount: DavMount): Promise<Response> {
     const operations = parsePatch(await readPropertyBody(request));
-    const { rpath, fpath } = getUrl(request.url, drive.config.basePath);
+    const { fpath } = mount;
     const resolved = await drive.getMetadata(fpath);
     if (!resolved) return new Response(null, { status: 404 });
     // Read the current property document, not the path cache: this is the
@@ -248,9 +346,10 @@ export async function handleProppatch(drive: DriveClient, request: Request): Pro
             }
         }
     }
+    const targetHref = formatDavHref(mount.hrefBase, mount.segments, metadata.mimeType === FOLDER_MIME);
     const result = (fallback: number) => {
         const unique = new Map(operations.map(({ property }) => [propertyKey(property), property]));
-        return multiStatus(propertyResponse(rpath, metadata.mimeType === FOLDER_MIME,
+        return multiStatus(propertyResponse(targetHref,
             [...unique].map(([key, property]) => {
                 const error = errors.get(key);
                 return propstat(propertyNameXml(property), error?.status || fallback, error?.protected);

@@ -13,13 +13,14 @@ import {
 import { type RuntimeConfig, resolveConfig } from './config';
 import { DriveClient } from './drive/client';
 import { getAccessToken, invalidateAccessToken } from './drive/oauth';
-import { decodePath, errorStatus } from './http';
+import { errorStatus } from './http';
 import { handleGraphMeDrives } from './ocis/graph';
 import { handleOcsCapabilities, handleOcsUser } from './ocis/ocs';
 import { type AuthPrincipal, handleOcisDavOptions, handleStatusPhp } from './ocis/profile';
 import { SyncIndexClient } from './sync/client';
 import { handleTusCreate, handleTusUpload } from './tus/handler';
 import { handleDelete, handleGet, handleHead, handleLock, handleMkcol, handleOptions } from './webdav/handler';
+import { classifyDavPrefix, resolveDavMount } from './webdav/mount';
 import { handlePropfind, handleProppatch } from './webdav/properties';
 import { handleCopy, handleMove } from './webdav/transfer';
 import { handlePut } from './webdav/upload';
@@ -200,67 +201,62 @@ export async function handleRequest(request: Request, env: Env, _ctx?: Execution
             if (missingDrive) return missingDrive;
             return await handleGraphMeDrives(request, config, createDriveClient(config, env));
         }
-        if (pathname === '/remote.php/webdav' || pathname.startsWith('/remote.php/webdav/')) {
-            const auth = await authenticateRequest(request, env, config, { preferBearer: true });
-            if (auth instanceof Response) return auth;
-            if (method === 'OPTIONS' && (pathname === '/remote.php/webdav' || pathname === '/remote.php/webdav/')) {
-                return handleOcisDavOptions();
-            }
+        const davPrefix = classifyDavPrefix(pathname, config);
+        if (!davPrefix) {
             return new Response('404 Not Found', { status: 404 });
         }
-        if (pathname.startsWith('/remote.php/dav/files/')) {
-            const auth = await authenticateRequest(request, env, config, { preferBearer: true });
-            if (auth instanceof Response) return auth;
-            decodePath(request.url);
-            return new Response('404 Not Found', { status: 404 });
-        }
-
-        const basePath = config.basePath;
-        if (pathname + '/' === basePath) {
+        if ('redirect' in davPrefix) {
             const u = new URL(request.url);
             u.pathname += '/';
             return Response.redirect(u.toString(), 301);
         }
-        if (!pathname.startsWith(basePath)) {
+
+        const auth = await authenticateRequest(request, env, config, { preferBearer: davPrefix.preferBearer });
+        if (auth instanceof Response) return auth;
+
+        const mount = resolveDavMount(pathname, config, auth);
+        if (!mount) {
             return new Response('404 Not Found', { status: 404 });
         }
 
-        const auth = await authenticateRequest(request, env, config, { preferBearer: false });
-        if (auth instanceof Response) return auth;
+        if (method === 'OPTIONS' && mount.kind === 'remote-webdav' && mount.fpath === '/') {
+            return handleOcisDavOptions();
+        }
 
         const missingDrive = assertDriveConfigured(config);
         if (missingDrive) return missingDrive;
 
         const owner = auth.owner;
         const drive = createDriveClient(config, env);
-        const isTusPath = pathname.startsWith(basePath + 'tus_uploads/');
 
         switch (method) {
             case 'OPTIONS':
-                return handleOptions(isTusPath);
+                return handleOptions(mount.isTusPath);
             case 'PROPFIND':
-                return await handlePropfind(drive, request);
+                return await handlePropfind(drive, request, mount);
             case 'PROPPATCH':
-                return await handleProppatch(drive, request);
+                return await handleProppatch(drive, request, mount);
             case 'MKCOL':
-                return await handleMkcol(drive, request);
+                return await handleMkcol(drive, request, mount);
             case 'GET':
-                return await handleGet(drive, request);
+                return await handleGet(drive, request, mount);
             case 'HEAD':
-                return await (isTusPath ? handleTusUpload(drive, env, owner, request) : handleHead(drive, request));
+                return await (mount.isTusPath
+                    ? handleTusUpload(drive, env, owner, request, mount)
+                    : handleHead(drive, request, mount));
             case 'PUT':
-                return await handlePut(drive, request);
+                return await handlePut(drive, request, mount);
             case 'POST':
-                return await handleTusCreate(drive, env, owner, request);
+                return await handleTusCreate(drive, env, owner, request, mount);
             case 'PATCH':
-                if (isTusPath) return await handleTusUpload(drive, env, owner, request);
+                if (mount.isTusPath) return await handleTusUpload(drive, env, owner, request, mount);
                 break;
             case 'MOVE':
-                return await handleMove(drive, request);
+                return await handleMove(drive, request, mount, auth);
             case 'COPY':
-                return await handleCopy(drive, request);
+                return await handleCopy(drive, request, mount, auth);
             case 'DELETE':
-                return await handleDelete(drive, request);
+                return await handleDelete(drive, request, mount);
             case 'LOCK':
             case 'UNLOCK':
                 return handleLock();

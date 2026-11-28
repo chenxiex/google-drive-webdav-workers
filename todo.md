@@ -81,7 +81,7 @@
   - 利用 Google Drive 最终提交返回的原生摘要字段校验客户端声明的 whole-file `checksum`（及 TUS `POST` / 普通 `PUT` 的 `OC-Checksum` 头）；已于 2026-11-24 实测 `resumable` 终块 `200` 与 `multipart`/`media`/0 字节截断均立刻返回匹配的 `md5Checksum`/`sha1Checksum`/`sha256Checksum`；仅元数据创建空文件 `POST /drive/v3/files` 只返回 `md5Checksum`，故 0 字节上传直接在 Worker 侧比对空字节摘要常量；不匹配时新建文件移入回收站并返回 `400`/`460`（触发 Android 立即清理 TUS 状态）、覆盖文件返回 `400`/`460` 并由 Drive Revisions 兜底；处理条件覆盖（`If-Match` 失配按标准返回 `412 Precondition Failed`，`#11`，不照搬 oCIS 8.2.3 的 `409`），并在完成响应返回实际 `ETag`/`OC-FileID`/`OC-Perm`；上传完成后立即清理 DO 状态与闹钟（`deleteAll()` + `deleteAlarm()`，`13B`），后续 `HEAD`/`PATCH` 返回 `404`（与 TUS 规范及 oCIS 8.2.3 一致），0 字节 `POST` 免建 DO，24h 闹钟仅清理未完成孤儿会话。
   - 通过实际 Worker 兼容层验证 `10,000,000` 字节 POST（余 `38,528` mod 256 KiB）、Android `10,240,000` 字节块（余 `16,384` mod 256 KiB）及 10 MiB / 不规则 / 变块续传的跨块对齐与尾块持久恢复。
 
-- [ ] **OC-07：按矩阵验收统一路由与 DAV 语义**
+- [x] **OC-07：按矩阵验收统一路由与 DAV 语义**
   - 实现并验收统一路由（`9.3`）：通用 WebDAV 默认 `/webdav/`（校验 `WEBDAV_PATH` 不与 `/` 或 oCIS 保留前缀冲突）、常驻 `/dav/spaces/<spaceId>/...`、`/remote.php/webdav/...`、`/remote.php/dav/files/<username>/...`，单次段解码、`$`/`%24` 等价、全站缺父统一返回 409（`9.2B`）、全站非 TUS `PATCH` 统一返回 405（`9.1A`）。
   - 验收 `4A-1` 统一 v3 ETag（`GET`/`HEAD`/`PROPFIND` 共用 `headRevisionId`、`revisions/{headRevisionId}?alt=media` 不可变读取与实时 `If-Range`）、`PROPFIND` `Content-Type: application/xml; charset=utf-8`、`Prefer: return=minimal`、`oc:*` 属性（含 `10.2A` `oc:checksums` 真实摘要动态计算与 `PROPPATCH` 静默忽略、非空 `oc:permissions`、`oc:has-preview` `"1"`/`"0"`）、`7A` 原生文档过滤；验收 `PUT`/`TUS` `If-Match` 失配返回 `412`（`#11`）、`PUT` `OC-Checksum` 校验（`400`）及 `8B` 文件夹 COPY（`Depth: 0` / `infinity` 与预算上限）。
 

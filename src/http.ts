@@ -45,15 +45,48 @@ export const splitPath = (path: string): { name: string; parent: string } => {
 // the value has to be escaped with a backslash.
 export const escapeQuery = (value: string): string => value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 
-// Decode a raw pathname a single time. Refusing to decode malformed input
-// (e.g. a literal "%zz") keeps a client from coercing the worker into a 500.
-export const decodePath = (url: string): string => {
+// Decode a raw pathname or path segment a single time. Refusing to decode
+// malformed input (e.g. a literal "%zz") keeps a client from coercing the worker into a 500.
+export const decodeSegment = (rawSegment: string): string => {
     try {
-        return decodeURIComponent(new URL(url, 'http://localhost').pathname);
+        return decodeURIComponent(rawSegment);
     } catch {
         throw new StatusError('Invalid path encoding', 400);
     }
 };
+
+export const decodePath = (url: string): string => {
+    return decodeSegment(new URL(url, 'http://localhost').pathname);
+};
+
+export function decodeRelativeSegments(rawTail: string): {
+    segments: string[];
+    hasTrailingSlash: boolean;
+    fpath: string;
+} {
+    const hasTrailingSlash = rawTail.endsWith('/');
+    const segments: string[] = [];
+    for (const rawSegment of rawTail.split('/')) {
+        if (!rawSegment) continue;
+        const decoded = decodeSegment(rawSegment);
+        if (decoded === '.' || decoded === '..') {
+            throw new StatusError('Invalid path traversal', 400);
+        }
+        if (decoded.includes('/') || decoded.includes('\\') || /[\x00-\x1f\x7f]/.test(decoded)) {
+            throw new StatusError('Invalid path segment', 400);
+        }
+        segments.push(decoded);
+    }
+    const fpath = segments.length === 0 ? '/' : '/' + segments.join('/') + (hasTrailingSlash ? '/' : '');
+    return { segments, hasTrailingSlash, fpath };
+}
+
+export function formatDavHref(hrefBase: string, segments: readonly string[], isFolder: boolean): string {
+    const base = hrefBase.endsWith('/') ? hrefBase : hrefBase + '/';
+    if (segments.length === 0) return base;
+    const encoded = segments.map(encodeURIComponent).join('/');
+    return base + encoded + (isFolder ? '/' : '');
+}
 
 export const getUrl = (url: string, basePath: string): { rpath: string; fpath: string } => {
     const rpath = decodePath(url);

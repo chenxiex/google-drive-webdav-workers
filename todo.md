@@ -91,8 +91,9 @@
   - 支持认证 DAV GET `?preview=1` 及 `x/y/c` 参数校验（`x`/`y` 为 `1..4096`、`c` 最长 512 且非空失配时绕过 30s 叶子缓存）与一致的 `oc:has-preview` 属性（仅对可见文件的有效 `https://` `thumbnailLink` 返回 `"1"`，否则 `"0"`）。
   - 由 Worker 无状态流式代理请求 Drive `thumbnailLink`（当前不附带 Google 访问令牌（实测预签名链接免鉴权）、最多跟随 2 跳受信任 Google HTTPS 重定向、前置 `If-None-Match` `304` 短路、校验非 SVG `image/*` 并直接流式透传且不做 Worker 内存缓冲/上限与自动重试、不回退原文件字节、不向客户端暴露 Google URL），复用现有 30s 元数据缓存并返回客户端缓存头（`Cache-Control: private, max-age=300`、`ETag`、`Vary: Authorization`），按语义映射 `404`/`429`/`502`。
 
-- [ ] **OC-09：全生命周期故障恢复测试（mock 对齐后）**
-  - 使用已对齐的 Drive mock 注入故障：tail/inflight 标记落盘后中断、Google 已接收但丢响应、客户端确认丢失、最后提交丢响应、offset 冲突、部分确认与限流；验证 Worker/DO 重启后通过 `HEAD` + Drive `Range` 恢复无重复或丢字节且最终 SHA256 一致。
+- [x] **OC-09：全生命周期故障恢复测试（mock 对齐后）**
+  - [运行时重启测试](test/unit/tus-runtime-restart.test.ts) 在 tail 与 inflight 标记写入后、Drive 接收数据前中止 Miniflare Worker/DO，复用 SQLite 存储重启并通过 `HEAD` 恢复续传。
+  - [Worker 故障测试](test/worker/tus.test.ts) 覆盖 Drive 已接收数据或已提交文件后响应丢失、客户端确认丢失、offset 冲突、部分确认及限流。验证 `HEAD` 与 Drive `Range` 恢复到正确偏移、按不同块大小续传、已确认字节不重发，并通过 DAV 下载校验 SHA-256。Drive 已提交但响应体中断时，保留会话供 `HEAD` 重新获取提交结果。
 
 - [ ] **OC-10：多端实机同步与真实部署验收**
   - 通过 Staging Worker + `wrangler tail`/脱敏日志完成 Linux/Windows Desktop 7.1.1 双向同步（含单实例 WebFinger `404` 回退、实际 OAuth 回环、轮询节奏与 VFS）及 OpenCloud Android 1.3.1 上传/下载/预览/Custom Tabs 登录实机流量采集与验收，保留 rclone 回归。

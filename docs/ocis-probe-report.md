@@ -103,12 +103,17 @@ To resolve remaining `OC-02` protocol ambiguities without a headless GUI environ
 - **Graph `/graph/v1.0/me/drives`**: Desktop `Space::setDrive()` checks `root.eTag`, whereas `ETagWatcher::slotSpaceChanged()` reads top-level `OAIDrive::getETag()` (`space->eTag()`), so **both top-level `eTag` and `root.eTag` must be populated and updated together**; `drive.id` must equal `root.id`. `root.webDavUrl` must use literal `$` and **omit any trailing slash** because Android `RemoteFile.getRemotePathFromUrl` URL-decodes the href before splitting by `spaceWebDavUrl`. `quota`, `owner`, `special`, `webUrl`, `description`, and `virtual/shares` are all safe to omit.
 - **DAV, TUS, & Conflicts**: Desktop requires `PROPFIND` `Content-Type: application/xml; charset=utf-8` and non-empty `oc:permissions` (`" WDNVCKRSMmz"`). Android strictly parses `oc:has-preview` as `text == "1"` (`"1"`/`"0"`). Desktop journal resume sends `HEAD <tus-location>` **without** `Tus-Resumable` (`propagateuploadtus.cpp:123`), so TUS `HEAD` must tolerate an omitted header. Android uses TUS for files `>= 10,240,000` B with `10,240,000`-byte `PATCH`es, sends per-chunk `Upload-Checksum: sha1 <base64>` on data-bearing `POST` and `PATCH` (fast-failing on HTTP `400`/`460`), and sends `OC-Checksum: SHA1:<hex>` on smaller plain `PUT`s (while rclone 1.76.0 sends `OC-Checksum` on TUS `POST`); TUS responses advertise `Tus-Extension: creation,creation-with-upload,checksum` and `Tus-Checksum-Algorithm: sha1,md5,sha256` and verify per-chunk digests via Web Crypto. Both clients natively map `If-Match` `412 Precondition Failed` to conflict/rediscovery.
 
+## Offline upload recovery (`OC-09`)
+
+- The [runtime restart test](../test/unit/tus-runtime-restart.test.ts) stops Miniflare after the DO starts an outbound PUT and before MockDrive accepts its body. A new Worker runtime reopens the same SQLite storage. TUS `HEAD` probes Drive, which returns `308` without a `Range`, and preserves the previously acknowledged tail.
+- The [Worker tests](../test/worker/tus.test.ts) cover lost intermediate and final Drive responses, a disconnected final response body, a lost client acknowledgement, offset conflicts, and rate limits after a partial Drive acknowledgement. They check the recovered offsets and Drive request ranges, resume with different chunk sizes, and compare the DAV download SHA-256 with the source bytes.
+
 ## Remaining acceptance gaps and retained artifacts
 
 Open gates tracked in [todo.md](../todo.md#ocis-兼容层实施计划):
 - Runtime end-to-end validation and live Staging traffic capture (`wrangler tail` / sanitized logging) for Linux/Windows Desktop OAuth/sync/polling and OpenCloud Android Custom Tabs/preview/background transfers (`OC-10`).
 - Minimal-capability fallbacks, conditional TUS overwrite with Drive-digest checksum verification, Drive `changes.list` sync strategy (`OC-03`–`OC-08`).
-- Worker-to-Drive cross-boundary recovery under fault injection and live Cloudflare ingress limits (`OC-09`, `OC-10`).
+- Live Cloudflare ingress limits (`OC-10`).
 
 Retained probe artifacts:
 - Verified Desktop 7.1.1 & Android 1.3.1 source contracts and canonical fixtures: [ocis-client-contracts.json](ocis-client-contracts.json)

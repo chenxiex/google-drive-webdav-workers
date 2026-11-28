@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { env } from 'cloudflare:test';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { UPLOAD_CHUNK_SIZE } from '../../src/webdav/upload-stream';
@@ -7,6 +8,7 @@ import { invokeWorker, request, useMockDrive } from '../support/worker';
 import { filledStream } from '../support/upload-stream';
 
 const MEGA = 1024 * 1024;
+const sha1Hex = (data: Uint8Array) => createHash('sha1').update(data).digest('hex');
 
 const fixture = useMockDrive(seedStandardDrive);
 let drive: MockDrive;
@@ -521,5 +523,82 @@ describe('Google Workspace native docs and Shortcuts coexistence (7A)', () => {
 		expect(drive.findById(dir + '-doc')?.trashed).not.toBe(true);
 		expect(drive.findById(dir + '-shortcut')?.trashed).not.toBe(true);
 		expect(drive.findById(dir + '-sheet')?.trashed).not.toBe(true);
+	});
+});
+
+describe('oCIS PUT headers (X-OC-Mtime, OC-Checksum, If-Match, completion metadata)', () => {
+	it.each([
+		['zero-byte create', '/webdav/oc-empty.txt', new Uint8Array(0), 201],
+		['small create', '/webdav/oc-small.txt', new TextEncoder().encode('hello ocis'), 201],
+		['small overwrite', '/webdav/a.txt', new TextEncoder().encode('updated-a'), 204],
+		['resumable create', '/webdav/oc-large.bin', new Uint8Array(5 * MEGA + 7).fill(65), 201],
+	] as const)('honors X-OC-Mtime, OC-Checksum, and emits completion headers on %s', async (_label, path, body, status) => {
+		const res = await request(path, {
+			method: 'PUT',
+			headers: {
+				'Content-Type': 'application/octet-stream',
+				'X-OC-Mtime': '1700000000.25',
+				'OC-Checksum': 'SHA1:' + sha1Hex(body),
+			},
+			body,
+		});
+		expect(res.status).toBe(status);
+		const file = drive.children('root').find(f => f.name === path.split('/').at(-1))!;
+		expect(file.modifiedTime).toBe('2023-11-14T22:13:20.250Z');
+		expect(res.headers.get('ETag')).toBe(`"${file.id}-${file.headRevisionId}"`);
+		expect(res.headers.get('OC-FileID')).toBe(file.id);
+		expect(res.headers.get('OC-Perm')).toBe('RDNVW');
+	});
+
+	it.each([
+		['zero-byte create', '/webdav/bad-empty.bin', new Uint8Array(0), false],
+		['small create', '/webdav/bad-small.bin', new TextEncoder().encode('payload'), false],
+		['small overwrite', '/webdav/a.txt', new TextEncoder().encode('corrupted'), true],
+		['resumable create', '/webdav/bad-large.bin', new Uint8Array(5 * MEGA + 3).fill(66), false],
+	] as const)('rejects OC-Checksum mismatch on %s with 400 and protects Drive state', async (_label, path, body, isOverwrite) => {
+		const res = await request(path, {
+			method: 'PUT',
+			headers: {
+				'Content-Type': 'application/octet-stream',
+				'OC-Checksum': 'SHA1:' + '0'.repeat(40),
+			},
+			body,
+		});
+		expect(res.status).toBe(400);
+		if (isOverwrite) {
+			expect(drive.findById('file-a')?.trashed).not.toBe(true);
+		} else {
+			expect(drive.children('root').some(f => f.name === path.split('/').at(-1) && !f.trashed)).toBe(false);
+		}
+	});
+
+	it('evaluates strong If-Match preconditions and returns 412 on mismatch without mutating Drive', async () => {
+		const head = await request('/webdav/a.txt', { method: 'HEAD' });
+		const liveEtag = head.headers.get('ETag')!;
+
+		expect((await request('/webdav/a.txt', {
+			method: 'PUT',
+			headers: { 'If-Match': '"stale-etag"' },
+			body: 'blocked',
+		})).status).toBe(412);
+		expect((await request('/webdav/a.txt', {
+			method: 'PUT',
+			headers: { 'If-Match': `W/${liveEtag}` },
+			body: 'blocked',
+		})).status).toBe(412);
+		expect((await request('/webdav/missing-target.txt', {
+			method: 'PUT',
+			headers: { 'If-Match': '*' },
+			body: 'blocked',
+		})).status).toBe(412);
+		expect(drive.findById('file-a')?.size).toBe(123);
+
+		const ok = await request('/webdav/a.txt', {
+			method: 'PUT',
+			headers: { 'If-Match': liveEtag },
+			body: 'accepted',
+		});
+		expect(ok.status).toBe(204);
+		expect(drive.findById('file-a')?.content).toEqual(new TextEncoder().encode('accepted'));
 	});
 });

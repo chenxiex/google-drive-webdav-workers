@@ -1,6 +1,7 @@
 import { type DriveClient } from '../drive/client';
 import { FOLDER_MIME, fileEtag } from '../drive/types';
 import { StatusError, errorStatus, getUrl, splitPath } from '../http';
+import { TUS_CHECKSUM_ALGORITHMS, TUS_EXTENSIONS, TUS_VERSION } from '../tus/protocol';
 
 export function handleOptions(isTusPath = false): Response {
     // Locking (Class 2) is not implemented; PATCH is supported only on TUS upload URLs.
@@ -8,7 +9,19 @@ export function handleOptions(isTusPath = false): Response {
         'GET', 'HEAD', 'OPTIONS', 'PUT', 'PROPFIND', 'PROPPATCH', 'MKCOL', 'DELETE', 'MOVE', 'COPY', 'POST',
         ...(isTusPath ? ['PATCH'] : []),
     ].join(',');
-    return new Response(null, { status: 200, headers: { 'Allow': allowed_methods, 'DAV': '1', 'MS-Author-Via': 'DAV', 'Accept-Ranges': 'bytes', 'Tus-Version': '1.0.0', 'Tus-Extension': 'creation' } });
+    return new Response(null, {
+        status: 200,
+        headers: {
+            Allow: allowed_methods,
+            DAV: '1',
+            'MS-Author-Via': 'DAV',
+            'Accept-Ranges': 'bytes',
+            'Tus-Resumable': TUS_VERSION,
+            'Tus-Version': TUS_VERSION,
+            'Tus-Extension': TUS_EXTENSIONS,
+            'Tus-Checksum-Algorithm': TUS_CHECKSUM_ALGORITHMS,
+        },
+    });
 }
 
 export async function handleMkcol(drive: DriveClient, request: Request): Promise<Response> {

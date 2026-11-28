@@ -1,6 +1,16 @@
 export const FOLDER_MIME = 'application/vnd.google-apps.folder';
 export const GOOGLE_APPS_MIME_PREFIX = 'application/vnd.google-apps.';
 export const PROPERTY_FIELDS = 'id,version,headRevisionId,name,mimeType,size,modifiedTime,createdTime,description,starred,folderColorRgb,appProperties,parents,md5Checksum,sha1Checksum,sha256Checksum';
+export const UPLOAD_RESULT_FIELDS = 'id,version,headRevisionId,md5Checksum,sha1Checksum,sha256Checksum';
+
+export interface UploadedDriveFile {
+    id?: string;
+    version?: string | number;
+    headRevisionId?: string | null;
+    md5Checksum?: string;
+    sha1Checksum?: string;
+    sha256Checksum?: string;
+}
 
 export function fileEtag(file: {
     id?: string;

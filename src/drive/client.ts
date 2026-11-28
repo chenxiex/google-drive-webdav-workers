@@ -4,7 +4,7 @@ import { type SyncIndexClient } from '../sync/client';
 import { type SyncMutation } from '../sync/types';
 import { type MemoryCache, isolateCache, scopedCacheKey } from './cache';
 import { getAccessToken, invalidateAccessToken } from './oauth';
-import { FOLDER_MIME, PROPERTY_FIELDS, type StorageQuota, isVisibleDriveItem } from './types';
+import { FOLDER_MIME, PROPERTY_FIELDS, type StorageQuota, UPLOAD_RESULT_FIELDS, isVisibleDriveItem } from './types';
 
 const FOLDER_META_TTL = 300000;
 const FILE_META_TTL = 30000;
@@ -74,7 +74,7 @@ export class DriveClient {
     }
 
     async createEmptyFile(name: string, parentId: string, mimeType: string, modifiedTime?: string): Promise<Response> {
-        return fetch('https://www.googleapis.com/drive/v3/files', {
+        return fetch('https://www.googleapis.com/drive/v3/files?fields=' + encodeURIComponent(UPLOAD_RESULT_FIELDS), {
             method: 'POST',
             headers: await this.jsonHeaders(),
             body: JSON.stringify({ name, parents: [parentId], mimeType, modifiedTime }),
@@ -84,7 +84,7 @@ export class DriveClient {
     async truncateFile(fileId: string, mimeType: string): Promise<Response> {
         // A JSON PATCH with "{}" only touches metadata and would leave the
         // previous bytes behind, so truncate through the media endpoint.
-        return fetch(`https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`, {
+        return fetch(`https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media&fields=${encodeURIComponent(UPLOAD_RESULT_FIELDS)}`, {
             method: 'PATCH',
             headers: { 'Content-Type': mimeType, Authorization: 'Bearer ' + (await this.getAccessToken()) },
             body: new Uint8Array(0),
@@ -114,7 +114,7 @@ export class DriveClient {
     }): Promise<Response> {
         const { existingFileId, name, parentId, mimeType, contentLength, modifiedTime } = options;
         const api = 'https://www.googleapis.com/upload/drive/v3/files';
-        const initUrl = `${api}${existingFileId ? '/' + existingFileId : ''}?uploadType=resumable`;
+        const initUrl = `${api}${existingFileId ? '/' + existingFileId : ''}?uploadType=resumable&fields=${encodeURIComponent(UPLOAD_RESULT_FIELDS)}`;
         const headers: Record<string, string> = {
             'Content-Type': 'application/json',
             'X-Upload-Content-Type': mimeType,
@@ -134,7 +134,7 @@ export class DriveClient {
     }
 
     async uploadMediaStream(fileId: string, mimeType: string, body: ReadableStream<Uint8Array>): Promise<Response> {
-        return fetch(`https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`, {
+        return fetch(`https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media&fields=${encodeURIComponent(UPLOAD_RESULT_FIELDS)}`, {
             method: 'PATCH',
             headers: { 'Content-Type': mimeType, Authorization: 'Bearer ' + (await this.getAccessToken()) },
             body,
@@ -144,7 +144,7 @@ export class DriveClient {
     }
 
     async uploadMultipartStream(boundary: string, body: ReadableStream<Uint8Array>): Promise<Response> {
-        return fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
+        return fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=' + encodeURIComponent(UPLOAD_RESULT_FIELDS), {
             method: 'POST',
             headers: { 'Content-Type': `multipart/related; boundary=${boundary}`, Authorization: 'Bearer ' + (await this.getAccessToken()) },
             body,

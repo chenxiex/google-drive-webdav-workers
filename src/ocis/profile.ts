@@ -1,3 +1,5 @@
+import { TUS_CHECKSUM_ALGORITHMS, TUS_EXTENSIONS, TUS_VERSION } from '../tus/protocol';
+
 export interface AuthPrincipal {
     owner: string;
     id: string;
@@ -58,9 +60,10 @@ export function handleOcisDavOptions(): Response {
             DAV: '1',
             'MS-Author-Via': 'DAV',
             'Accept-Ranges': 'bytes',
-            'Tus-Resumable': '1.0.0',
-            'Tus-Version': '1.0.0',
-            'Tus-Extension': 'creation',
+            'Tus-Resumable': TUS_VERSION,
+            'Tus-Version': TUS_VERSION,
+            'Tus-Extension': TUS_EXTENSIONS,
+            'Tus-Checksum-Algorithm': TUS_CHECKSUM_ALGORITHMS,
         },
     });
 }

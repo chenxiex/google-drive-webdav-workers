@@ -196,6 +196,10 @@ function findBytes(bytes: Uint8Array, needle: Uint8Array, start = 0): number {
 	return -1;
 }
 
+function normalizeMimeType(mimeType: string): string {
+	return mimeType.split(';', 1)[0].trim() || 'application/octet-stream';
+}
+
 function multipart(bytes: Uint8Array, contentType: string): { metadata: Metadata; content: Uint8Array; mimeType: string } | Response {
 	const boundary = contentType.match(/boundary=(?:"([^"]+)"|([^;\s]+))/i);
 	if (!/^multipart\/related\b/i.test(contentType) || !boundary) return apiError(400, 'badRequest', 'Invalid multipart request.');
@@ -210,7 +214,7 @@ function multipart(bytes: Uint8Array, contentType: string): { metadata: Metadata
 	if (!/Content-Type:\s*application\/json\b/i.test(decoder.decode(bytes.subarray(0, firstHeader)))) return apiError(400, 'badRequest', 'Invalid multipart request.');
 	const metadata = parseMetadata(bytes.slice(firstHeader + 4, middle));
 	if (metadata instanceof Response) return metadata;
-	const mimeType = decoder.decode(bytes.subarray(middle, secondHeader)).match(/Content-Type:\s*([^\r\n]+)/i)?.[1] ?? 'application/octet-stream';
+	const mimeType = normalizeMimeType(decoder.decode(bytes.subarray(middle, secondHeader)).match(/Content-Type:\s*([^\r\n]+)/i)?.[1] ?? 'application/octet-stream');
 	return { metadata, content: bytes.slice(secondHeader + 4, end), mimeType };
 }
 
@@ -433,7 +437,7 @@ export class MockDrive {
 	): DriveFile | Response {
 		if (meta.createdTime !== undefined) unsupported('unverified timestamps on create');
 		if (meta.mimeType?.startsWith('application/vnd.google-apps.') && meta.mimeType !== FOLDER) unsupported('Google Workspace document conversion');
-		const resolvedMime = meta.mimeType || options.mimeType || 'application/octet-stream';
+		const resolvedMime = normalizeMimeType(meta.mimeType || options.mimeType || 'application/octet-stream');
 		const folderColorRgb = this.quantizeFolderColor(resolvedMime, meta.folderColorRgb);
 		if (folderColorRgb instanceof Response) return folderColorRgb;
 		const parents = meta.parents?.length ? meta.parents : ['root'];
@@ -462,7 +466,7 @@ export class MockDrive {
 			modifiedTime: meta.modifiedTime === undefined ? new Date().toISOString() : new Date(meta.modifiedTime).toISOString(),
 		});
 	}
-	private update(file: DriveFile, meta: Metadata, url: URL, content?: Uint8Array): Response | undefined {
+	private update(file: DriveFile, meta: Metadata, url: URL, content?: Uint8Array, resumableMimeType?: string): Response | undefined {
 		if (file === this.root) unsupported('writing My Drive root metadata');
 		if (meta.createdTime !== undefined) return apiError(403, 'fieldNotWritable', 'The resource body includes fields which are not directly writable.');
 		const appProperties = this.properties(file.appProperties, meta.appProperties);
@@ -510,14 +514,17 @@ export class MockDrive {
 		if (content !== undefined) {
 			file.content = content.slice(); file.size = content.length;
 			file.headRevisionId = this.nextRevisionId();
+			if (resumableMimeType && resumableMimeType !== 'application/octet-stream') {
+				file.mimeType = resumableMimeType;
+			}
 			delete file.md5Checksum;
 			delete file.sha1Checksum;
 			delete file.sha256Checksum;
 			this.hashedContent.delete(file);
 			this.registerThumbnail(file, { bumpVersion: true, rotateLink: true });
 			this.recordRevision(file);
-			// Updating a binary file's bytes preserves its existing MIME type,
-			// even when the media request declares a different Content-Type.
+			// Updating bytes via uploadType=media preserves existing MIME type;
+			// uploadType=resumable applies non-generic X-Upload-Content-Type.
 			if (meta.modifiedTime === undefined) file.modifiedTime = new Date().toISOString();
 		}
 		this.recordChange(file.id, false);
@@ -634,8 +641,8 @@ export class MockDrive {
 	private async uploadSession(url: URL, method: string, headers: Headers, bytes: Uint8Array): Promise<Response> {
 		if (method !== 'PUT') unsupported(`resumable session method ${method}`);
 		const session = this.sessions.get(url.searchParams.get('upload_id')!);
-		if (!session) return new Response(null, { status: 404 });
-		if (url.pathname !== '/upload/drive/v3/files' + (session.id ? '/' + session.id : '')) return new Response(null, { status: 404 });
+		if (!session) return new Response('Not Found', { status: 404, headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
+		if (url.pathname !== '/upload/drive/v3/files' + (session.id ? '/' + session.id : '')) return new Response('Not Found', { status: 404, headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
 		if (session.failure) return new Response(session.failure, { status: 400 });
 		const range = headers.get('Content-Range');
 		if (session.completed) return this.fileResponse(session.completed, session.fields);
@@ -663,7 +670,13 @@ export class MockDrive {
 			start = session.bytes.length;
 			if (!bytes.length) return progress();
 		}
-		if (start !== session.bytes.length || (total !== undefined && start + bytes.length > total)) return new Response('Invalid upload offset.', { status: 400 });
+		if (start > session.bytes.length) {
+			return new Response(
+				`Invalid request.  According to the Content-Range header, the upload offset is ${start} byte(s), which exceeds already uploaded size of ${session.bytes.length} byte(s).`,
+				{ status: 503, headers: { 'Content-Type': 'text/plain; charset=utf-8' } },
+			);
+		}
+		if (total !== undefined && start + bytes.length > total) return new Response('Invalid upload offset.', { status: 400 });
 		if ((total === undefined || start + bytes.length < total) && bytes.length < 262144) {
 			session.failure = `Invalid request.  The number of bytes uploaded is required to be equal or greater than 262144, except for the final request (it's recommended to be the exact multiple of 262144).  The received request contained ${bytes.length} bytes, which does not meet this requirement.`;
 			return new Response(session.failure, { status: 400 });
@@ -678,7 +691,7 @@ export class MockDrive {
 		if (session.id) {
 			const existing = this.findById(session.id);
 			if (!existing) return notFound(session.id);
-			const error = this.update(existing, session.metadata, url, accumulated);
+			const error = this.update(existing, session.metadata, url, accumulated, session.mimeType);
 			if (error) return error;
 			file = existing;
 		} else file = this.create(session.metadata, { content: accumulated, mimeType: session.mimeType });
@@ -871,14 +884,15 @@ export class MockDrive {
 				if (meta.parents && id) return apiError(403, 'fieldNotWritable', 'The parents field is not directly writable in update requests. Use the addParents and removeParents parameters instead.');
 				const error = this.validateParents(meta.parents ?? []); if (error) return error;
 				const sessionId = crypto.randomUUID();
-				this.sessions.set(sessionId, { id, metadata: meta, mimeType: headers.get('X-Upload-Content-Type') ?? meta.mimeType ?? file?.mimeType ?? 'application/octet-stream',
+				this.sessions.set(sessionId, { id, metadata: meta, mimeType: normalizeMimeType(headers.get('X-Upload-Content-Type') ?? meta.mimeType ?? file?.mimeType ?? 'application/octet-stream'),
 					total: headers.has('X-Upload-Content-Length') ? Number(headers.get('X-Upload-Content-Length')) : undefined, bytes: new Uint8Array(), fields });
 				return new Response(null, { status: 200, headers: { Location: `${API}${url.pathname}?uploadType=resumable&upload_id=${sessionId}` } });
 			}
-			let meta: Metadata = {}; let content = bytes; let mimeType = headers.get('Content-Type') ?? 'application/octet-stream';
+			const rawContentType = headers.get('Content-Type') ?? 'application/octet-stream';
+			let meta: Metadata = {}; let content = bytes; let mimeType = normalizeMimeType(rawContentType);
 			if (type === 'multipart') {
-				const parsed = multipart(bytes, mimeType); if (parsed instanceof Response) return parsed;
-				meta = parsed.metadata; content = parsed.content; mimeType = meta.mimeType ?? parsed.mimeType;
+				const parsed = multipart(bytes, rawContentType); if (parsed instanceof Response) return parsed;
+				meta = parsed.metadata; content = parsed.content; mimeType = normalizeMimeType(meta.mimeType ?? parsed.mimeType);
 			} else if (type !== 'media') unsupported(`uploadType ${type}`);
 			if (file) { const error = this.update(file, meta, url, content); return error ?? this.fileResponse(file, fields); }
 			const created = this.create(meta, { content, mimeType });

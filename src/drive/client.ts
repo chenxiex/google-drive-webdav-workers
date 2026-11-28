@@ -3,7 +3,7 @@ import { StatusError, TransferError, encodeQueryString, escapeQuery, trimString 
 import { type SyncIndexClient } from '../sync/client';
 import { type SyncMutation } from '../sync/types';
 import { type MemoryCache, isolateCache, scopedCacheKey } from './cache';
-import { getAccessToken, invalidateAccessToken } from './oauth';
+import { getAccessToken } from './oauth';
 import { FOLDER_MIME, PROPERTY_FIELDS, type StorageQuota, UPLOAD_RESULT_FIELDS, isGoogleThumbnailHost, isVisibleDriveItem, parseThumbnailUrl } from './types';
 
 const FOLDER_META_TTL = 300000;
@@ -35,11 +35,6 @@ export class DriveClient {
     }
 
     getAccessToken(): Promise<string> {
-        return getAccessToken(this.config);
-    }
-
-    refreshAccessToken(): Promise<string> {
-        invalidateAccessToken(this.config);
         return getAccessToken(this.config);
     }
 
@@ -314,27 +309,14 @@ export class DriveClient {
         return this.fetchMedia(url, range, abuse);
     }
 
-    async fetchThumbnail(url: URL, options?: { forceRefreshToken?: boolean }): Promise<Response> {
+    async fetchThumbnail(url: URL): Promise<Response> {
         let currentUrl = url;
-        let forceRefresh = options?.forceRefreshToken ?? false;
         for (let hop = 0; hop <= MAX_THUMBNAIL_REDIRECTS; hop++) {
-            const headers = new Headers();
             const isGoogle = isGoogleThumbnailHost(currentUrl.hostname);
-            if (isGoogle) {
-                let token: string;
-                try {
-                    token = forceRefresh ? await this.refreshAccessToken() : await this.getAccessToken();
-                } catch {
-                    throw new StatusError('Preview upstream authorization failed', 502);
-                }
-                forceRefresh = false;
-                headers.set('Authorization', 'Bearer ' + token);
-            }
             let response: Response;
             try {
                 response = await fetch(currentUrl.toString(), {
                     method: 'GET',
-                    headers,
                     redirect: 'manual',
                 });
             } catch {

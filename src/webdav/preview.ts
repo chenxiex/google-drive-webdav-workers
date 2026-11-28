@@ -1,23 +1,15 @@
 import { type DriveClient } from '../drive/client';
-import { FOLDER_MIME, fileEtag, isGoogleThumbnailHost, parseThumbnailUrl } from '../drive/types';
+import { FOLDER_MIME, fileEtag, parseThumbnailUrl } from '../drive/types';
 import { StatusError, errorStatus } from '../http';
 import { type DavMount } from './mount';
 
 export const MAX_PREVIEW_DIMENSION = 4096;
 export const MAX_PREVIEW_C_LENGTH = 512;
-export const MAX_PREVIEW_PROXY_BYTES = 4 * 1024 * 1024;
 
 export interface PreviewQuery {
     x?: number;
     y?: number;
     c: string;
-}
-
-interface PreviewPayload {
-    bytes: Uint8Array;
-    contentType: string;
-    etag?: string;
-    lastModified?: string;
 }
 
 function parseDimensionParam(params: URLSearchParams, key: 'x' | 'y'): number | undefined {
@@ -88,52 +80,6 @@ function normalizePreviewContentType(raw: string | null): string | null {
     return mediaType;
 }
 
-async function readPreviewBytes(response: Response, maxBytes: number): Promise<Uint8Array> {
-    const rawLen = response.headers.get('Content-Length');
-    if (rawLen !== null) {
-        const trimmed = rawLen.trim();
-        if (/^\d+$/.test(trimmed) && Number(trimmed) > maxBytes) {
-            await response.body?.cancel();
-            throw new StatusError('Preview image exceeds size limit', 502);
-        }
-    }
-    if (!response.body) {
-        throw new StatusError('Empty preview image', 502);
-    }
-    const reader = response.body.getReader();
-    const chunks: Uint8Array[] = [];
-    let total = 0;
-    try {
-        for (;;) {
-            const { value, done } = await reader.read();
-            if (done) break;
-            if (value.byteLength === 0) continue;
-            total += value.byteLength;
-            if (total > maxBytes) {
-                await reader.cancel();
-                throw new StatusError('Preview image exceeds size limit', 502);
-            }
-            chunks.push(value);
-        }
-    } catch (error) {
-        if (error instanceof StatusError) throw error;
-        throw new StatusError('Failed to read upstream preview image', 502);
-    } finally {
-        reader.releaseLock();
-    }
-    if (total === 0) {
-        throw new StatusError('Empty preview image', 502);
-    }
-    if (chunks.length === 1) return chunks[0];
-    const combined = new Uint8Array(total);
-    let offset = 0;
-    for (const chunk of chunks) {
-        combined.set(chunk, offset);
-        offset += chunk.byteLength;
-    }
-    return combined;
-}
-
 function matchesIfNoneMatch(headerValue: string, etag?: string): boolean {
     const trimmed = headerValue.trim();
     if (trimmed === '*') return true;
@@ -145,27 +91,6 @@ function matchesIfNoneMatch(headerValue: string, etag?: string): boolean {
         const candidateOpaque = tag.startsWith('W/') ? tag.slice(2) : tag;
         return candidateOpaque === targetOpaque;
     });
-}
-
-function buildPreviewResponse(request: Request, entry: PreviewPayload): Response {
-    const headers = new Headers({
-        'Cache-Control': 'private, max-age=300',
-        Vary: 'Authorization',
-        'X-Content-Type-Options': 'nosniff',
-    });
-    if (entry.etag) {
-        headers.set('ETag', entry.etag);
-    }
-    if (entry.lastModified) {
-        headers.set('Last-Modified', entry.lastModified);
-    }
-    const ifNoneMatch = request.headers.get('If-None-Match');
-    if (ifNoneMatch && matchesIfNoneMatch(ifNoneMatch, entry.etag)) {
-        return new Response(null, { status: 304, headers });
-    }
-    headers.set('Content-Type', entry.contentType);
-    headers.set('Content-Length', String(entry.bytes.byteLength));
-    return new Response(entry.bytes, { status: 200, headers });
 }
 
 function mapUpstreamErrorStatus(status: number, retryAfter: string | null): Response {
@@ -185,7 +110,7 @@ function mapUpstreamErrorStatus(status: number, retryAfter: string | null): Resp
 
 /**
  * Proxies a Drive file's `thumbnailLink` server-side for `?preview=1` requests
- * without leaking Google URLs, credentials, or upstream error details.
+ * by streaming the response without buffering bytes or exposing Google URLs or upstream error details.
  */
 export async function handlePreview(
     drive: DriveClient,
@@ -203,51 +128,38 @@ export async function handlePreview(
             return new Response(null, { status: 404 });
         }
 
-        let refreshed = false;
         const initialEtag = fileEtag(metadata);
         if (params.c !== '' && (!initialEtag || stripOuterQuotes(params.c) !== stripOuterQuotes(initialEtag))) {
             metadata = await drive.getMetadata(mount.fpath, { bypassLeafCache: true });
-            refreshed = true;
             if (!metadata || metadata.mimeType === FOLDER_MIME) {
                 return new Response(null, { status: 404 });
             }
         }
 
-        let thumbnailUrl = parseThumbnailUrl(metadata.thumbnailLink);
+        const thumbnailUrl = parseThumbnailUrl(metadata.thumbnailLink);
         if (!thumbnailUrl) {
             return new Response(null, { status: 404 });
         }
 
-        let validators = resolvePreviewValidators(metadata);
-        let upstream = await drive.fetchThumbnail(thumbnailUrl);
-        if (upstream.status === 400 || upstream.status === 401 || upstream.status === 403 || upstream.status === 404) {
-            const firstStatus = upstream.status;
-            if (!refreshed) {
-                await upstream.body?.cancel();
-                const freshMetadata = await drive.getMetadata(mount.fpath, { bypassLeafCache: true });
-                refreshed = true;
-                if (!freshMetadata || freshMetadata.mimeType === FOLDER_MIME) {
-                    return new Response(null, { status: 404 });
-                }
-                const freshThumbnailUrl = parseThumbnailUrl(freshMetadata.thumbnailLink);
-                if (!freshThumbnailUrl) {
-                    return new Response(null, { status: 404 });
-                }
-                metadata = freshMetadata;
-                validators = resolvePreviewValidators(metadata);
-                const linkChanged = freshThumbnailUrl.toString() !== thumbnailUrl.toString();
-                const shouldRefreshToken = firstStatus === 401 && isGoogleThumbnailHost(freshThumbnailUrl.hostname);
-                if (!linkChanged && !shouldRefreshToken) {
-                    return mapUpstreamErrorStatus(firstStatus, null);
-                }
-                thumbnailUrl = freshThumbnailUrl;
-                upstream = await drive.fetchThumbnail(thumbnailUrl, { forceRefreshToken: shouldRefreshToken });
-            } else if (firstStatus === 401 && isGoogleThumbnailHost(thumbnailUrl.hostname)) {
-                await upstream.body?.cancel();
-                upstream = await drive.fetchThumbnail(thumbnailUrl, { forceRefreshToken: true });
-            }
+        const validators = resolvePreviewValidators(metadata);
+        const headers = new Headers({
+            'Cache-Control': 'private, max-age=300',
+            Vary: 'Authorization',
+            'X-Content-Type-Options': 'nosniff',
+        });
+        if (validators.previewEtag) {
+            headers.set('ETag', validators.previewEtag);
+        }
+        if (validators.lastModified) {
+            headers.set('Last-Modified', validators.lastModified);
         }
 
+        const ifNoneMatch = request.headers.get('If-None-Match');
+        if (ifNoneMatch && matchesIfNoneMatch(ifNoneMatch, validators.previewEtag)) {
+            return new Response(null, { status: 304, headers });
+        }
+
+        const upstream = await drive.fetchThumbnail(thumbnailUrl);
         if (upstream.status !== 200) {
             const retryAfter = upstream.status === 429 ? upstream.headers.get('Retry-After') : null;
             await upstream.body?.cancel();
@@ -260,13 +172,12 @@ export async function handlePreview(
             return new Response('Invalid preview content type', { status: 502 });
         }
 
-        const bytes = await readPreviewBytes(upstream, MAX_PREVIEW_PROXY_BYTES);
-        return buildPreviewResponse(request, {
-            bytes,
-            contentType,
-            ...(validators.previewEtag ? { etag: validators.previewEtag } : {}),
-            ...(validators.lastModified ? { lastModified: validators.lastModified } : {}),
-        });
+        headers.set('Content-Type', contentType);
+        const contentLength = upstream.headers.get('Content-Length')?.trim();
+        if (contentLength && /^\d+$/.test(contentLength)) {
+            headers.set('Content-Length', contentLength);
+        }
+        return new Response(upstream.body, { status: 200, headers });
     } catch (error: unknown) {
         const status = errorStatus(error);
         const message = error instanceof Error ? error.message : String(error);

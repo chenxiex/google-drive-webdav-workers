@@ -814,6 +814,7 @@ export class MockDrive {
 				status: 200,
 				headers: {
 					'Content-Type': file.thumbnailContentType ?? 'image/png',
+					'Content-Length': String(file.thumbnailContent.length),
 					'Cache-Control': 'private, max-age=86400, no-transform',
 					Vary: 'Origin',
 				},

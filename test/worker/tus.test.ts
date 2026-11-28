@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { env, abortAllDurableObjects, runInDurableObject } from 'cloudflare:test';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { FOLDER, installDriveMock } from '../support/client';
+import { FOLDER } from '../support/client';
 import { type MockDrive } from '../support/mock-drive';
 import { setFetchMock } from '../support/network';
 import { request, useMockDrive } from '../support/worker';
@@ -60,6 +60,12 @@ const expectBytesEqual = (actual: Uint8Array | undefined, expected: Uint8Array) 
     expect(digestHex('sha256', actual!)).toBe(digestHex('sha256', expected));
 };
 
+async function expectDavDownload(name: string, expected: Uint8Array): Promise<void> {
+    const download = await request('/webdav/' + name);
+    expect(download.status).toBe(200);
+    expectBytesEqual(new Uint8Array(await download.arrayBuffer()), expected);
+}
+
 async function expectDoCleared(sessionUrl: string): Promise<void> {
     const sessionId = sessionUrl.split('/').pop()!;
     const namespace = (env as Env).TUS_UPLOADS;
@@ -74,7 +80,7 @@ const fixture = useMockDrive();
 beforeEach(() => { drive = fixture.drive; });
 
 describe('durable TUS (5A + 13B + 14A)', () => {
-    it('persists <256 KiB PATCH tails across eviction, returns completion headers, and cleans up DO state immediately (13B)', async () => {
+    it('recovers a durable PATCH tail after the client loses its acknowledgement and retries a stale offset', async () => {
         const data = bytes(1024 * 1024 + 321);
         const { url, name } = await create(data.length);
         const getStub = () => (env as Env).TUS_UPLOADS.get((env as Env).TUS_UPLOADS.idFromName(url.split('/').pop()!));
@@ -83,10 +89,11 @@ describe('durable TUS (5A + 13B + 14A)', () => {
         const sizes = [13, 262144 + 7, data.length - 262164];
         let finalResponse!: Response;
         for (const [index, size] of sizes.entries()) {
-            const response = await patch(url, offset, data.slice(offset, offset + size));
-            offset += size;
+            const chunk = data.subarray(offset, offset + size);
+            const response = await patch(url, offset, chunk);
+            const confirmedOffset = offset + size;
             expect(response.status).toBe(204);
-            expect(response.headers.get('Upload-Offset')).toBe(String(offset));
+            expect(response.headers.get('Upload-Offset')).toBe(String(confirmedOffset));
             expect([...response.headers.keys()].some(key => key.startsWith('x-tus-'))).toBe(false);
             if (index < sizes.length - 1) {
                 await runInDurableObject(getStub(), async (_instance, state) => {
@@ -96,17 +103,27 @@ describe('durable TUS (5A + 13B + 14A)', () => {
                     expect(record.pending).toBeUndefined();
                 });
                 await abortAllDurableObjects();
-                expect((await head(url)).headers.get('Upload-Offset')).toBe(String(offset));
+                if (index === 0) {
+                    // The client still has its old offset because it did not receive the 204.
+                    const replay = await patch(url, offset, chunk);
+                    expect(replay.status).toBe(409);
+                    expect(replay.headers.get('Upload-Offset')).toBe(String(confirmedOffset));
+                    await replay.body?.cancel();
+                }
+                const recovered = await head(url);
+                expect(recovered.status).toBe(200);
+                offset = Number(recovered.headers.get('Upload-Offset'));
+                expect(offset).toBe(confirmedOffset);
             } else {
                 finalResponse = response;
             }
         }
 
         const stored = drive.files.find(file => file.name === name)!;
-        expectBytesEqual(stored.content, data);
         expect(finalResponse.headers.get('ETag')).toBe(`"${stored.id}-${stored.headRevisionId}"`);
         expect(finalResponse.headers.get('OC-FileID')).toBe(stored.id);
         expect(finalResponse.headers.get('OC-Perm')).toBe('RDNVW');
+        await expectDavDownload(name, data);
 
         await expectDoCleared(url);
         const afterHead = await head(url);
@@ -124,93 +141,163 @@ describe('durable TUS (5A + 13B + 14A)', () => {
         expect(drive.files.find(file => file.name === name)?.content?.length).toBe(6);
     });
 
-    it.each(['intermediate', 'final', 'final-308'] as const)('recovers an ambiguous Drive response (%s) after eviction without resending confirmed bytes', async failure => {
+    it.each(['intermediate', 'final', 'final-body', 'final-308'] as const)('recovers an ambiguous Drive response (%s) after eviction without resending confirmed bytes', async failure => {
         const final = failure !== 'intermediate';
-        const data = bytes(failure === 'intermediate' ? TEN_MIB + 17 : 1024 * 1024 + 17);
-        const { url, name } = await create(data.length);
+        const data = bytes(final ? ALIGN + 17 : TEN_MIB + ALIGN + 73);
+        const { url, name } = await create(data.length, undefined, '', {
+            headers: { 'OC-Checksum': 'SHA256:' + digestHex('sha256', data) },
+        });
+        const probeRange = `bytes */${data.length}`;
+        const sentRanges: string[] = [];
+        const probeResponses: Array<{ status: number; range: string | null }> = [];
+        let droppedStatus: number | undefined;
         const original = drive.handle.bind(drive);
-        let dropped = false;
-        let probes = 0;
         setFetchMock(async (input, init) => {
             const range = new Headers(init?.headers).get('Content-Range');
             const response = await original(input, init);
-            if (range?.startsWith('bytes */')) probes++;
-            if (!dropped && range?.startsWith('bytes ') && !range.startsWith('bytes */') && ((response.status === 200 || response.status === 201) === final)) {
-                dropped = true;
-                if (failure === 'final-308') return new Response(null, { status: 308, headers: { Range: `bytes=0-${data.length - 1}` } });
-                throw new TypeError('Injected lost response after Drive accepted bytes');
+            if (range === probeRange) {
+                probeResponses.push({ status: response.status, range: response.headers.get('Range') });
+            } else if (range !== null) {
+                sentRanges.push(range);
+                if (sentRanges.length === 1) {
+                    droppedStatus = response.status;
+                    await response.body?.cancel();
+                    if (failure === 'final-308') return new Response(null, { status: 308, headers: { Range: `bytes=0-${data.length - 1}` } });
+                    if (failure === 'final-body') {
+                        const body = new ReadableStream({
+                            start(controller) { controller.error(new TypeError('Drive response body disconnected')); },
+                        });
+                        return new Response(body, response);
+                    }
+                    throw new TypeError('Drive response disconnected after accepting bytes');
+                }
             }
             return response;
         });
 
-        expect((await patch(url, 0, data)).status).toBe(failure === 'final-308' ? 502 : 503);
-        expect(dropped).toBe(true);
+        const failed = await patch(url, 0, data.subarray(0, final ? data.length : TEN_MIB + 31));
+        expect(failed.status).toBe(failure === 'final-308' ? 502 : 503);
+        expect(droppedStatus).toBe(final ? 200 : 308);
+        await failed.body?.cancel();
         await abortAllDurableObjects();
 
         const recovered = await head(url);
         expect(recovered.status).toBe(200);
-        expect(probes).toBe(1);
+        expect(probeResponses).toEqual([{ status: final ? 200 : 308, range: final ? null : `bytes=0-${TEN_MIB - 1}` }]);
         const offset = Number(recovered.headers.get('Upload-Offset'));
         expect(offset).toBe(final ? data.length : TEN_MIB);
-        if (final) {
-            expect(recovered.headers.get('OC-FileID')).toBeTruthy();
-            expect(recovered.headers.get('ETag')).toBeTruthy();
-            expect((await head(url)).status).toBe(404);
-        } else {
-            expect((await patch(url, offset, data.slice(offset))).status).toBe(204);
+        let completed = recovered;
+        const firstEnd = final ? data.length - 1 : TEN_MIB - 1;
+        const expectedRanges = [`bytes 0-${firstEnd}/${data.length}`];
+        if (!final) {
+            const nextOffset = offset + ALIGN + 9;
+            const resumed = await patch(url, offset, data.subarray(offset, nextOffset));
+            expect(resumed.status).toBe(204);
+            expect(resumed.headers.get('Upload-Offset')).toBe(String(nextOffset));
+            completed = await patch(url, nextOffset, data.subarray(nextOffset));
+            expect(completed.status).toBe(204);
+            expectedRanges.push(
+                `bytes ${TEN_MIB}-${TEN_MIB + ALIGN - 1}/${data.length}`,
+                `bytes ${TEN_MIB + ALIGN}-${data.length - 1}/${data.length}`,
+            );
         }
-        expectBytesEqual(drive.files.find(file => file.name === name)?.content, data);
+        expect(sentRanges).toEqual(expectedRanges);
+        expect(completed.headers.get('Upload-Offset')).toBe(String(data.length));
+        const files = drive.children('root').filter(file => file.name === name);
+        expect(files).toHaveLength(1);
+        expect(completed.headers.get('OC-FileID')).toBe(files[0].id);
+        expect(completed.headers.get('ETag')).toBe(`"${files[0].id}-${files[0].headRevisionId}"`);
+        expect((await head(url)).status).toBe(404);
+        await expectDavDownload(name, data);
     });
 
-    it('keeps <256 KiB tail durable when Drive fails before accepting and preserves expiry 410', async () => {
-        const data = bytes(262244); // 100-byte tail + 262,144-byte remaining
-        const { url, name } = await create(data.length);
-        expect((await patch(url, 0, data.slice(0, 100))).status).toBe(204);
-
+    it('returns 410 when the Drive session expires during PATCH and subsequent recovery', async () => {
+        const data = bytes(3);
+        const { url } = await create(data.length);
         const original = drive.handle.bind(drive);
-        setFetchMock(async (input, init) => {
-            if (new Headers(init?.headers).has('Content-Range')) return new Response(null, { status: 503 });
+        setFetchMock((input, init) => {
+            if (new Headers(init?.headers).has('Content-Range')) return new Response(null, { status: 404 });
             return original(input, init);
         });
-        expect((await patch(url, 100, data.slice(100))).status).toBe(503);
-        await abortAllDurableObjects();
-
-        installDriveMock(drive);
-        const recovered = await head(url);
-        expect(recovered.status).toBe(200);
-        expect(recovered.headers.get('Upload-Offset')).toBe('100');
-        expect((await patch(url, 100, data.slice(100))).status).toBe(204);
-        expectBytesEqual(drive.files.find(file => file.name === name)?.content, data);
-
-        const next = await create(262144);
-        setFetchMock(async () => new Response(null, { status: 404 }));
-        expect((await patch(next.url, 0, data.slice(0, 262144))).status).toBe(410);
-        expect((await head(next.url)).status).toBe(410);
+        expect((await patch(url, 0, data)).status).toBe(410);
+        expect((await head(url)).status).toBe(410);
     });
 
-    it('continues flushing aligned suffix within a request when Drive accepts only a prefix', async () => {
-        const data = bytes(1024 * 1024 + 9);
+    it.each([
+        { failure: 'rate limiting', status: 429 },
+        { failure: 'a Drive offset gap', status: 503 },
+    ])('recovers a partial Drive acknowledgement after $failure', async ({ status }) => {
+        const data = bytes(3 * ALIGN + 9);
         const { url, name } = await create(data.length);
         const original = drive.handle.bind(drive);
         const ranges: string[] = [];
+        const probeRange = `bytes */${data.length}`;
+        let probeRateLimited = false;
+        let acceptedRange: string | null = null;
+        let recoveredRange: string | null = null;
+        let gapStatus: number | undefined;
         setFetchMock(async (input, init) => {
             const headers = new Headers(init?.headers);
             const range = headers.get('Content-Range');
-            if (range && !range.startsWith('bytes */')) {
-                ranges.push(range);
-                if (ranges.length === 1) {
-                    headers.set('Content-Range', `bytes 0-262143/${data.length}`);
-                    headers.set('Content-Length', '262144');
-                    return original(input, { ...init, headers, body: data.slice(0, 262144) });
+            if (range === null) return original(input, init);
+            ranges.push(range);
+            if (range === probeRange) {
+                if (status === 429 && !probeRateLimited) {
+                    probeRateLimited = true;
+                    return new Response(null, { status: 429 });
                 }
+                const response = await original(input, init);
+                recoveredRange = response.headers.get('Range');
+                return response;
+            }
+            if (ranges.length === 1) {
+                const body = new Uint8Array(await new Request(input, init).arrayBuffer());
+                headers.set('Content-Range', `bytes 0-${ALIGN - 1}/${data.length}`);
+                headers.set('Content-Length', String(ALIGN));
+                const response = await original(input, { ...init, headers, body: body.subarray(0, ALIGN) });
+                acceptedRange = response.headers.get('Range');
+                return response;
+            }
+            if (ranges.length === 2) {
+                if (status === 429) return new Response(null, { status });
+                // Make Drive receive a request one block ahead of its accepted prefix.
+                headers.set('Content-Range', `bytes ${2 * ALIGN}-${3 * ALIGN - 1}/${data.length}`);
+                const response = await original(input, { ...init, headers });
+                gapStatus = response.status;
+                return response;
             }
             return original(input, init);
         });
-        const response = await patch(url, 0, data);
-        expect(response.status).toBe(204);
-        expect(response.headers.get('Upload-Offset')).toBe(String(data.length));
-        expect(ranges).toEqual([`bytes 0-${data.length - 1}/${data.length}`, `bytes 262144-${data.length - 1}/${data.length}`]);
-        expectBytesEqual(drive.files.find(file => file.name === name)?.content, data);
+
+        const first = await patch(url, 0, data.subarray(0, 2 * ALIGN + 3));
+        expect(first.status).toBe(status);
+        if (status === 503) expect(gapStatus).toBe(503);
+        expect(acceptedRange).toBe(`bytes=0-${ALIGN - 1}`);
+        await first.body?.cancel();
+        await abortAllDurableObjects();
+        if (status === 429) expect((await head(url)).status).toBe(429);
+
+        const recovered = await head(url);
+        expect(recovered.status).toBe(200);
+        const offset = Number(recovered.headers.get('Upload-Offset'));
+        expect(offset).toBe(ALIGN);
+        expect(recoveredRange).toBe(acceptedRange);
+        const nextOffset = offset + ALIGN + 5;
+        const resumed = await patch(url, offset, data.subarray(offset, nextOffset));
+        expect(resumed.status).toBe(204);
+        expect(resumed.headers.get('Upload-Offset')).toBe(String(nextOffset));
+        const completed = await patch(url, nextOffset, data.subarray(nextOffset));
+        expect(completed.status).toBe(204);
+        expect(completed.headers.get('Upload-Offset')).toBe(String(data.length));
+        expect(ranges).toEqual([
+            `bytes 0-${2 * ALIGN - 1}/${data.length}`,
+            `bytes ${ALIGN}-${2 * ALIGN - 1}/${data.length}`,
+            ...(status === 429 ? [probeRange] : []),
+            probeRange,
+            `bytes ${ALIGN}-${2 * ALIGN - 1}/${data.length}`,
+            `bytes ${2 * ALIGN}-${data.length - 1}/${data.length}`,
+        ]);
+        await expectDavDownload(name, data);
     });
 
     it('handles 0-byte creation and overwrite directly without creating a DO', async () => {

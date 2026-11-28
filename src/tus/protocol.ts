@@ -314,7 +314,9 @@ export async function parseDriveUploadResponse(
     totalSize: number,
 ): Promise<DriveUploadResult> {
     if (response.status === 200 || response.status === 201) {
-        const file = await response.json<UploadedDriveFile>().catch(() => ({}));
+        // A lost response body leaves the Drive commit ambiguous. Keep the session
+        // recoverable so a later status probe can retrieve the completion metadata.
+        const file = await response.json<UploadedDriveFile>();
         return { completed: true, file: file ?? {} };
     }
     await response.body?.cancel().catch(() => undefined);

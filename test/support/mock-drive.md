@@ -35,6 +35,7 @@ pnpm run build
 | Multipart & media uploads | `POST ?uploadType=multipart` parses quoted/unquoted boundaries, UTF-8 metadata, and exact binary bytes; `PATCH ?uploadType=media` overwrites/truncates while preserving the existing binary MIME type; both populate `md5Checksum`, `sha1Checksum`, and `sha256Checksum`. |
 | Resumable uploads (`uploadType=resumable`) | Empty `200` `Location` session init; status `PUT` (`bytes */total`) and non-final chunks return `308` with `Range`; omitted `X-Upload-Content-Length` (`*`) supported until final chunk; non-final chunks require >= 256 KiB and acknowledge only whole 256 KiB multiples (discarding unaligned tails); replay/overlapping chunks preserve already-accepted prefix bytes; `bytes */0` finalizes empty files; explicit `modifiedTime` is preserved; completed status queries and final-chunk replays return `200` with `md5Checksum`, `sha1Checksum`, and `sha256Checksum`; conflicting totals or small non-final chunks fail with `400` and poison the session. |
 | Media download (`GET /drive/v3/files/{id}/revisions/{revisionId}?alt=media`, `GET /drive/v3/files/{id}?alt=media`) | Returns exact revision or current file bytes and MIME; tracks `headRevisionId` across creation and content updates (retaining prior immutable revision snapshots while keeping `headRevisionId` unchanged on metadata-only `PATCH`); supports in-bounds closed `Range` (`206`) and `416` when `start >= length`. |
+| Thumbnails (`GET https://lh3.googleusercontent.com/drive-storage/...`) | Verified 2026-11-28: non-folder files with `thumbnailContent` auto-generate `/drive-storage/...=s220` links, track `hasThumbnail`/`thumbnailVersion`, rotate `thumbnailLink` on content overwrites (retaining prior `/drive-storage/` paths serving updated thumbnail bytes), return `200` (`image/*`, `Content-Length`, `Cache-Control: private, max-age=86400, no-transform`, `Vary: Origin`) regardless of `Authorization`, and return `400` `text/html` on unknown `/drive-storage/` paths. |
 
 ### Non-obvious Drive contracts modeled in `MockDrive`
 
@@ -56,6 +57,7 @@ pnpm run build
 - Moving items from/into Trash, changing trash state under a trashed ancestor, and folder cycles
 - Media/upload operations inside `POST /batch/drive/v3` (rejected by Google Drive)
 - `headRevisionId` and `revisions.get?alt=media` (including immutable post-overwrite `Range` reads and `416`) are modeled; read-only shared `403` and `cannotDownloadAbusiveFile` responses are injected at the fetch boundary in tests.
+- Asynchronous thumbnail generation for text files and dynamic `=s<N>` resizing are not synthesized automatically (fixtures supply `thumbnailContent` explicitly); non-`/drive-storage/` hosts, redirects, `401` token refreshes, and `403`/`404`/`429`/`5xx`/malformed-body faults are injected at the fetch boundary in tests.
 - Shared-drive permissions, cross-app 100-property aggregate quotas, real OAuth token expiry/revocation, network/rate-limit retries, and asynchronous trash propagation delays (covered via fault injection in tests).
 
 ## Official Google Drive references

@@ -85,8 +85,10 @@
   - 实现并验收统一路由（`9.3`）：通用 WebDAV 默认 `/webdav/`（校验 `WEBDAV_PATH` 不与 `/` 或 oCIS 保留前缀冲突）、常驻 `/dav/spaces/<spaceId>/...`、`/remote.php/webdav/...`、`/remote.php/dav/files/<username>/...`，单次段解码、`$`/`%24` 等价、全站缺父统一返回 409（`9.2B`）、全站非 TUS `PATCH` 统一返回 405（`9.1A`）。
   - 验收 `4A-1` 统一 v3 ETag（`GET`/`HEAD`/`PROPFIND` 共用 `headRevisionId`、`revisions/{headRevisionId}?alt=media` 不可变读取与实时 `If-Range`）、`PROPFIND` `Content-Type: application/xml; charset=utf-8`、`Prefer: return=minimal`、`oc:*` 属性（含 `10.2A` `oc:checksums` 真实摘要动态计算与 `PROPPATCH` 静默忽略、非空 `oc:permissions`、`oc:has-preview` `"1"`/`"0"`）、`7A` 原生文档过滤；验收 `PUT`/`TUS` `If-Match` 失配返回 `412`（`#11`）、`PUT` `OC-Checksum` 校验（`400`）及 `8B` 文件夹 COPY（`Depth: 0` / `infinity` 与预算上限）。
 
-- [ ] **OC-08：实现 Android 预览代理**
-  - 支持 DAV GET `?preview=1` 及 `x/y/c` 参数与 `oc:has-preview` 属性（值严格为 `"1"`/`"0"`）；由 Worker 代理请求 Drive `thumbnailLink` 并缓存（按身份与版本隔离，不泄露 Google URL；依据真实缩略图可用性返回预览或 404）。
+- [x] **OC-08：实现 Android 预览代理**
+  - 已于 2026-11-28 实测 Google Drive `thumbnailLink`（确认实盘返回 `https://lh3.googleusercontent.com/drive-storage/...=s220` 直出 `200 image/png` 且带/不带 Bearer 均可访问、未知 `/drive-storage/` 路径返回 `400 text/html`、覆写内容会推进 `thumbnailVersion` 并轮换链接、文本文件异步生成缩略图而二进制文件/文件夹无缩略图），并已将契约建模至 `MockDrive` 与 [mock-drive.md](test/support/mock-drive.md)。
+  - 支持认证 DAV GET `?preview=1` 及 `x/y/c` 参数校验（`x`/`y` 为 `1..4096`、`c` 最长 512 且非空失配时绕过 30s 叶子缓存）与一致的 `oc:has-preview` 属性（仅对可见文件的有效 `https://` `thumbnailLink` 返回 `"1"`，否则 `"0"`）。
+  - 由 Worker 无状态流式代理请求 Drive `thumbnailLink`（当前不附带 Google 访问令牌（实测预签名链接免鉴权）、最多跟随 2 跳受信任 Google HTTPS 重定向、前置 `If-None-Match` `304` 短路、校验非 SVG `image/*` 并直接流式透传且不做 Worker 内存缓冲/上限与自动重试、不回退原文件字节、不向客户端暴露 Google URL），复用现有 30s 元数据缓存并返回客户端缓存头（`Cache-Control: private, max-age=300`、`ETag`、`Vary: Authorization`），按语义映射 `404`/`429`/`502`。
 
 - [ ] **OC-09：全生命周期故障恢复测试（mock 对齐后）**
   - 使用已对齐的 Drive mock 注入故障：tail/inflight 标记落盘后中断、Google 已接收但丢响应、客户端确认丢失、最后提交丢响应、offset 冲突、部分确认与限流；验证 Worker/DO 重启后通过 `HEAD` + Drive `Range` 恢复无重复或丢字节且最终 SHA256 一致。

@@ -3,12 +3,14 @@ import { StatusError, TransferError, encodeQueryString, escapeQuery, trimString 
 import { type SyncIndexClient } from '../sync/client';
 import { type SyncMutation } from '../sync/types';
 import { type MemoryCache, isolateCache, scopedCacheKey } from './cache';
-import { getAccessToken, invalidateAccessToken } from './oauth';
-import { FOLDER_MIME, PROPERTY_FIELDS, type StorageQuota, UPLOAD_RESULT_FIELDS, isVisibleDriveItem } from './types';
+import { getAccessToken } from './oauth';
+import { FOLDER_MIME, PROPERTY_FIELDS, type StorageQuota, UPLOAD_RESULT_FIELDS, isGoogleThumbnailHost, isVisibleDriveItem, parseThumbnailUrl } from './types';
 
 const FOLDER_META_TTL = 300000;
 const FILE_META_TTL = 30000;
 const OBJECTS_TTL = 30000;
+const MAX_THUMBNAIL_REDIRECTS = 2;
+const THUMBNAIL_REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 
 function parseNonNegativeBigInt(value: unknown): bigint | undefined {
     if (typeof value === 'string') {
@@ -33,11 +35,6 @@ export class DriveClient {
     }
 
     getAccessToken(): Promise<string> {
-        return getAccessToken(this.config);
-    }
-
-    refreshAccessToken(): Promise<string> {
-        invalidateAccessToken(this.config);
         return getAccessToken(this.config);
     }
 
@@ -310,6 +307,42 @@ export class DriveClient {
         const url = new URL(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}`);
         url.searchParams.set('supportsAllDrives', 'true');
         return this.fetchMedia(url, range, abuse);
+    }
+
+    async fetchThumbnail(url: URL): Promise<Response> {
+        let currentUrl = url;
+        for (let hop = 0; hop <= MAX_THUMBNAIL_REDIRECTS; hop++) {
+            const isGoogle = isGoogleThumbnailHost(currentUrl.hostname);
+            let response: Response;
+            try {
+                response = await fetch(currentUrl.toString(), {
+                    method: 'GET',
+                    redirect: 'manual',
+                });
+            } catch {
+                throw new StatusError('Preview upstream request failed', 502);
+            }
+            if (!THUMBNAIL_REDIRECT_STATUSES.has(response.status)) {
+                return response;
+            }
+            const location = response.headers.get('Location');
+            await response.body?.cancel();
+            if (!isGoogle || !location || hop === MAX_THUMBNAIL_REDIRECTS) {
+                throw new StatusError('Preview thumbnail redirect blocked', 502);
+            }
+            let nextUrl: URL;
+            try {
+                nextUrl = new URL(location, currentUrl);
+            } catch {
+                throw new StatusError('Preview thumbnail redirect invalid', 502);
+            }
+            const parsed = parseThumbnailUrl(nextUrl.toString());
+            if (!parsed || !isGoogleThumbnailHost(parsed.hostname)) {
+                throw new StatusError('Preview thumbnail redirect blocked', 502);
+            }
+            currentUrl = parsed;
+        }
+        throw new StatusError('Preview thumbnail redirect blocked', 502);
     }
 
     async queryDrive(params: Record<string, any>, retryCount: number = 0): Promise<any> {

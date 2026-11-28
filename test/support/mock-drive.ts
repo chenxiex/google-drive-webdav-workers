@@ -23,7 +23,11 @@ export interface DriveFile {
 	md5Checksum?: string;
 	sha1Checksum?: string;
 	sha256Checksum?: string;
+	hasThumbnail?: boolean;
+	thumbnailVersion?: string;
 	thumbnailLink?: string;
+	thumbnailContent?: Uint8Array;
+	thumbnailContentType?: string;
 }
 
 type FetchInput = Parameters<typeof fetch>[0];
@@ -31,6 +35,7 @@ type FetchInit = Parameters<typeof fetch>[1];
 type Metadata = { name?: string; mimeType?: string; parents?: string[]; trashed?: boolean; createdTime?: string; modifiedTime?: string; description?: string | null; starred?: boolean; folderColorRgb?: string | null; appProperties?: Record<string, string | null> };
 type Session = { metadata: Metadata; id?: string; mimeType: string; total?: number; bytes: Uint8Array; fields: string | null; completed?: DriveFile; failure?: string };
 const API = 'https://www.googleapis.com';
+const THUMBNAIL_ORIGIN = 'https://lh3.googleusercontent.com';
 const STATUS_TEXT: Record<number, string> = {
 	200: 'OK',
 	204: 'No Content',
@@ -86,7 +91,7 @@ function parseMetadata(bytes: Uint8Array): Metadata | Response {
 // Drive partial-response selectors used by this worker. Unknown supported-API
 // features fail loudly instead of pretending that the real API accepted them.
 type FieldSpec = { fields: Set<string>; nested?: Record<string, FieldSpec> };
-const fileFields = new Set(['kind', 'id', 'version', 'headRevisionId', 'name', 'mimeType', 'size', 'modifiedTime', 'createdTime', 'starred', 'folderColorRgb', 'appProperties', 'parents', 'trashed', 'explicitlyTrashed', 'description', 'iconLink', 'thumbnailLink', 'imageMediaMetadata', 'md5Checksum', 'sha1Checksum', 'sha256Checksum']);
+const fileFields = new Set(['kind', 'id', 'version', 'headRevisionId', 'name', 'mimeType', 'size', 'modifiedTime', 'createdTime', 'starred', 'folderColorRgb', 'appProperties', 'parents', 'trashed', 'explicitlyTrashed', 'description', 'iconLink', 'hasThumbnail', 'thumbnailVersion', 'thumbnailLink', 'imageMediaMetadata', 'md5Checksum', 'sha1Checksum', 'sha256Checksum']);
 const fileSpec: FieldSpec = { fields: fileFields };
 const fileListSpec: FieldSpec = {
 	fields: new Set(['kind', 'incompleteSearch', 'nextPageToken', 'files']),
@@ -169,6 +174,8 @@ function representation(file: DriveFile): Record<string, unknown> {
 		...(file.description !== undefined ? { description: file.description } : {}),
 		...(file.folderColorRgb !== undefined ? { folderColorRgb: file.folderColorRgb } : {}),
 		...(file.appProperties && Object.keys(file.appProperties).length ? { appProperties: { ...file.appProperties } } : {}),
+		hasThumbnail: file.hasThumbnail ?? Boolean(file.thumbnailLink),
+		thumbnailVersion: file.thumbnailVersion ?? (file.thumbnailLink ? '1' : '0'),
 		...(file.thumbnailLink ? { thumbnailLink: file.thumbnailLink } : {}),
 		parents: [...file.parents], modifiedTime: file.modifiedTime, trashed: file.trashed ?? false, explicitlyTrashed: file.explicitlyTrashed ?? false,
 		...(!file.mimeType.startsWith('application/vnd.google-apps.') ? {
@@ -216,6 +223,8 @@ export class MockDrive {
 	private hashedContent = new WeakMap<DriveFile, Uint8Array>();
 	private revSeq = 0;
 	private revisions = new Map<string, Map<string, { content: Uint8Array; mimeType: string }>>();
+	private thumbLinkSeq = 0;
+	private thumbnailRoutes = new Map<string, string>();
 	private changeSeq = 0;
 	private changeLog: Array<{ token: number; fileId: string; removed: boolean; time: string }> = [];
 	private minValidChangeToken = 1;
@@ -238,8 +247,45 @@ export class MockDrive {
 		const lost = new Set([id]);
 		for (const parent of lost) for (const child of this.children(parent)) lost.add(child.id);
 		for (const lostId of lost) this.revisions.delete(lostId);
+		this.clearThumbnailRoutes(lost);
 		this.files = this.files.filter(f => !lost.has(f.id));
 		this.recordChange(id, true);
+	}
+	private normalizeThumbnailPath(raw: string): string {
+		return new URL(raw).pathname.replace(/=s\d+$/, '');
+	}
+	private registerThumbnail(file: DriveFile, options?: { bumpVersion?: boolean; rotateLink?: boolean }): void {
+		if (file.mimeType.startsWith('application/vnd.google-apps.')) {
+			file.hasThumbnail = false;
+			file.thumbnailVersion = '0';
+			delete file.thumbnailLink;
+			return;
+		}
+		if (file.thumbnailContent !== undefined && !file.thumbnailLink) {
+			file.hasThumbnail = true;
+			file.thumbnailVersion ??= '1';
+			file.thumbnailLink = `${THUMBNAIL_ORIGIN}/drive-storage/mock-${file.id}-t${++this.thumbLinkSeq}=s220`;
+		}
+		const hasThumbnail = file.hasThumbnail ?? Boolean(file.thumbnailLink);
+		if (!hasThumbnail && !file.thumbnailLink) return;
+		if (options?.bumpVersion) {
+			file.thumbnailVersion = (BigInt(file.thumbnailVersion ?? '1') + 1n).toString();
+		}
+		if (options?.rotateLink && (!file.thumbnailLink || file.thumbnailLink.startsWith(`${THUMBNAIL_ORIGIN}/drive-storage/`))) {
+			file.thumbnailLink = `${THUMBNAIL_ORIGIN}/drive-storage/mock-${file.id}-t${++this.thumbLinkSeq}=s220`;
+		}
+		if (file.thumbnailLink?.startsWith(`${THUMBNAIL_ORIGIN}/drive-storage/`)) {
+			file.hasThumbnail = true;
+			file.thumbnailVersion ??= '1';
+			if (file.thumbnailContent !== undefined) {
+				this.thumbnailRoutes.set(this.normalizeThumbnailPath(file.thumbnailLink), file.id);
+			}
+		}
+	}
+	private clearThumbnailRoutes(ids: Set<string>): void {
+		for (const [path, fileId] of this.thumbnailRoutes) {
+			if (ids.has(fileId)) this.thumbnailRoutes.delete(path);
+		}
 	}
 	private nextRevisionId(): string {
 		return 'rev-' + (++this.revSeq);
@@ -256,7 +302,11 @@ export class MockDrive {
 	purgeRevision(fileId: string, revisionId: string): void {
 		this.revisions.get(fileId)?.delete(revisionId);
 	}
-	replaceContent(fileId: string, content: Uint8Array, options?: { preserveModifiedTime?: boolean }): DriveFile {
+	replaceContent(
+		fileId: string,
+		content: Uint8Array,
+		options?: { preserveModifiedTime?: boolean; thumbnailContent?: Uint8Array; thumbnailContentType?: string },
+	): DriveFile {
 		const file = this.findById(fileId);
 		if (!file || file.mimeType.startsWith('application/vnd.google-apps.')) {
 			throw new Error(`Cannot replace content on ${fileId}`);
@@ -266,7 +316,10 @@ export class MockDrive {
 		file.version = (BigInt(file.version ?? '1') + 1n).toString();
 		file.headRevisionId = this.nextRevisionId();
 		this.hashedContent.delete(file);
+		if (options?.thumbnailContent !== undefined) file.thumbnailContent = options.thumbnailContent.slice();
+		if (options?.thumbnailContentType !== undefined) file.thumbnailContentType = options.thumbnailContentType;
 		if (!options?.preserveModifiedTime) file.modifiedTime = new Date().toISOString();
+		this.registerThumbnail(file, { bumpVersion: true, rotateLink: true });
 		this.recordRevision(file);
 		this.recordChange(file.id, false);
 		return file;
@@ -291,6 +344,8 @@ export class MockDrive {
 		file.createdTime ??= file.modifiedTime;
 		if (file.mimeType === FOLDER) file.folderColorRgb ??= '#8f8f8f';
 		if (file.appProperties) file.appProperties = { ...file.appProperties };
+		if (file.thumbnailContent !== undefined) file.thumbnailContent = file.thumbnailContent.slice();
+		this.registerThumbnail(file);
 		file.explicitlyTrashed ??= file.trashed ?? false;
 		if (file.content !== undefined && (file.md5Checksum !== undefined || file.sha1Checksum !== undefined || file.sha256Checksum !== undefined)) {
 			this.hashedContent.set(file, file.content);
@@ -316,6 +371,7 @@ export class MockDrive {
 			this.revisions.delete(removedId);
 			this.recordChange(removedId, true);
 		}
+		this.clearThumbnailRoutes(removed);
 		this.files = this.files.filter(f => !removed.has(f.id));
 	}
 	findById(id: string): DriveFile | undefined { return this.files.find(f => f.id === id) ?? (id === 'root' ? this.root : undefined); }
@@ -458,6 +514,7 @@ export class MockDrive {
 			delete file.sha1Checksum;
 			delete file.sha256Checksum;
 			this.hashedContent.delete(file);
+			this.registerThumbnail(file, { bumpVersion: true, rotateLink: true });
 			this.recordRevision(file);
 			// Updating a binary file's bytes preserves its existing MIME type,
 			// even when the media request declares a different Content-Type.
@@ -743,6 +800,26 @@ export class MockDrive {
 		const req = input instanceof Request ? input : undefined;
 		const method = (init?.method ?? req?.method ?? 'GET').toUpperCase();
 		const headers = new Headers(init?.headers ?? req?.headers);
+		if (url.origin === THUMBNAIL_ORIGIN && url.pathname.startsWith('/drive-storage/')) {
+			if (method !== 'GET') unsupported(`thumbnail method ${method}`);
+			const fileId = this.thumbnailRoutes.get(this.normalizeThumbnailPath(url.toString()));
+			const file = fileId ? this.findById(fileId) : undefined;
+			if (!file || file.thumbnailContent === undefined) {
+				return new Response('<!DOCTYPE html><html><title>400 Bad Request</title><body>Error 400</body></html>', {
+					status: 400,
+					headers: { 'Content-Type': 'text/html; charset=UTF-8', Vary: 'Origin' },
+				});
+			}
+			return new Response(file.thumbnailContent.slice(), {
+				status: 200,
+				headers: {
+					'Content-Type': file.thumbnailContentType ?? 'image/png',
+					'Content-Length': String(file.thumbnailContent.length),
+					'Cache-Control': 'private, max-age=86400, no-transform',
+					Vary: 'Origin',
+				},
+			});
+		}
 		if (url.origin !== API) unsupported(`${method} ${url.origin}${url.pathname}`);
 		if (url.pathname === '/batch/drive/v3') return this.batch(method, headers, await bodyBytes(input, init));
 		if (url.pathname === '/oauth2/v4/token') {

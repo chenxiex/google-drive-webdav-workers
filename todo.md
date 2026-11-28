@@ -75,7 +75,7 @@
   - 在 SQLite DO 维护轻量 `items(id, parent_id, is_folder, etag_gen)` 与游标 `pageToken`（DO 内存保留热 `root.eTag` 与节流时间戳）；本地变更与节流轮询仅沿受影响项及旧父目录向上冒泡递增 `etag_gen` 至 `ROOT_ID`，忽略 `ROOT_ID` 外部改动（支持外部编辑、移动与永久删除）。
   - 将 isolate 内存元数据/列表缓存键绑定至对应目录 `etag_gen`（并固定在途请求的起始 generation），避免新 ETag 搭配旧列表。
 
-- [ ] **OC-06：在现有 DO TUS 基础上补齐 oCIS 上传需求**
+- [x] **OC-06：在现有 DO TUS 基础上补齐 oCIS 上传需求**
   - 将 `TusUpload` DO 从当前 `1 MiB` 整块 `pending` 落盘重构为 `5A`（单次发往 Google 上限 `10 MiB` 的 256 KiB 整倍数，SQLite 仅存 `< 256 KiB` `tail` 与 `inflight` 恢复标记，崩溃时通过 `bytes */<total>` 对齐 Drive 真实偏移）。
   - 补齐 `creation-with-upload`（POST 带首块）、两类 `filename` 路径解析（Desktop 相对全路径 vs Android basename）、浮点 `mtime` / `X-OC-Mtime` 协调、按 `14A` 宽松解析 `Upload-Metadata`（核心字段严格校验；容忍尾逗号与 Cyberduck 9.6.0 明文 `filetype`，非法 `filetype` 回退 `application/octet-stream`，忽略未使用未知 key）、独立于公告块大小的请求上限；TUS `OPTIONS`/响应宣告 `Tus-Extension: creation,creation-with-upload,checksum` 与 `Tus-Checksum-Algorithm: sha1,md5,sha256`（仍不宣告 `termination`/`expiration`），`HEAD` 容忍省略 `Tus-Resumable`（Desktop 续传行为），并在带体 `POST`/`PATCH` 落盘/发往 Drive 前用原生 Web Crypto 校验分块 `Upload-Checksum`（不匹配返回 `460`）。
   - 利用 Google Drive 最终提交返回的原生摘要字段校验客户端声明的 whole-file `checksum`（及 TUS `POST` / 普通 `PUT` 的 `OC-Checksum` 头）；已于 2026-11-24 实测 `resumable` 终块 `200` 与 `multipart`/`media`/0 字节截断均立刻返回匹配的 `md5Checksum`/`sha1Checksum`/`sha256Checksum`；仅元数据创建空文件 `POST /drive/v3/files` 只返回 `md5Checksum`，故 0 字节上传直接在 Worker 侧比对空字节摘要常量；不匹配时新建文件移入回收站并返回 `400`/`460`（触发 Android 立即清理 TUS 状态）、覆盖文件返回 `400`/`460` 并由 Drive Revisions 兜底；处理条件覆盖（`If-Match` 失配按标准返回 `412 Precondition Failed`，`#11`，不照搬 oCIS 8.2.3 的 `409`），并在完成响应返回实际 `ETag`/`OC-FileID`/`OC-Perm`；上传完成后立即清理 DO 状态与闹钟（`deleteAll()` + `deleteAlarm()`，`13B`），后续 `HEAD`/`PATCH` 返回 `404`（与 TUS 规范及 oCIS 8.2.3 一致），0 字节 `POST` 免建 DO，24h 闹钟仅清理未完成孤儿会话。

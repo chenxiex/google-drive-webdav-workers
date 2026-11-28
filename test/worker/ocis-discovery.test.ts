@@ -219,6 +219,8 @@ describe('remote.php discovery and auth probes', () => {
             expect(optRes.headers.get('DAV')).toBe('1');
             expect(optRes.headers.get('Tus-Version')).toBe('1.0.0');
             expect(optRes.headers.get('Tus-Resumable')).toBe('1.0.0');
+            expect(optRes.headers.get('Tus-Extension')).toBe('creation,creation-with-upload,checksum');
+            expect(optRes.headers.get('Tus-Checksum-Algorithm')).toBe('sha1,md5,sha256');
             const allow = optRes.headers.get('Allow')!.split(',').map(m => m.trim());
             expect(allow).not.toContain('LOCK');
             expect(allow).not.toContain('UNLOCK');

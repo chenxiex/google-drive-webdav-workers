@@ -1,12 +1,44 @@
 import { type DriveClient } from '../drive/client';
-import { FOLDER_MIME } from '../drive/types';
+import { FOLDER_MIME, UPLOAD_RESULT_FIELDS, type UploadedDriveFile, fileEtag } from '../drive/types';
 import { StatusError, getUrl, splitPath } from '../http';
+import {
+    type ExpectedChecksum,
+    applyCompletionHeaders,
+    matchesIfMatch,
+    parseNonNegativeInt,
+    parseOcChecksum,
+    parseUnixMtime,
+    verifyDriveChecksums,
+} from '../tus/protocol';
 import { uploadChunks } from './upload-stream';
 
-function parseContentLength(value: string | null): number | null {
-    if (value === null || !/^\d+$/.test(value)) return null;
-    const parsed = Number(value);
-    return Number.isSafeInteger(parsed) ? parsed : null;
+async function finalizePutSuccess(
+    drive: DriveClient,
+    fpath: string,
+    parentId: string,
+    existingFileId: string | null,
+    file: UploadedDriveFile | null,
+    expectedChecksum?: ExpectedChecksum,
+): Promise<Response> {
+    const fileId = existingFileId ?? file?.id ?? null;
+    if (expectedChecksum && !verifyDriveChecksums([expectedChecksum], file, false)) {
+        if (!existingFileId && file?.id) {
+            await drive.trashFile(file.id).catch(() => undefined);
+        }
+        await drive.notifySync(existingFileId && fileId
+            ? { type: 'touch', id: fileId, parentId, isFolder: false }
+            : { type: 'touch', id: parentId, isFolder: true })
+            .catch(() => undefined);
+        await drive.cache.invalidateFileAndParent(fpath, parentId).catch(() => undefined);
+        return new Response('Checksum mismatch', { status: 400 });
+    }
+    await drive.notifySync(fileId
+        ? { type: 'upsert', id: fileId, parentId, isFolder: false }
+        : { type: 'touch', id: parentId, isFolder: true });
+    await drive.cache.invalidateFileAndParent(fpath, parentId);
+    const headers = new Headers();
+    applyCompletionHeaders(headers, { ...file, ...(fileId ? { id: fileId } : {}) });
+    return new Response(null, { status: existingFileId ? 204 : 201, headers });
 }
 
 export async function putEmpty(
@@ -20,30 +52,40 @@ export async function putEmpty(
 ): Promise<Response> {
     if (existingFileId) {
         const response = await drive.truncateFile(existingFileId, mimeType);
-        if (response.ok) {
-            await response.body?.cancel().catch(() => undefined);
-            let metadataStatus = 204;
-            if (modifiedTime !== undefined) {
-                const updated = await drive.updateFileMetadata(existingFileId, { modifiedTime });
-                if (!updated.ok) metadataStatus = updated.status;
-                else await updated.body?.cancel().catch(() => undefined);
+        if (!response.ok) return new Response(null, { status: response.status });
+        let file = await response.json<UploadedDriveFile>().catch(() => null);
+        let metadataStatus = 204;
+        if (modifiedTime !== undefined) {
+            const updated = await drive.updateFileMetadata(
+                existingFileId,
+                { modifiedTime },
+                'supportsAllDrives=true&fields=' + encodeURIComponent(UPLOAD_RESULT_FIELDS),
+            );
+            if (!updated.ok) {
+                await updated.body?.cancel().catch(() => undefined);
+                metadataStatus = updated.status;
+            } else {
+                file = (await updated.json<UploadedDriveFile>().catch(() => null)) ?? file;
             }
-            await drive.notifySync({ type: 'touch', id: existingFileId, parentId, isFolder: false });
-            await drive.cache.invalidateFileAndParent(fpath, parentId);
-            return new Response(null, { status: metadataStatus });
         }
-        return new Response(null, { status: response.status });
+        await drive.notifySync({ type: 'touch', id: existingFileId, parentId, isFolder: false });
+        await drive.cache.invalidateFileAndParent(fpath, parentId);
+        const headers = new Headers();
+        if (metadataStatus === 204) {
+            applyCompletionHeaders(headers, { ...file, id: existingFileId });
+        }
+        return new Response(null, { status: metadataStatus, headers });
     }
     const response = await drive.createEmptyFile(name, parentId, mimeType, modifiedTime);
-    if (response.ok) {
-        const created = await response.json<{ id?: string }>().catch(() => null);
-        await drive.notifySync(created?.id
-            ? { type: 'upsert', id: created.id, parentId, isFolder: false }
-            : { type: 'touch', id: parentId, isFolder: true });
-        await drive.cache.invalidateFileAndParent(fpath, parentId);
-        return new Response(null, { status: 201 });
-    }
-    return new Response(null, { status: response.status });
+    if (!response.ok) return new Response(null, { status: response.status });
+    const created = await response.json<UploadedDriveFile>().catch(() => null);
+    await drive.notifySync(created?.id
+        ? { type: 'upsert', id: created.id, parentId, isFolder: false }
+        : { type: 'touch', id: parentId, isFolder: true });
+    await drive.cache.invalidateFileAndParent(fpath, parentId);
+    const headers = new Headers();
+    applyCompletionHeaders(headers, created);
+    return new Response(null, { status: 201, headers });
 }
 
 async function putSmallKnownLength(
@@ -55,13 +97,20 @@ async function putSmallKnownLength(
     existingFileId: string | null,
     mimeType: string,
     contentLength: number,
+    modifiedTime?: string,
+    expectedChecksum?: ExpectedChecksum,
 ): Promise<Response> {
     const boundary = '-------webdav_boundary';
     let prefix: Uint8Array | null = null;
     let suffix: Uint8Array | null = null;
     let totalLength = contentLength;
     if (!existingFileId) {
-        const fileMetadata = JSON.stringify({ name, parents: [parentId], mimeType });
+        const fileMetadata = JSON.stringify({
+            name,
+            parents: [parentId],
+            mimeType,
+            ...(modifiedTime !== undefined ? { modifiedTime } : {}),
+        });
         const encoder = new TextEncoder();
         prefix = encoder.encode(`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${fileMetadata}\r\n--${boundary}\r\nContent-Type: ${mimeType}\r\n\r\n`);
         suffix = encoder.encode(`\r\n--${boundary}--`);
@@ -131,16 +180,28 @@ async function putSmallKnownLength(
     } catch {
         return new Response('Upload failed', { status: 502 });
     }
-    if (res.ok) {
-        const created = await res.json<{ id?: string }>().catch(() => null);
-        const fileId = existingFileId ?? created?.id;
-        await drive.notifySync(fileId
-            ? { type: 'upsert', id: fileId, parentId, isFolder: false }
-            : { type: 'touch', id: parentId, isFolder: true });
-        await drive.cache.invalidateFileAndParent(fpath, parentId);
-        return new Response(null, { status: existingFileId ? 204 : 201 });
+    if (!res.ok) {
+        return new Response(await res.text(), { status: res.status });
     }
-    return new Response(await res.text(), { status: res.status });
+
+    let uploaded = await res.json<UploadedDriveFile>().catch(() => null);
+    if (expectedChecksum && !verifyDriveChecksums([expectedChecksum], uploaded, false)) {
+        return finalizePutSuccess(drive, fpath, parentId, existingFileId, uploaded, expectedChecksum);
+    }
+    if (existingFileId && modifiedTime !== undefined) {
+        const updated = await drive.updateFileMetadata(
+            existingFileId,
+            { modifiedTime },
+            'supportsAllDrives=true&fields=' + encodeURIComponent(UPLOAD_RESULT_FIELDS),
+        );
+        if (!updated.ok) {
+            await drive.notifySync({ type: 'touch', id: existingFileId, parentId, isFolder: false }).catch(() => undefined);
+            await drive.cache.invalidateFileAndParent(fpath, parentId).catch(() => undefined);
+            return new Response(await updated.text(), { status: updated.status });
+        }
+        uploaded = (await updated.json<UploadedDriveFile>().catch(() => null)) ?? uploaded;
+    }
+    return finalizePutSuccess(drive, fpath, parentId, existingFileId, uploaded);
 }
 
 async function putResumable(
@@ -152,24 +213,36 @@ async function putResumable(
     existingFileId: string | null,
     mimeType: string,
     contentLength?: number,
+    modifiedTime?: string,
+    expectedChecksum?: ExpectedChecksum,
 ): Promise<Response> {
     let uploadUrl: string | null = null;
     let offset = 0;
-    let uploadedId: string | null = existingFileId;
+    let completedFile: UploadedDriveFile | null = null;
     try {
         for await (const { bytes, final } of uploadChunks(body)) {
             if (!bytes.length) {
                 if (contentLength !== undefined) {
                     return new Response('Incomplete request body', { status: 400 });
                 }
-                return putEmpty(drive, fpath, name, parentId, existingFileId, mimeType);
+                if (expectedChecksum && !verifyDriveChecksums([expectedChecksum], null, true)) {
+                    return new Response('Checksum mismatch', { status: 400 });
+                }
+                return putEmpty(drive, fpath, name, parentId, existingFileId, mimeType, modifiedTime);
             }
             const end = offset + bytes.length;
             if (contentLength !== undefined && (end > contentLength || (final ? end !== contentLength : end === contentLength))) {
                 return new Response('Request body does not match Content-Length', { status: 400 });
             }
             if (!uploadUrl) {
-                const init = await drive.initResumableUpload({ existingFileId, name, parentId, mimeType, contentLength });
+                const init = await drive.initResumableUpload({
+                    existingFileId,
+                    name,
+                    parentId,
+                    mimeType,
+                    contentLength,
+                    modifiedTime,
+                });
                 await init.body?.cancel().catch(() => undefined);
                 if (!init.ok) {
                     return new Response('Failed to initiate Google Drive upload', {
@@ -199,18 +272,13 @@ async function putResumable(
                 return new Response('Google Drive upload offset mismatch', { status: 502 });
             }
             if (final) {
-                const result = await response.json<{ id?: string }>().catch(() => null);
-                uploadedId = existingFileId ?? result?.id ?? null;
+                completedFile = await response.json<UploadedDriveFile>().catch(() => null);
             } else {
                 await response.body?.cancel().catch(() => undefined);
             }
             offset = end;
         }
-        await drive.notifySync(uploadedId
-            ? { type: 'upsert', id: uploadedId, parentId, isFolder: false }
-            : { type: 'touch', id: parentId, isFolder: true });
-        await drive.cache.invalidateFileAndParent(fpath, parentId);
-        return new Response(null, { status: existingFileId ? 204 : 201 });
+        return finalizePutSuccess(drive, fpath, parentId, existingFileId, completedFile, expectedChecksum);
     } catch {
         // Do not expose the resumable session URL in errors or logs.
         return new Response('Upload failed', { status: 502 });
@@ -221,17 +289,32 @@ export async function handlePut(drive: DriveClient, request: Request): Promise<R
     const { fpath } = getUrl(request.url, drive.config.basePath);
     if (fpath.slice(-1) === '/') return new Response(null, { status: 405 });
     const rawContentLength = request.headers.get('Content-Length');
-    const contentLength = parseContentLength(rawContentLength);
+    const contentLength = parseNonNegativeInt(rawContentLength);
     if (rawContentLength !== null && contentLength === null) {
         return new Response('Content-Length must be a nonnegative safe integer', { status: 400 });
     }
+
+    let modifiedTime: string | undefined;
+    let expectedChecksum: ExpectedChecksum | undefined;
+    try {
+        const rawMtime = request.headers.get('X-OC-Mtime');
+        if (rawMtime !== null) modifiedTime = parseUnixMtime(rawMtime);
+        const rawChecksum = request.headers.get('OC-Checksum');
+        if (rawChecksum !== null) expectedChecksum = parseOcChecksum(rawChecksum);
+    } catch (error) {
+        if (error instanceof StatusError) return new Response(error.message, { status: error.status });
+        throw error;
+    }
+
     const mimeType = request.headers.get('Content-Type') || 'application/octet-stream';
     const body: ReadableStream<Uint8Array> | null = request.body;
 
     const { name, parent } = splitPath(fpath);
     const parentMetadata = await drive.getFolderMetadata(parent);
     if (!parentMetadata) return new Response('Parent collection is missing or not a collection', { status: 409 });
-    const metadata = await drive.getMetadata(fpath);
+
+    const ifMatch = request.headers.get('If-Match');
+    const metadata = await drive.getMetadata(fpath, { bypassLeafCache: ifMatch !== null });
     if (metadata?.mimeType === FOLDER_MIME) {
         return new Response('Cannot overwrite a collection', {
             status: 405,
@@ -239,10 +322,18 @@ export async function handlePut(drive: DriveClient, request: Request): Promise<R
         });
     }
     const existingFileId = metadata?.id || null;
+    if (!matchesIfMatch(ifMatch, metadata ? fileEtag(metadata) : undefined, Boolean(metadata))) {
+        return new Response('Precondition Failed', { status: 412 });
+    }
 
     if (contentLength === null) {
-        if (!body) return putEmpty(drive, fpath, name, parentMetadata.id, existingFileId, mimeType);
-        return putResumable(drive, body, fpath, name, parentMetadata.id, existingFileId, mimeType);
+        if (!body) {
+            if (expectedChecksum && !verifyDriveChecksums([expectedChecksum], null, true)) {
+                return new Response('Checksum mismatch', { status: 400 });
+            }
+            return putEmpty(drive, fpath, name, parentMetadata.id, existingFileId, mimeType, modifiedTime);
+        }
+        return putResumable(drive, body, fpath, name, parentMetadata.id, existingFileId, mimeType, undefined, modifiedTime, expectedChecksum);
     }
     if (contentLength === 0) {
         if (body) {
@@ -261,13 +352,16 @@ export async function handlePut(drive: DriveClient, request: Request): Promise<R
                 reader.releaseLock();
             }
         }
-        return putEmpty(drive, fpath, name, parentMetadata.id, existingFileId, mimeType);
+        if (expectedChecksum && !verifyDriveChecksums([expectedChecksum], null, true)) {
+            return new Response('Checksum mismatch', { status: 400 });
+        }
+        return putEmpty(drive, fpath, name, parentMetadata.id, existingFileId, mimeType, modifiedTime);
     }
     if (!body) {
         return new Response('Incomplete request body', { status: 400 });
     }
     if (contentLength <= 5 * 1024 * 1024) {
-        return putSmallKnownLength(drive, body, fpath, name, parentMetadata.id, existingFileId, mimeType, contentLength);
+        return putSmallKnownLength(drive, body, fpath, name, parentMetadata.id, existingFileId, mimeType, contentLength, modifiedTime, expectedChecksum);
     }
-    return putResumable(drive, body, fpath, name, parentMetadata.id, existingFileId, mimeType, contentLength);
+    return putResumable(drive, body, fpath, name, parentMetadata.id, existingFileId, mimeType, contentLength, modifiedTime, expectedChecksum);
 }

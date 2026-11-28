@@ -1,7 +1,24 @@
 import { DurableObject } from 'cloudflare:workers';
+import { type UploadedDriveFile } from '../drive/types';
+import { StatusError } from '../http';
+import {
+    DRIVE_FLUSH_SIZE,
+    type ExpectedChecksum,
+    MAX_TUS_REQUEST_BYTES,
+    TUS_ALIGNMENT,
+    TUS_CHECKSUM_ALGORITHMS,
+    TUS_EXTENSIONS,
+    TUS_VERSION,
+    applyCompletionHeaders,
+    isOffsetStreamContentType,
+    parseDriveUploadResponse,
+    parseNonNegativeInt,
+    parseUploadChecksum,
+    readBoundedBody,
+    verifyChunkChecksum,
+    verifyDriveChecksums,
+} from './protocol';
 
-const ALIGNMENT = 256 * 1024;
-const BLOCK_SIZE = 1024 * 1024;
 const LIFETIME = 24 * 60 * 60 * 1000;
 
 export interface TusSession {
@@ -10,31 +27,20 @@ export interface TusSession {
     targetPath: string;
     parentId: string;
     owner: string;
-    completed?: boolean;
+    existingFileId: string | null;
+    expectedChecksums: ExpectedChecksum[];
 }
 
 interface UploadState extends TusSession {
     offset: number;
     driveOffset: number;
     tail: Uint8Array;
-    pending?: Uint8Array;
-    pendingStart?: number;
-    fileId?: string;
+    inflight: boolean;
     expires: number;
 }
 
-class UploadError extends Error {
-    constructor(message: string, readonly status: number) { super(message); }
-}
-
-function integer(value: string | null): number | null {
-    if (value === null || !/^\d+$/.test(value)) return null;
-    const parsed = Number(value);
-    return Number.isSafeInteger(parsed) ? parsed : null;
-}
-
-// A single durable record is a write-ahead journal: acknowledged bytes always
-// exist either in Drive or here. Never store an entire client PATCH in memory.
+// Persist only the < 256 KiB unaligned tail and an inflight marker in SQLite;
+// aligned <= 10 MiB blocks stream directly to Drive and recover via bytes */total.
 export class TusUpload extends DurableObject {
     private queue: Promise<unknown> = Promise.resolve();
 
@@ -55,16 +61,15 @@ export class TusUpload extends DurableObject {
     }
 
     private response(state: UploadState | undefined, status: number, message?: string): Response {
-        const headers = new Headers({ 'Tus-Resumable': '1.0.0', 'Cache-Control': 'no-store' });
+        const headers = new Headers({
+            'Tus-Resumable': TUS_VERSION,
+            'Tus-Extension': TUS_EXTENSIONS,
+            'Tus-Checksum-Algorithm': TUS_CHECKSUM_ALGORITHMS,
+            'Cache-Control': 'no-store',
+        });
         if (state) {
             headers.set('Upload-Offset', String(state.offset));
             headers.set('Upload-Length', String(state.totalSize));
-            if (state.completed) {
-                headers.set('x-tus-complete', '1');
-                headers.set('x-tus-target-path', encodeURIComponent(state.targetPath));
-                headers.set('x-tus-parent-id', state.parentId);
-                if (state.fileId) headers.set('x-tus-file-id', state.fileId);
-            }
         }
         return new Response(message ?? null, { status, headers });
     }
@@ -73,132 +78,220 @@ export class TusUpload extends DurableObject {
         await this.ctx.storage.put('upload', state);
     }
 
-    private confirmedOffset(response: Response, state: UploadState): number {
-        if (response.status === 200 || response.status === 201) return state.totalSize;
-        if (response.status === 404 || response.status === 410) throw new UploadError('Upload session expired', 410);
-        if (response.status !== 308) throw new UploadError('Drive upload temporarily unavailable', 503);
-        const range = response.headers.get('Range');
-        if (range === null) return 0;
-        const match = /^bytes=0-(\d+)$/.exec(range);
-        const end = match ? integer(match[1]) : null;
-        // A 308 acknowledging the entire file is not a completion receipt.
-        // Preserve the pending journal until a status query confirms 200/201.
-        if (end === null || end >= state.totalSize - 1) throw new UploadError('Invalid Drive upload offset', 502);
-        return end + 1;
+    private async clearStorage(): Promise<void> {
+        await this.ctx.storage.deleteAlarm().catch(() => undefined);
+        await this.ctx.storage.deleteAll().catch(() => undefined);
     }
 
-    private async applyConfirmation(state: UploadState, response: Response): Promise<void> {
-        const offset = this.confirmedOffset(response, state);
-        const pendingEnd = (state.pendingStart ?? state.driveOffset) + (state.pending?.length ?? 0);
-        if (offset < state.driveOffset || offset > pendingEnd) throw new UploadError('Inconsistent Drive upload offset', 502);
-        state.driveOffset = offset;
-        if (offset === pendingEnd) {
-            delete state.pending;
-            delete state.pendingStart;
+    private async finalizeCompleted(state: UploadState, file: UploadedDriveFile, successStatus: number): Promise<Response> {
+        const checksumOk = verifyDriveChecksums(state.expectedChecksums ?? [], file, false);
+        await this.clearStorage();
+
+        if (!checksumOk) {
+            const response = this.response(undefined, 460, 'Checksum mismatch');
+            response.headers.set('x-tus-checksum-mismatch', '1');
+            response.headers.set('x-tus-is-new', state.existingFileId ? '0' : '1');
+            response.headers.set('x-tus-target-path', encodeURIComponent(state.targetPath));
+            response.headers.set('x-tus-parent-id', state.parentId);
+            if (typeof file.id === 'string' && file.id) {
+                response.headers.set('x-tus-file-id', file.id);
+            }
+            return response;
         }
-        if (response.status === 200 || response.status === 201) {
-            state.completed = true;
-            const completedFile = await response.json<{ id?: string }>().catch(() => null);
-            if (typeof completedFile?.id === 'string' && completedFile.id) {
-                state.fileId = completedFile.id;
+
+        const headers = new Headers({
+            'Tus-Resumable': TUS_VERSION,
+            'Tus-Extension': TUS_EXTENSIONS,
+            'Tus-Checksum-Algorithm': TUS_CHECKSUM_ALGORITHMS,
+            'Cache-Control': 'no-store',
+            'Upload-Offset': String(state.totalSize),
+            'Upload-Length': String(state.totalSize),
+            'x-tus-complete': '1',
+            'x-tus-target-path': encodeURIComponent(state.targetPath),
+            'x-tus-parent-id': state.parentId,
+        });
+        if (typeof file.id === 'string' && file.id) {
+            headers.set('x-tus-file-id', file.id);
+        }
+        applyCompletionHeaders(headers, file);
+        return new Response(null, { status: successStatus, headers });
+    }
+
+    private applyConfirmedRange(state: UploadState, confirmedOffset: number, maxAllowedOffset: number): void {
+        if (confirmedOffset < state.driveOffset || confirmedOffset > maxAllowedOffset) {
+            throw new StatusError('Inconsistent Drive upload offset', 502);
+        }
+        if (confirmedOffset > state.driveOffset) {
+            const previousDriveOffset = state.driveOffset;
+            state.driveOffset = confirmedOffset;
+            if (confirmedOffset >= state.offset) {
+                state.tail = new Uint8Array();
+                state.offset = confirmedOffset;
+            } else {
+                state.tail = state.tail.subarray(confirmedOffset - previousDriveOffset);
             }
         }
-        await this.save(state);
     }
 
-    private async drain(state: UploadState, recover: boolean): Promise<void> {
-        if (!state.pending) return;
-        if (recover) {
-            const response = await fetch(state.uploadUrl, {
-                method: 'PUT', headers: { 'Content-Length': '0', 'Content-Range': `bytes */${state.totalSize}` }
-            });
-            try { await this.applyConfirmation(state, response); }
-            finally { if (!response.bodyUsed) await response.body?.cancel().catch(() => undefined); }
+    private async recoverInflight(state: UploadState): Promise<UploadedDriveFile | null> {
+        if (!state.inflight) return null;
+        const response = await fetch(state.uploadUrl, {
+            method: 'PUT',
+            headers: { 'Content-Length': '0', 'Content-Range': `bytes */${state.totalSize}` },
+        });
+        const result = await parseDriveUploadResponse(response, state.totalSize);
+        if (result.completed) {
+            return result.file;
         }
-        while (state.pending) {
-            const before = state.driveOffset;
-            const bytes = state.pending;
-            const start = state.pendingStart ?? before;
+        this.applyConfirmedRange(state, result.confirmedOffset, state.totalSize - 1);
+        state.inflight = false;
+        await this.save(state);
+        return null;
+    }
+
+    private async flushBytes(state: UploadState, chunk: Uint8Array): Promise<UploadedDriveFile | null> {
+        if (!chunk.byteLength) return null;
+
+        const isFinal = state.offset + chunk.byteLength === state.totalSize;
+        if (!isFinal && state.tail.byteLength + chunk.byteLength < TUS_ALIGNMENT) {
+            const nextTail = new Uint8Array(state.tail.byteLength + chunk.byteLength);
+            nextTail.set(state.tail);
+            nextTail.set(chunk, state.tail.byteLength);
+            state.tail = nextTail;
+            state.offset += chunk.byteLength;
+            await this.save(state);
+            return null;
+        }
+
+        const bufferStart = state.driveOffset;
+        let buffer: Uint8Array;
+        if (state.tail.byteLength === 0) {
+            buffer = chunk;
+        } else {
+            buffer = new Uint8Array(state.tail.byteLength + chunk.byteLength);
+            buffer.set(state.tail);
+            buffer.set(chunk, state.tail.byteLength);
+        }
+
+        const sendTotal = isFinal ? buffer.byteLength : Math.floor(buffer.byteLength / TUS_ALIGNMENT) * TUS_ALIGNMENT;
+        const newTail = sendTotal < buffer.byteLength ? buffer.slice(sendTotal) : new Uint8Array();
+        let sent = 0;
+
+        while (sent < sendTotal) {
+            const sliceLen = Math.min(DRIVE_FLUSH_SIZE, sendTotal - sent);
+            const sliceStart = bufferStart + sent;
+            const sliceEnd = sliceStart + sliceLen;
+            state.inflight = true;
+            await this.save(state);
+
             const response = await fetch(state.uploadUrl, {
                 method: 'PUT',
                 headers: {
-                    'Content-Length': String(bytes.length),
-                    'Content-Range': `bytes ${start}-${start + bytes.length - 1}/${state.totalSize}`
+                    'Content-Length': String(sliceLen),
+                    'Content-Range': `bytes ${sliceStart}-${sliceEnd - 1}/${state.totalSize}`,
                 },
-                body: bytes
+                body: buffer.subarray(sent, sent + sliceLen),
             });
-            try { await this.applyConfirmation(state, response); }
-            finally { if (!response.bodyUsed) await response.body?.cancel().catch(() => undefined); }
-            if (state.driveOffset === before) throw new UploadError('Drive did not acknowledge upload bytes', 503);
+            const result = await parseDriveUploadResponse(response, state.totalSize);
+            if (result.completed) {
+                return result.file;
+            }
+            const before = state.driveOffset;
+            this.applyConfirmedRange(state, result.confirmedOffset, sliceEnd);
+            if (state.driveOffset === before) {
+                throw new StatusError('Drive did not acknowledge upload bytes', 503);
+            }
+            sent = state.driveOffset - bufferStart;
         }
+
+        state.tail = newTail;
+        state.offset = bufferStart + buffer.byteLength;
+        state.inflight = false;
+        await this.save(state);
+        return null;
     }
 
-    private async accept(state: UploadState, bytes: Uint8Array, final: boolean): Promise<void> {
-        state.offset += bytes.length - state.tail.length;
-        const sendSize = final ? bytes.length : Math.floor(bytes.length / ALIGNMENT) * ALIGNMENT;
-        state.tail = bytes.slice(sendSize);
-        if (sendSize) {
-            state.pending = bytes.slice(0, sendSize);
-            state.pendingStart = state.driveOffset;
+    private async initialize(request: Request, existing: UploadState | undefined): Promise<Response> {
+        if (existing) throw new StatusError('Session already exists', 409);
+        const rawSession = request.headers.get('x-tus-session');
+        if (!rawSession) throw new StatusError('Invalid upload session', 400);
+        let session: TusSession;
+        try {
+            session = JSON.parse(decodeURIComponent(rawSession)) as TusSession;
+        } catch {
+            throw new StatusError('Invalid upload session', 400);
         }
-        // Persist BEFORE the external effect, including bytes from a previous
-        // PATCH. Recovery replays the original aligned block: Drive preserves
-        // its accepted prefix, even when its exact offset is not aligned.
-        await this.save(state);
-        await this.drain(state, false);
+        if (!Number.isSafeInteger(session.totalSize) || session.totalSize <= 0 || !session.owner || !session.uploadUrl) {
+            throw new StatusError('Invalid upload session', 400);
+        }
+        const state: UploadState = {
+            ...session,
+            expectedChecksums: Array.isArray(session.expectedChecksums) ? session.expectedChecksums : [],
+            offset: 0,
+            driveOffset: 0,
+            tail: new Uint8Array(),
+            inflight: false,
+            expires: Date.now() + LIFETIME,
+        };
+        await this.ctx.storage.transaction(async transaction => {
+            await transaction.put('upload', state);
+            await transaction.setAlarm(state.expires);
+        });
+
+        const initialBytes = request.body ? new Uint8Array(await request.arrayBuffer()) : new Uint8Array(0);
+        if (initialBytes.byteLength > 0) {
+            try {
+                const completed = await this.flushBytes(state, initialBytes);
+                if (completed) {
+                    return await this.finalizeCompleted(state, completed, 201);
+                }
+            } catch (error) {
+                await this.clearStorage();
+                throw error;
+            }
+        }
+        return this.response(state, 201);
     }
 
     private async patch(request: Request, state: UploadState): Promise<Response> {
-        if (request.headers.get('Content-Type')?.toLowerCase() !== 'application/offset+octet-stream') {
-            throw new UploadError('Expected application/offset+octet-stream', 415);
+        if (!isOffsetStreamContentType(request.headers.get('Content-Type'))) {
+            throw new StatusError('Expected application/offset+octet-stream', 415);
         }
-        const offset = integer(request.headers.get('Upload-Offset'));
-        if (offset === null) throw new UploadError('Invalid Upload-Offset', 400);
-        if (offset !== state.offset) throw new UploadError('Upload offset mismatch', 409);
+        const offset = parseNonNegativeInt(request.headers.get('Upload-Offset'));
+        if (offset === null) throw new StatusError('Invalid Upload-Offset', 400);
         const lengthHeader = request.headers.get('Content-Length');
-        const length = integer(lengthHeader);
-        if (lengthHeader !== null && length === null) throw new UploadError('Invalid Content-Length', 400);
-        if (length !== null && length > state.totalSize - state.offset) throw new UploadError('Upload exceeds declared length', 413);
-        await this.drain(state, true);
-        const reader = request.body?.getReader();
-        let received = 0;
-        let finished = false;
-        const buffer = new Uint8Array(BLOCK_SIZE);
-        buffer.set(state.tail);
-        let size = state.tail.length;
-        const start = state.offset;
-        try {
-            if (reader) while (true) {
-                const chunk = await reader.read();
-                if (chunk.done) { finished = true; break; }
-                const input = chunk.value;
-                if (input.length > state.totalSize - start - received || (length !== null && input.length > length - received)) {
-                    throw new UploadError('Upload exceeds declared length', 413);
-                }
-                received += input.length;
-                let cursor = 0;
-                while (cursor < input.length) {
-                    const take = Math.min(BLOCK_SIZE - size, input.length - cursor);
-                    buffer.set(input.subarray(cursor, cursor + take), size);
-                    size += take;
-                    cursor += take;
-                    if (size === BLOCK_SIZE) {
-                        await this.accept(state, buffer, state.offset + size - state.tail.length === state.totalSize);
-                        size = 0;
-                    }
-                }
-            }
-            if (length !== null && received !== length) throw new UploadError('Incomplete request body', 400);
-            if (size > state.tail.length) {
-                await this.accept(state, buffer.subarray(0, size), start + received === state.totalSize);
-            }
-            return this.response(state, 204);
-        } finally {
-            if (reader) {
-                if (!finished) { try { await reader.cancel(); } catch {} }
-                reader.releaseLock();
-            }
+        const declaredLength = parseNonNegativeInt(lengthHeader);
+        if (lengthHeader !== null && declaredLength === null) throw new StatusError('Invalid Content-Length', 400);
+        if (declaredLength !== null && declaredLength > MAX_TUS_REQUEST_BYTES) {
+            throw new StatusError('Upload exceeds maximum allowed size', 413);
         }
+        const checksumHeader = request.headers.get('Upload-Checksum');
+        if (checksumHeader !== null) parseUploadChecksum(checksumHeader);
+
+        const recoveredCompletion = await this.recoverInflight(state);
+        if (recoveredCompletion) {
+            return await this.finalizeCompleted(state, recoveredCompletion, 409);
+        }
+        if (offset !== state.offset) {
+            return this.response(state, 409, 'Upload offset mismatch');
+        }
+        if (declaredLength !== null && declaredLength > state.totalSize - state.offset) {
+            throw new StatusError('Upload exceeds declared length', 413);
+        }
+
+        const chunkBytes = await readBoundedBody(request.body, {
+            maxBytes: Math.min(MAX_TUS_REQUEST_BYTES, state.totalSize - state.offset),
+            declaredLength,
+        });
+        if (checksumHeader !== null) {
+            await verifyChunkChecksum(checksumHeader, chunkBytes);
+        }
+
+        const completed = await this.flushBytes(state, chunkBytes);
+        if (completed) {
+            return await this.finalizeCompleted(state, completed, 204);
+        }
+        return this.response(state, 204);
     }
 
     private async handle(request: Request): Promise<Response> {
@@ -206,37 +299,41 @@ export class TusUpload extends DurableObject {
         try {
             state = await this.ctx.storage.get<UploadState>('upload');
             if (request.method === 'POST' && new URL(request.url).pathname === '/initialize') {
-                if (state) throw new UploadError('Session already exists', 409);
-                const session = await request.json<TusSession>();
-                if (!Number.isSafeInteger(session.totalSize) || session.totalSize < 0 || !session.owner) {
-                    throw new UploadError('Invalid upload session', 400);
-                }
-                state = { ...session, offset: session.completed ? session.totalSize : 0, driveOffset: session.completed ? session.totalSize : 0, tail: new Uint8Array(), expires: Date.now() + LIFETIME };
-                await this.ctx.storage.transaction(async transaction => {
-                    await transaction.put('upload', state!);
-                    await transaction.setAlarm(state!.expires);
-                });
-                return this.response(state, 201);
+                return await this.initialize(request, state);
             }
-            if (!state || state.expires <= Date.now() || request.headers.get('x-tus-owner') !== state.owner) {
+            if (!state || request.headers.get('x-tus-owner') !== state.owner) {
                 return this.response(undefined, 404, 'Session not found');
             }
-            if (request.headers.get('Tus-Resumable') !== '1.0.0') {
+            if (state.expires <= Date.now()) {
+                await this.clearStorage();
+                return this.response(undefined, 404, 'Session not found');
+            }
+            const versionHeader = request.headers.get('Tus-Resumable');
+            const validVersion = request.method === 'HEAD'
+                ? (!versionHeader || versionHeader === TUS_VERSION)
+                : versionHeader === TUS_VERSION;
+            if (!validVersion) {
                 const response = this.response(undefined, 412, 'Unsupported TUS version');
-                response.headers.set('Tus-Version', '1.0.0');
+                response.headers.set('Tus-Version', TUS_VERSION);
                 return response;
             }
             if (request.method === 'HEAD') {
-                await this.drain(state, true);
+                const recoveredCompletion = await this.recoverInflight(state);
+                if (recoveredCompletion) {
+                    return await this.finalizeCompleted(state, recoveredCompletion, 200);
+                }
                 return this.response(state, 200);
             }
-            if (request.method === 'PATCH') return await this.patch(request, state);
+            if (request.method === 'PATCH') {
+                return await this.patch(request, state);
+            }
             return this.response(undefined, 405, 'Method not allowed');
         } catch (error) {
             // A failed storage write must not expose an uncommitted offset.
             state = await this.ctx.storage.get<UploadState>('upload').catch(() => undefined);
-            return this.response(state, error instanceof UploadError ? error.status : 503,
-                error instanceof UploadError ? error.message : 'Upload temporarily unavailable');
+            const status = error instanceof StatusError ? error.status : 503;
+            const message = error instanceof StatusError ? error.message : 'Upload temporarily unavailable';
+            return this.response(state, status, message);
         }
     }
 }

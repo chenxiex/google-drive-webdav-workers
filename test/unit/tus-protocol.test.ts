@@ -1,4 +1,6 @@
+import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
+import { UPLOAD_RESULT_FIELDS } from '../../src/drive/types';
 import { StatusError } from '../../src/http';
 import {
     EMPTY_CHECKSUMS,
@@ -13,6 +15,7 @@ import {
     verifyChunkChecksum,
     verifyDriveChecksums,
 } from '../../src/tus/protocol';
+import { MockDrive } from '../support/mock-drive';
 
 describe('parseUnixMtime', () => {
     it.each([
@@ -154,5 +157,194 @@ describe('validateTusFilename and parseTusMetadata (14A)', () => {
 
         expect(() => parseTusMetadata(`filename ${btoa('a.txt')}, filename ${btoa('b.txt')}`))
             .toThrowError(StatusError);
+    });
+});
+
+describe('MockDrive OC-06 upload & recovery contract', () => {
+    const authHeaders = { Authorization: 'Bearer test-access-token' };
+    const sha256Hex = (data: Uint8Array) => createHash('sha256').update(data).digest('hex');
+
+    it('keeps resumable sessions alive across offset-gap 503 and mismatched status probes, and replays completion payloads', async () => {
+        const drive = new MockDrive();
+        const total = 524300;
+        const payload = new Uint8Array(total);
+        for (let i = 0; i < total; i++) payload[i] = (i * 73) % 251;
+        const modifiedTime = '2023-11-14T22:13:20.500Z';
+
+        const init = await drive.handle(
+            `https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=${encodeURIComponent(UPLOAD_RESULT_FIELDS)}`,
+            {
+                method: 'POST',
+                headers: {
+                    ...authHeaders,
+                    'Content-Type': 'application/json; charset=UTF-8',
+                    'X-Upload-Content-Type': 'application/octet-stream',
+                    'X-Upload-Content-Length': String(total),
+                },
+                body: JSON.stringify({ name: 'probe.bin', parents: ['root'], modifiedTime }),
+            },
+        );
+        expect(init.status).toBe(200);
+        const uploadUrl = init.headers.get('Location')!;
+
+        expect((await drive.handle(uploadUrl, {
+            method: 'PUT',
+            headers: { 'Content-Length': '0', 'Content-Range': 'bytes */999999' },
+        })).status).toBe(308);
+
+        const chunk1 = await drive.handle(uploadUrl, {
+            method: 'PUT',
+            headers: { 'Content-Length': '262144', 'Content-Range': `bytes 0-262143/${total}` },
+            body: payload.subarray(0, 262144),
+        });
+        expect(chunk1.status).toBe(308);
+        expect(chunk1.headers.get('Range')).toBe('bytes=0-262143');
+
+        const gap = await drive.handle(uploadUrl, {
+            method: 'PUT',
+            headers: { 'Content-Length': String(total - 393216), 'Content-Range': `bytes 393216-${total - 1}/${total}` },
+            body: payload.subarray(393216),
+        });
+        expect(gap.status).toBe(503);
+
+        const afterGap = await drive.handle(uploadUrl, {
+            method: 'PUT',
+            headers: { 'Content-Length': '0', 'Content-Range': `bytes */${total}` },
+        });
+        expect(afterGap.status).toBe(308);
+        expect(afterGap.headers.get('Range')).toBe('bytes=0-262143');
+
+        const replayChunk1 = await drive.handle(uploadUrl, {
+            method: 'PUT',
+            headers: { 'Content-Length': '262144', 'Content-Range': `bytes 0-262143/${total}` },
+            body: new Uint8Array(262144).fill(9),
+        });
+        expect(replayChunk1.status).toBe(308);
+
+        const finalRes = await drive.handle(uploadUrl, {
+            method: 'PUT',
+            headers: { 'Content-Length': String(total - 262144), 'Content-Range': `bytes 262144-${total - 1}/${total}` },
+            body: payload.subarray(262144),
+        });
+        expect(finalRes.status).toBe(200);
+        const completed = await finalRes.json<any>();
+        expect(completed).toMatchObject({
+            id: expect.any(String),
+            headRevisionId: expect.any(String),
+            sha256Checksum: sha256Hex(payload),
+        });
+
+        // Repeated post-completion status probes and final-chunk replays return the same 200 payload.
+        for (const probeInit of [
+            { method: 'PUT', headers: { 'Content-Length': '0', 'Content-Range': `bytes */${total}` } },
+            { method: 'PUT', headers: { 'Content-Length': '0', 'Content-Range': `bytes */${total}` } },
+            {
+                method: 'PUT',
+                headers: { 'Content-Length': String(total - 262144), 'Content-Range': `bytes 262144-${total - 1}/${total}` },
+                body: payload.subarray(262144),
+            },
+        ] as RequestInit[]) {
+            const res = await drive.handle(uploadUrl, probeInit);
+            expect(res.status).toBe(200);
+            expect(await res.json()).toEqual(completed);
+        }
+
+        const stored = drive.findById(completed.id)!;
+        expect(stored.modifiedTime).toBe(modifiedTime);
+        expect(sha256Hex(stored.content!)).toBe(sha256Hex(payload));
+
+        const missing = await drive.handle(
+            'https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&upload_id=missing-id',
+            { method: 'PUT', headers: { 'Content-Length': '0', 'Content-Range': 'bytes */10' } },
+        );
+        expect(missing.status).toBe(404);
+    });
+
+    it('strips MIME parameters, distinguishes resumable vs media MIME overwrites, and preserves digests across follow-up mtime PATCH', async () => {
+        const drive = new MockDrive();
+        const emptyRes = await drive.handle(
+            'https://www.googleapis.com/drive/v3/files?fields=id,mimeType,headRevisionId,md5Checksum,modifiedTime',
+            {
+                method: 'POST',
+                headers: { ...authHeaders, 'Content-Type': 'application/json; charset=UTF-8' },
+                body: JSON.stringify({
+                    name: 'empty.txt',
+                    parents: ['root'],
+                    mimeType: 'text/plain; charset=utf-8',
+                    modifiedTime: '2023-11-14T22:13:40.500Z',
+                }),
+            },
+        );
+        expect(emptyRes.status).toBe(200);
+        const empty = await emptyRes.json<any>();
+        expect(empty).toMatchObject({
+            mimeType: 'text/plain',
+            headRevisionId: expect.any(String),
+            md5Checksum: EMPTY_CHECKSUMS.md5,
+            modifiedTime: '2023-11-14T22:13:40.500Z',
+        });
+
+        // PATCH ?uploadType=resumable preserves existing non-generic MIME on application/octet-stream
+        // and updates MIME for specific X-Upload-Content-Type values (with parameters stripped).
+        for (const [uploadMime, expectedMime] of [
+            ['application/octet-stream', 'text/plain'],
+            ['image/png; charset=binary', 'image/png'],
+        ] as const) {
+            const init = await drive.handle(
+                `https://www.googleapis.com/upload/drive/v3/files/${empty.id}?uploadType=resumable&fields=id,mimeType,headRevisionId`,
+                {
+                    method: 'PATCH',
+                    headers: {
+                        ...authHeaders,
+                        'Content-Type': 'application/json',
+                        'X-Upload-Content-Type': uploadMime,
+                        'X-Upload-Content-Length': '3',
+                    },
+                    body: JSON.stringify({ modifiedTime: '2023-11-14T22:13:41.250Z' }),
+                },
+            );
+            const uploadUrl = init.headers.get('Location')!;
+            const fin = await drive.handle(uploadUrl, {
+                method: 'PUT',
+                headers: { 'Content-Length': '3', 'Content-Range': 'bytes 0-2/3' },
+                body: new Uint8Array([1, 2, 3]),
+            });
+            expect(fin.status).toBe(200);
+            expect((await fin.json<any>()).mimeType).toBe(expectedMime);
+        }
+
+        // PATCH ?uploadType=media preserves existing MIME and follow-up modifiedTime PATCH preserves headRevisionId & digests.
+        const mediaRes = await drive.handle(
+            `https://www.googleapis.com/upload/drive/v3/files/${empty.id}?uploadType=media&fields=${encodeURIComponent(UPLOAD_RESULT_FIELDS + ',mimeType')}`,
+            {
+                method: 'PATCH',
+                headers: { ...authHeaders, 'Content-Type': 'text/plain' },
+                body: new Uint8Array(0),
+            },
+        );
+        const truncated = await mediaRes.json<any>();
+        expect(truncated).toMatchObject({
+            mimeType: 'image/png',
+            md5Checksum: EMPTY_CHECKSUMS.md5,
+            sha1Checksum: EMPTY_CHECKSUMS.sha1,
+            sha256Checksum: EMPTY_CHECKSUMS.sha256,
+        });
+
+        const patchMtime = await drive.handle(
+            `https://www.googleapis.com/drive/v3/files/${empty.id}?supportsAllDrives=true&fields=${encodeURIComponent(UPLOAD_RESULT_FIELDS + ',modifiedTime,mimeType')}`,
+            {
+                method: 'PATCH',
+                headers: { ...authHeaders, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ modifiedTime: '2023-11-14T22:13:42.125Z' }),
+            },
+        );
+        expect(await patchMtime.json()).toMatchObject({
+            mimeType: 'image/png',
+            headRevisionId: truncated.headRevisionId,
+            md5Checksum: EMPTY_CHECKSUMS.md5,
+            sha1Checksum: EMPTY_CHECKSUMS.sha1,
+            sha256Checksum: EMPTY_CHECKSUMS.sha256,
+            modifiedTime: '2023-11-14T22:13:42.125Z',
+        });
     });
 });
